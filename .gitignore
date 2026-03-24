@@ -1,3 +1,63 @@
-venv/
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Wirtualne środowiska
+venv/
+.venv/
+env/
+.env/
+
+# Konfiguracja środowiskowa i sekrety (BARDZO WAŻNE)
 .env
+.env.local
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Logi
+*.log
+logs/
+
+# Testy i pokrycie kodu
+.tox/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker volumes (jeśli zmapowane lokalnie)
+postgres_data/
+covers_data/
+
+plans/

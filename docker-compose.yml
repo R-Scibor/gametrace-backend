@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: gametrace_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gametrace_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gametrace_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-gametrace_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gametrace_user} -d ${POSTGRES_DB:-gametrace_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: gametrace_redis
+    restart: always
+
+  alembic_init:
+    build: .
+    container_name: gametrace_alembic_init
+    command: alembic upgrade head
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    container_name: gametrace_api
+    restart: always
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload
+    ports:
+      - "8010:8010"
+    volumes:
+      - .:/app # Hot-reload kodu
+      - covers_data:/app/covers # Wolumen na okładki CUSTOM
+    env_file:
+      - .env
+    depends_on:
+      alembic_init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+
+  bot:
+    build: .
+    container_name: gametrace_bot
+    restart: always
+    command: python -m app.bot.main
+    env_file:
+      - .env
+    depends_on:
+      alembic_init:
+        condition: service_completed_successfully
+
+  worker:
+    build: .
+    container_name: gametrace_celery_worker
+    restart: always
+    command: celery -A app.core.celery_app worker --loglevel=info
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  beat:
+    build: .
+    container_name: gametrace_celery_beat
+    restart: always
+    command: celery -A app.core.celery_app beat --loglevel=info
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  covers_data:
