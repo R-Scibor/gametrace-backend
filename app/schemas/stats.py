@@ -1,0 +1,28 @@
+from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel
+
+
+class GameStatEntry(BaseModel):
+    game_id: int
+    game_name: str
+    cover_image_url: Optional[str] = None
+    total_seconds: int
+
+
+class PendingErrorEntry(BaseModel):
+    id: int
+    game_id: int
+    game_name: str
+    start_time: datetime
+    notes: Optional[str] = None
+
+
+class StatsSummaryResponse(BaseModel):
+    days: int
+    window_start: datetime
+    window_end: datetime
+    total_seconds: int
+    per_game: list[GameStatEntry]
+    pending_errors: list[PendingErrorEntry]
