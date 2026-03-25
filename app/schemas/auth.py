@@ -2,7 +2,6 @@ from pydantic import BaseModel, Field
 
 
 class LoginRequest(BaseModel):
-    discord_id: str = Field(..., min_length=1, max_length=32)
     username: str = Field(..., min_length=1, max_length=100)
     timezone: str = Field(default="UTC", max_length=64)
 

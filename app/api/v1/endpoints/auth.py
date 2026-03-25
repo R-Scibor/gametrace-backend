@@ -20,24 +20,23 @@ def _token_expiry() -> datetime:
 
 @router.post("/login", response_model=LoginResponse, status_code=status.HTTP_200_OK)
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
-    # Upsert user — create on first login, update username/timezone on subsequent logins
-    user = await db.get(User, payload.discord_id)
+    # User must be pre-registered via Discord /login slash command
+    result = await db.execute(select(User).where(User.username == payload.username))
+    user = result.scalar_one_or_none()
+
     if user is None:
-        user = User(
-            discord_id=payload.discord_id,
-            username=payload.username,
-            timezone=payload.timezone,
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found. Run /login on Discord first.",
         )
-        db.add(user)
-    else:
-        user.username = payload.username
-        if payload.timezone != "UTC":
-            user.timezone = payload.timezone
+
+    if payload.timezone != "UTC":
+        user.timezone = payload.timezone
 
     # Issue a new token
     token_value = UserAuthToken.generate_token()
     token = UserAuthToken(
-        user_id=payload.discord_id,
+        user_id=user.discord_id,
         token=token_value,
         expires_at=_token_expiry(),
     )

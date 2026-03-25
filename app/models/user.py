@@ -11,7 +11,7 @@ class User(Base):
     __tablename__ = "users"
 
     discord_id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    username: Mapped[str] = mapped_column(String(100))
+    username: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC", server_default="UTC")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
