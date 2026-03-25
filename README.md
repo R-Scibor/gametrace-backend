@@ -45,13 +45,34 @@ beat          Celery beat — scheduled tasks (cleanup, reports)
 
 All endpoints are prefixed `/api/v1/`. Auth uses `Authorization: Bearer <token>`.
 
+### Auth
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/v1/auth/login` | Login by Discord username, returns session token |
 | `POST` | `/api/v1/auth/logout` | Invalidate token |
-| `GET` | `/health` | Health check |
 
 Token expires after 30 days of inactivity (sliding window).
+
+### Sessions
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/sessions` | Add a manual session (COMPLETED, overlap check → 409) |
+| `PATCH` | `/api/v1/sessions/{id}` | Edit end_time/notes or discard an ERROR session |
+| `GET` | `/api/v1/sessions/game/{game_id}` | Paginated session list for a game (`?skip=0&limit=20`) |
+
+Session state machine (bot-sourced): `ONGOING → COMPLETED`, `ONGOING → ERROR`, `ERROR → COMPLETED`, `ERROR → soft-delete`. Manual sessions are saved directly as `COMPLETED`.
+
+### Stats
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/stats/summary` | Aggregated stats + pending errors (`?days=7`, max 365) |
+
+`/stats/summary` response includes `total_seconds`, per-game breakdown, and `pending_errors` — a list of all unresolved ERROR sessions.
+
+### Other
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Health check |
 
 ## Database migrations
 
@@ -101,11 +122,15 @@ app/
 │   ├── game.py              # Game, GameAlias, UserGamePreference
 │   └── session.py           # GameSession, DailyUserStat
 ├── schemas/
-│   └── auth.py              # Pydantic request/response schemas
+│   ├── auth.py              # Pydantic: LoginRequest, LoginResponse
+│   ├── session.py           # Pydantic: SessionCreate, SessionPatch, SessionResponse
+│   └── stats.py             # Pydantic: StatsSummaryResponse
 ├── api/v1/
 │   ├── router.py            # Main v1 router
 │   └── endpoints/
-│       └── auth.py          # Auth endpoints + get_current_user dependency
+│       ├── auth.py          # Auth endpoints + get_current_user dependency
+│       ├── sessions.py      # POST/PATCH /sessions, GET /sessions/game/{id}
+│       └── stats.py         # GET /stats/summary?days=N
 ├── bot/
 │   ├── main.py              # Discord client, /login slash command, on_presence_update
 │   ├── session_manager.py   # DB operations for the bot
