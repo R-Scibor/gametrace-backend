@@ -18,7 +18,7 @@ Distributed game-time tracking system. A Discord bot detects game activity via `
 ```bash
 cp example.env .env
 # fill in .env values
-docker-compose up
+docker compose up
 ```
 
 API available at `http://localhost:8010`. Interactive docs at `http://localhost:8010/docs`.
@@ -78,13 +78,13 @@ Session state machine (bot-sourced): `ONGOING → COMPLETED`, `ONGOING → ERROR
 
 ```bash
 # Apply all pending migrations
-docker-compose run --rm api alembic upgrade head
+docker compose run --rm api alembic upgrade head
 
 # Create a new migration after changing a model
-docker-compose run --rm api alembic revision --autogenerate -m "description"
+docker compose run --rm api alembic revision --autogenerate -m "description"
 
 # Rollback one migration
-docker-compose run --rm api alembic downgrade -1
+docker compose run --rm api alembic downgrade -1
 ```
 
 ## Discord Developer Portal prerequisites
@@ -98,10 +98,10 @@ Before first run, in the [Discord Developer Portal](https://discord.com/develope
 
 ```bash
 # Start all services with hot-reload
-docker-compose up
+docker compose up
 
 # Run tests
-docker-compose run --rm api pytest
+docker compose run --rm api pytest
 
 # Add a user directly (dev shortcut, bypasses /login)
 docker exec -it gametrace_db psql -U gametrace_user -d gametrace_db \
