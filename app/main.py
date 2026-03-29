@@ -1,11 +1,20 @@
+import os
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_router
+
+COVERS_DIR = "/app/covers"
 
 app = FastAPI(title="GameTrace API", version="1.0.0")
 
 app.include_router(api_router, prefix="/api/v1")
+
+# Serve custom game covers uploaded via PUT /games/{id}/cover
+os.makedirs(COVERS_DIR, exist_ok=True)
+app.mount("/covers", StaticFiles(directory=COVERS_DIR), name="covers")
 
 
 @app.exception_handler(Exception)
