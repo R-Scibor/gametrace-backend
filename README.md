@@ -53,12 +53,16 @@ All endpoints are prefixed `/api/v1/`. Auth uses `Authorization: Bearer <token>`
 
 Token expires after 30 days of inactivity (sliding window).
 
+### Games
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/games/{game_id}/sessions` | Paginated session list for a game (`?skip=0&limit=20`) |
+
 ### Sessions
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/v1/sessions` | Add a manual session (COMPLETED, overlap check → 409) |
 | `PATCH` | `/api/v1/sessions/{id}` | Edit end_time/notes or discard an ERROR session |
-| `GET` | `/api/v1/sessions/game/{game_id}` | Paginated session list for a game (`?skip=0&limit=20`) |
 
 Session state machine (bot-sourced): `ONGOING → COMPLETED`, `ONGOING → ERROR`, `ERROR → COMPLETED`, `ERROR → soft-delete`. Manual sessions are saved directly as `COMPLETED`.
 
@@ -129,7 +133,8 @@ app/
 │   ├── router.py            # Main v1 router
 │   └── endpoints/
 │       ├── auth.py          # Auth endpoints + get_current_user dependency
-│       ├── sessions.py      # POST/PATCH /sessions, GET /sessions/game/{id}
+│       ├── games.py         # GET /games/{id}/sessions
+│       ├── sessions.py      # POST/PATCH /sessions
 │       └── stats.py         # GET /stats/summary?days=N
 ├── bot/
 │   ├── main.py              # Discord client, /login slash command, on_presence_update
