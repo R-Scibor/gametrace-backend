@@ -9,7 +9,9 @@ class Settings(BaseSettings):
 
     discord_bot_token: str = ""
     openai_api_key: str = ""
-    gemini_api_key: str = ""
+    gcp_project: str = ""
+    gcp_location: str = "us-central1"
+    rawg_api_key: str = ""
 
     session_token_expire_days: int = 30
 
