@@ -1,10 +1,11 @@
 """
-Celery task: enrich a game record with metadata from RAWG (primary) and Steam API (fallback).
+Celery task: enrich a game record with metadata from IGDB (primary) and Steam API (fallback).
 
 Strategy:
-1. RAWG fuzzy name search → confidence score via SequenceMatcher.
-   - Score >85% → ENRICHED.
-2. If RAWG score ≤85% → Steam store search (exact name match → 100% confidence) → ENRICHED.
+1. IGDB fuzzy name search → confidence score via SequenceMatcher.
+   - Score >85% → ENRICHED (cover: vertical box art from t_cover_big).
+2. If IGDB score ≤85% → Steam store search (exact name match → 100% confidence) → ENRICHED
+   (cover: library_600x900.jpg — vertical portrait art).
 3. Neither matched → NEEDS_REVIEW.
 
 Exponential backoff on HTTP 429: 2^retry * 60s countdown.
@@ -27,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.celery_app import celery_app
 from app.core.config import settings
 from app.models.game import CoverSource, EnrichmentStatus, Game
+from app.tasks.igdb_auth import get_igdb_token, invalidate_igdb_token
 
 logger = logging.getLogger(__name__)
 
@@ -49,33 +51,48 @@ def _confidence(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
-def _rawg_search(name: str) -> tuple[str | None, float]:
-    """Returns (cover_url, best_confidence). Raises _RateLimited on HTTP 429."""
-    if not settings.rawg_api_key:
-        logger.warning("RAWG_API_KEY not set — skipping RAWG search")
+def _igdb_search(name: str) -> tuple[str | None, float]:
+    """Returns (cover_url, best_confidence). Raises _RateLimited on HTTP 429 or 401."""
+    if not settings.igdb_client_id or not settings.igdb_client_secret:
+        logger.warning("IGDB credentials not set — skipping IGDB search")
         return None, 0.0
+
+    token = get_igdb_token()
+    safe_name = name.replace('"', '\\"')
 
     with httpx.Client(timeout=10) as client:
-        resp = client.get(
-            "https://api.rawg.io/api/games",
-            params={"search": name, "key": settings.rawg_api_key, "page_size": 5},
+        resp = client.post(
+            "https://api.igdb.com/v4/games",
+            headers={
+                "Client-ID": settings.igdb_client_id,
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "text/plain",
+            },
+            content=f'search "{safe_name}"; fields name,cover.url,cover.image_id; limit 5;',
         )
 
-    if resp.status_code == 429:
-        raise _RateLimited("RAWG")
-    resp.raise_for_status()
+    if resp.status_code == 401:
+        invalidate_igdb_token()
+        raise _RateLimited("IGDB-auth")  # triggers Celery backoff retry
 
-    results = resp.json().get("results", [])
-    if not results:
-        return None, 0.0
+    if resp.status_code == 429:
+        raise _RateLimited("IGDB")
+
+    resp.raise_for_status()
 
     best_score = 0.0
     best_cover: str | None = None
-    for game in results:
+    for game in resp.json():
         score = _confidence(name, game.get("name", ""))
         if score > best_score:
             best_score = score
-            best_cover = game.get("background_image") or None
+            cover = game.get("cover")
+            if cover and cover.get("url"):
+                url = cover["url"]
+                if url.startswith("//"):
+                    url = "https:" + url
+                url = url.replace("/t_thumb/", "/t_cover_big/")
+                best_cover = url
 
     return best_cover, best_score
 
@@ -96,7 +113,7 @@ def _steam_search(name: str) -> tuple[str | None, str | None]:
     for item in resp.json().get("items", []):
         if item.get("name", "").lower() == norm:
             app_id = str(item["id"])
-            cover = f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/header.jpg"
+            cover = f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/library_600x900.jpg"
             return app_id, cover
 
     return None, None
@@ -123,20 +140,20 @@ async def _run_enrichment(game_id: int) -> tuple[EnrichmentStatus, str | None, s
                 raise LookupError(game_id)
             name: str = game.primary_name
 
-        # ── RAWG (sync HTTP in thread pool) ──────────────────────────────────
-        rawg_cover: str | None = None
-        rawg_confidence = 0.0
+        # ── IGDB (sync HTTP in thread pool) ──────────────────────────────────
+        igdb_cover: str | None = None
+        igdb_confidence = 0.0
         try:
-            rawg_cover, rawg_confidence = await asyncio.to_thread(_rawg_search, name)
+            igdb_cover, igdb_confidence = await asyncio.to_thread(_igdb_search, name)
         except _RateLimited:
             raise
         except Exception:
-            logger.exception("enrich_game: RAWG lookup failed for game_id=%d", game_id)
+            logger.exception("enrich_game: IGDB lookup failed for game_id=%d", game_id)
 
-        if rawg_confidence >= CONFIDENCE_THRESHOLD:
+        if igdb_confidence >= CONFIDENCE_THRESHOLD:
             async with SessionLocal() as db:
-                await _apply(db, game_id, EnrichmentStatus.ENRICHED, rawg_cover, None)
-            return EnrichmentStatus.ENRICHED, rawg_cover, None
+                await _apply(db, game_id, EnrichmentStatus.ENRICHED, igdb_cover, None)
+            return EnrichmentStatus.ENRICHED, igdb_cover, None
 
         # ── Steam fallback ───────────────────────────────────────────────────
         steam_id: str | None = None
@@ -195,7 +212,9 @@ async def _apply(
 # Celery task
 # ---------------------------------------------------------------------------
 
-@celery_app.task(name="tasks.enrich_game", bind=True, max_retries=5)
+# rate_limit is per-worker process — fine for a single container, but must be
+# revisited (e.g. Redis-based token bucket) if multiple worker instances are added.
+@celery_app.task(name="tasks.enrich_game", bind=True, max_retries=5, rate_limit="1/s")
 def enrich_game(self, game_id: int) -> None:
     try:
         status, cover_url, ext_id = asyncio.run(_run_enrichment(game_id))

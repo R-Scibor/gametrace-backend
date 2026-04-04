@@ -11,7 +11,8 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     gcp_project: str = ""
     gcp_location: str = "us-central1"
-    rawg_api_key: str = ""
+    igdb_client_id: str = ""
+    igdb_client_secret: str = ""
 
     session_token_expire_days: int = 30
 
