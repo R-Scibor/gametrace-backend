@@ -9,7 +9,7 @@ from app.core.database import get_db
 from app.models.game import Game, UserGamePreference
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
-from app.schemas.stats import GameStatEntry, PendingErrorEntry, StatsSummaryResponse
+from app.schemas.stats import ActiveSessionBrief, DashboardResponse, GameStatEntry, PendingErrorEntry, StatsSummaryResponse
 
 router = APIRouter()
 
@@ -95,5 +95,92 @@ async def get_stats_summary(
         window_end=now,
         total_seconds=total_seconds,
         per_game=per_game,
+        pending_errors=pending_errors,
+    )
+
+
+def _total_seconds_for_window(rows: list, window_start: datetime) -> int:
+    return sum(row.total_seconds for row in rows if row.window_start >= window_start)
+
+
+@router.get("/dashboard", response_model=DashboardResponse)
+async def get_dashboard(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    now = datetime.now(timezone.utc)
+    window_30d = now - timedelta(days=30)
+    window_7d = now - timedelta(days=7)
+
+    # Compute totals for 30-day window (superset), then filter for 7-day in Python
+    totals_stmt = (
+        select(
+            GameSession.start_time.label("window_start"),
+            func.coalesce(GameSession.duration_seconds, 0).label("total_seconds"),
+        )
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.status == SessionStatus.COMPLETED,
+            GameSession.deleted_at.is_(None),
+            GameSession.start_time >= window_30d,
+        )
+    )
+    totals_result = await db.execute(totals_stmt)
+    rows = totals_result.all()
+
+    total_seconds_30d = sum(r.total_seconds for r in rows)
+    total_seconds_7d = sum(r.total_seconds for r in rows if r.window_start >= window_7d)
+
+    # Active session (ONGOING, not soft-deleted)
+    active_stmt = (
+        select(GameSession, Game.primary_name)
+        .join(Game, GameSession.game_id == Game.id)
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.status == SessionStatus.ONGOING,
+            GameSession.deleted_at.is_(None),
+        )
+        .order_by(GameSession.start_time.desc())
+        .limit(1)
+    )
+    active_result = await db.execute(active_stmt)
+    active_row = active_result.first()
+    active_session = (
+        ActiveSessionBrief(
+            id=active_row[0].id,
+            game_name=active_row[1],
+            start_time=active_row[0].start_time,
+        )
+        if active_row
+        else None
+    )
+
+    # Pending errors
+    errors_stmt = (
+        select(GameSession, Game.primary_name)
+        .join(Game, GameSession.game_id == Game.id)
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.status == SessionStatus.ERROR,
+            GameSession.deleted_at.is_(None),
+        )
+        .order_by(GameSession.start_time.desc())
+    )
+    errors_result = await db.execute(errors_stmt)
+    pending_errors = [
+        PendingErrorEntry(
+            id=session.id,
+            game_id=session.game_id,
+            game_name=game_name,
+            start_time=session.start_time,
+            notes=session.notes,
+        )
+        for session, game_name in errors_result.all()
+    ]
+
+    return DashboardResponse(
+        total_seconds_7d=total_seconds_7d,
+        total_seconds_30d=total_seconds_30d,
+        active_session=active_session,
         pending_errors=pending_errors,
     )
