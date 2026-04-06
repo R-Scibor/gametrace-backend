@@ -26,3 +26,16 @@ class StatsSummaryResponse(BaseModel):
     total_seconds: int
     per_game: list[GameStatEntry]
     pending_errors: list[PendingErrorEntry]
+
+
+class ActiveSessionBrief(BaseModel):
+    id: int
+    game_name: str
+    start_time: datetime
+
+
+class DashboardResponse(BaseModel):
+    total_seconds_7d: int
+    total_seconds_30d: int
+    active_session: Optional[ActiveSessionBrief] = None
+    pending_errors: list[PendingErrorEntry]
