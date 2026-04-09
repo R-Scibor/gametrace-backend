@@ -1,9 +1,16 @@
-from datetime import timezone
+import base64
+from datetime import date, datetime, timezone
+from unittest.mock import mock_open, patch
 
-from app.models.game import EnrichmentStatus
+from sqlalchemy import select
+
+from app.models.game import CoverSource, EnrichmentStatus, UserGamePreference
+from app.models.session import DailyUserStat, GameSession
 
 from tests.factories import (
     dt,
+    make_alias,
+    make_daily_stat,
     make_game,
     make_pref,
     make_session,
@@ -118,7 +125,6 @@ async def test_ignored_game_returns_empty_list(authed_client, db, user):
 
 
 async def test_excludes_soft_deleted_sessions(authed_client, db, user):
-    from datetime import datetime
     game = await make_game(db)
     visible = await make_session(db, user.discord_id, game.id, dt(hours_ago=5), dt(hours_ago=4))
     deleted = await make_session(
@@ -132,3 +138,153 @@ async def test_excludes_soft_deleted_sessions(authed_client, db, user):
     ids = [s["id"] for s in resp.json()]
     assert visible.id in ids
     assert deleted.id not in ids
+
+
+# ── POST /games/{id}/merge/{target_id} ───────────────────────────────────────
+
+async def test_merge_happy_path(authed_client, db, user):
+    source = await make_game(db, "Source Game")
+    target = await make_game(db, "Target Game")
+    from app.models.game import Game
+    s = await make_session(db, user.discord_id, source.id, dt(hours_ago=3), dt(hours_ago=2))
+
+    resp = await authed_client.post(f"/api/v1/games/{source.id}/merge/{target.id}")
+
+    assert resp.status_code == 204
+    deleted = await db.get(Game, source.id)
+    assert deleted is None
+    await db.refresh(s)
+    assert s.game_id == target.id
+
+
+async def test_aliases_reassigned(authed_client, db, user):
+    source = await make_game(db, "Source")
+    target = await make_game(db, "Target")
+    alias = await make_alias(db, source.id, "source.exe")
+
+    await authed_client.post(f"/api/v1/games/{source.id}/merge/{target.id}")
+
+    await db.refresh(alias)
+    assert alias.game_id == target.id
+
+
+async def test_daily_stats_aggregated_on_overlap(authed_client, db, user):
+    """UNIQUE(user_id, game_id, date) collision → source seconds folded into target."""
+    source = await make_game(db, "Source")
+    target = await make_game(db, "Target")
+    overlap_date = date(2025, 1, 15)
+    src_stat = await make_daily_stat(db, user.discord_id, source.id, overlap_date, 3600)
+    tgt_stat = await make_daily_stat(db, user.discord_id, target.id, overlap_date, 7200)
+
+    resp = await authed_client.post(f"/api/v1/games/{source.id}/merge/{target.id}")
+
+    assert resp.status_code == 204
+    await db.refresh(tgt_stat)
+    assert tgt_stat.total_seconds == 10800  # 3600 + 7200
+    result = await db.execute(select(DailyUserStat).where(DailyUserStat.id == src_stat.id))
+    assert result.scalar_one_or_none() is None
+
+
+async def test_daily_stats_reassigned_no_overlap(authed_client, db, user):
+    """Non-overlapping source stats are simply re-pointed to target."""
+    source = await make_game(db, "Source")
+    target = await make_game(db, "Target")
+    src_stat = await make_daily_stat(db, user.discord_id, source.id, date(2025, 2, 1), 1800)
+
+    await authed_client.post(f"/api/v1/games/{source.id}/merge/{target.id}")
+
+    await db.refresh(src_stat)
+    assert src_stat.game_id == target.id
+
+
+async def test_user_preference_conflict_resolved(authed_client, db, user):
+    """User has a pref for both games — source pref is dropped, no UNIQUE violation."""
+    source = await make_game(db, "Source")
+    target = await make_game(db, "Target")
+    await make_pref(db, user.discord_id, source.id, is_ignored=True)
+    await make_pref(db, user.discord_id, target.id, is_ignored=False)
+
+    resp = await authed_client.post(f"/api/v1/games/{source.id}/merge/{target.id}")
+
+    assert resp.status_code == 204
+    result = await db.execute(
+        select(UserGamePreference).where(UserGamePreference.game_id == target.id)
+    )
+    assert len(result.scalars().all()) == 1
+
+
+async def test_merge_self_returns_400(authed_client, db, user):
+    game = await make_game(db)
+
+    resp = await authed_client.post(f"/api/v1/games/{game.id}/merge/{game.id}")
+
+    assert resp.status_code == 400
+
+
+async def test_merge_source_not_found(authed_client, db, user):
+    target = await make_game(db)
+
+    resp = await authed_client.post(f"/api/v1/games/99999/merge/{target.id}")
+
+    assert resp.status_code == 404
+
+
+async def test_merge_target_not_found(authed_client, db, user):
+    source = await make_game(db)
+
+    resp = await authed_client.post(f"/api/v1/games/{source.id}/merge/99999")
+
+    assert resp.status_code == 404
+
+
+# ── PUT /games/{id}/cover ─────────────────────────────────────────────────────
+
+async def test_upload_sets_custom_source(authed_client, db, user):
+    game = await make_game(db)
+    img_b64 = base64.b64encode(b"fake_image_data").decode()
+
+    with patch("app.api.v1.endpoints.games.os.makedirs"), \
+         patch("builtins.open", mock_open()):
+        resp = await authed_client.put(
+            f"/api/v1/games/{game.id}/cover",
+            json={"image_base64": img_b64, "extension": "jpg"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["cover_source"] == CoverSource.CUSTOM
+    await db.refresh(game)
+    assert game.cover_source == CoverSource.CUSTOM
+
+
+async def test_upload_invalid_extension(authed_client, db, user):
+    game = await make_game(db)
+    img_b64 = base64.b64encode(b"data").decode()
+
+    resp = await authed_client.put(
+        f"/api/v1/games/{game.id}/cover",
+        json={"image_base64": img_b64, "extension": "exe"},
+    )
+
+    assert resp.status_code == 400
+
+
+async def test_upload_invalid_base64(authed_client, db, user):
+    game = await make_game(db)
+
+    resp = await authed_client.put(
+        f"/api/v1/games/{game.id}/cover",
+        json={"image_base64": "!!!not_valid_base64!!!", "extension": "jpg"},
+    )
+
+    assert resp.status_code == 400
+
+
+async def test_cover_upload_game_not_found(authed_client, db, user):
+    img_b64 = base64.b64encode(b"data").decode()
+
+    resp = await authed_client.put(
+        "/api/v1/games/99999/cover",
+        json={"image_base64": img_b64, "extension": "jpg"},
+    )
+
+    assert resp.status_code == 404
