@@ -112,6 +112,12 @@ docker exec -it gametrace_db psql -U gametrace_user -d gametrace_db \
   -c "INSERT INTO users (discord_id, username) VALUES ('<id>', '<username>');"
 ```
 
+## Docs
+
+| Document | Description |
+|----------|-------------|
+| [docs/game-matching.md](docs/game-matching.md) | Game name matching pipeline — sanitization, WRatio, number guard, IGDB alternative names |
+
 ## Project structure
 
 ```
