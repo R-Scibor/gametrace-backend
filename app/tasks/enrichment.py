@@ -1,17 +1,86 @@
 """
 Celery task: enrich a game record with metadata from IGDB (primary) and Steam API (fallback).
 
-Strategy:
-1. IGDB fuzzy name search → confidence score via rapidfuzz WRatio on sanitized names.
-   Sanitization: lowercase, strip extensions/brackets, normalize roman numerals, collapse separators.
-   alternative_names are also scored — best score across all candidate names is used.
-   - Score >85% → ENRICHED (cover: vertical box art from t_cover_big).
-2. If IGDB score ≤85% → Steam store search (exact name match → 100% confidence) → ENRICHED
-   (cover: library_600x900.jpg — vertical portrait art).
-3. Neither matched → NEEDS_REVIEW.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MATCHING PIPELINE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Exponential backoff on HTTP 429: 2^retry * 60s countdown.
-Redis deduplication: task_id=f"enrich_game_{game_id}" ensures only one task per game is queued.
+Step 1 — _sanitize(s)
+  Normalises a raw game name (or Discord process name) into a
+  comparable form. Applied to BOTH sides of every comparison.
+
+  Order of operations:
+    1. lowercase
+    2. strip file extension          "witcher3.exe"   → "witcher3"
+    3. remove [bracketed] content    "Hades [GOTY]"   → "Hades"
+    4. remove (parenthesised) content "Game (2023)"   → "Game"
+       ⚠ entire parenthesised block is dropped, including its
+         content — "Dark Souls (Remastered)" loses "Remastered".
+         Confidence still passes via WRatio partial matching.
+    5. & → "and"
+    6. structural separators (: - _) → space
+    7. strip remaining non-alphanumeric chars (apostrophes, accents…)
+    8. map standalone roman numeral tokens i–xv to arabic digits
+       "Diablo IV" → "diablo 4",  "Final Fantasy XV" → "final fantasy 15"
+       ⚠ standalone "i" and "v" are caught by this map — game titles
+         containing these as words (e.g. "I Am Alive") get digits injected.
+         Cross-game comparisons involving such titles may produce unexpected
+         number sets; same-game comparisons are unaffected (both sides transform
+         identically).
+    9. collapse whitespace, strip
+
+Step 2 — _confidence(a, b) → float [0.0, 1.0]
+  a.  Compute fuzz.WRatio on the sanitized forms.
+      WRatio picks the best of ratio / partial_ratio /
+      token_sort_ratio / token_set_ratio, so subtitles, word-
+      order differences, and partial containment are all handled.
+
+  b.  Number guard (NUMBER_MISMATCH_CAP = 0.75):
+      Extract all digit sequences from each sanitized string.
+      If the two sets differ AND at least one string contains digits,
+      cap the score at 0.75 (below the 0.85 CONFIDENCE_THRESHOLD).
+
+      Rationale: WRatio's token_set_ratio sees "hades" as fully
+      contained in "hades 2" and returns ~0.95 — indistinguishable
+      from the same game. A number mismatch means a different series
+      entry: Hades vs Hades II, Diablo 3 vs Diablo 4, FIFA 23 vs FIFA 24.
+
+      Same number → no penalty:
+        "The Witcher 3" vs "The Witcher 3: Wild Hunt"  → {3} == {3}  ✓
+        "Cyberpunk 2077" vs "Cyberpunk 2077: Phantom Liberty" → {2077} == {2077}  ✓
+
+      ⚠ Known limitation: architecture/API-version numbers embedded in
+        process names (Win64, dx11, x64, game64) contain digits that
+        may mismatch a canonical game name with no number, triggering a
+        false cap. Platform token stripping is not implemented — if these
+        patterns appear in Discord activity names, the enrichment falls
+        through to Steam or NEEDS_REVIEW.
+
+Step 3 — _igdb_search(name) → (cover_url | None, confidence)
+  - Sends _sanitize(name) as the IGDB search query to strip process-name
+    noise before the API call.
+  - Requests alternative_names.name alongside the primary name field.
+  - Scores every candidate (primary + all alternative names) with
+    _confidence(original_name, candidate); takes the maximum.
+  - Normalises returned cover URLs:
+      protocol-relative "//…" → "https://…"
+      /t_thumb/ → /t_cover_big/  (vertical box art, ~264×352 px)
+
+Step 4 — _steam_search(name) → (app_id | None, cover_url | None)
+  Exact lowercase match against Steam Store search results.
+  Confidence is implicitly 1.0 (exact match or nothing).
+  Cover: library_600x900.jpg (vertical portrait, same aspect ratio).
+
+Step 5 — Pipeline decision
+  IGDB confidence >= 0.85  →  ENRICHED  (IGDB cover)
+  IGDB confidence <  0.85, Steam exact match found  →  ENRICHED  (Steam cover)
+  Neither  →  NEEDS_REVIEW  (human review required in admin UI)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OPERATIONAL NOTES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Exponential backoff on HTTP 429: 2^retry * 60s countdown (max 5 retries).
+Redis deduplication: task_id="enrich_game_{game_id}" — one task per game queued at a time.
 Custom covers: cover_image_url is NOT updated when cover_source=CUSTOM.
 
 Event loop note: asyncpg connections are bound to the loop they were created on.
@@ -36,6 +105,9 @@ from app.tasks.igdb_auth import get_igdb_token, invalidate_igdb_token
 logger = logging.getLogger(__name__)
 
 CONFIDENCE_THRESHOLD = 0.85
+# Score ceiling applied when sanitized digit sets differ (sequel guard).
+# Must stay below CONFIDENCE_THRESHOLD so mismatched-number pairs never enrich.
+_NUMBER_MISMATCH_CAP = 0.75
 
 _ROMAN_MAP = {
     "i": "1", "ii": "2", "iii": "3", "iv": "4", "v": "5",
@@ -68,7 +140,15 @@ def _sanitize(s: str) -> str:
 
 
 def _confidence(a: str, b: str) -> float:
-    return fuzz.WRatio(_sanitize(a), _sanitize(b)) / 100.0
+    sa, sb = _sanitize(a), _sanitize(b)
+    score = fuzz.WRatio(sa, sb) / 100.0
+
+    nums_a = set(re.findall(r'\d+', sa))
+    nums_b = set(re.findall(r'\d+', sb))
+    if (nums_a or nums_b) and nums_a != nums_b:
+        score = min(score, _NUMBER_MISMATCH_CAP)
+
+    return score
 
 
 def _igdb_search(name: str) -> tuple[str | None, float]:
