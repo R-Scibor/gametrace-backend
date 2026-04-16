@@ -2,7 +2,9 @@
 Celery task: enrich a game record with metadata from IGDB (primary) and Steam API (fallback).
 
 Strategy:
-1. IGDB fuzzy name search → confidence score via SequenceMatcher.
+1. IGDB fuzzy name search → confidence score via rapidfuzz WRatio on sanitized names.
+   Sanitization: lowercase, strip extensions/brackets, normalize roman numerals, collapse separators.
+   alternative_names are also scored — best score across all candidate names is used.
    - Score >85% → ENRICHED (cover: vertical box art from t_cover_big).
 2. If IGDB score ≤85% → Steam store search (exact name match → 100% confidence) → ENRICHED
    (cover: library_600x900.jpg — vertical portrait art).
@@ -18,10 +20,11 @@ Reusing the global AsyncSessionLocal across multiple asyncio.run() calls causes
 fresh engine created inside it, sync HTTP calls via asyncio.to_thread().
 """
 import asyncio
-import difflib
 import logging
+import re
 
 import httpx
+from rapidfuzz import fuzz
 from celery.exceptions import MaxRetriesExceededError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -33,6 +36,12 @@ from app.tasks.igdb_auth import get_igdb_token, invalidate_igdb_token
 logger = logging.getLogger(__name__)
 
 CONFIDENCE_THRESHOLD = 0.85
+
+_ROMAN_MAP = {
+    "i": "1", "ii": "2", "iii": "3", "iv": "4", "v": "5",
+    "vi": "6", "vii": "7", "viii": "8", "ix": "9", "x": "10",
+    "xi": "11", "xii": "12", "xiii": "13", "xiv": "14", "xv": "15",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -47,8 +56,19 @@ class _RateLimited(Exception):
 # Sync HTTP helpers — called via asyncio.to_thread()
 # ---------------------------------------------------------------------------
 
+def _sanitize(s: str) -> str:
+    s = s.lower()
+    s = re.sub(r'\.\w{2,5}$', '', s)              # strip file extension (.exe, .app)
+    s = re.sub(r'[\[\(][^\]\)]*[\]\)]', '', s)    # remove [tags] and (tags)
+    s = s.replace('&', 'and')                      # & → and
+    s = re.sub(r'[:\-_]', ' ', s)                 # structural separators → space
+    s = re.sub(r'[^a-z0-9\s]', '', s)             # strip remaining non-alphanumeric
+    tokens = [_ROMAN_MAP.get(t, t) for t in s.split()]
+    return ' '.join(tokens).strip()
+
+
 def _confidence(a: str, b: str) -> float:
-    return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
+    return fuzz.WRatio(_sanitize(a), _sanitize(b)) / 100.0
 
 
 def _igdb_search(name: str) -> tuple[str | None, float]:
@@ -58,7 +78,8 @@ def _igdb_search(name: str) -> tuple[str | None, float]:
         return None, 0.0
 
     token = get_igdb_token()
-    safe_name = name.replace('"', '\\"')
+    clean_name = _sanitize(name)
+    safe_name = clean_name.replace('"', '\\"')
 
     with httpx.Client(timeout=10) as client:
         resp = client.post(
@@ -68,7 +89,7 @@ def _igdb_search(name: str) -> tuple[str | None, float]:
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "text/plain",
             },
-            content=f'search "{safe_name}"; fields name,cover.url,cover.image_id; limit 5;',
+            content=f'search "{safe_name}"; fields name,cover.url,cover.image_id,alternative_names.name; limit 5;',
         )
 
     if resp.status_code == 401:
@@ -83,7 +104,12 @@ def _igdb_search(name: str) -> tuple[str | None, float]:
     best_score = 0.0
     best_cover: str | None = None
     for game in resp.json():
-        score = _confidence(name, game.get("name", ""))
+        candidate_names = [game.get("name", "")]
+        for alt in game.get("alternative_names", []):
+            if alt.get("name"):
+                candidate_names.append(alt["name"])
+        score = max(_confidence(name, n) for n in candidate_names if n)
+
         if score > best_score:
             best_score = score
             cover = game.get("cover")
