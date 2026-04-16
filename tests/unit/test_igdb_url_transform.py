@@ -53,3 +53,20 @@ def test_thumb_replaced_with_cover_big():
 def test_missing_cover_field():
     cover_url, _ = _call_igdb([{"name": "Test Game"}])
     assert cover_url is None
+
+
+def test_alt_name_raises_score():
+    # Primary name is a poor match; alt name is exact — score should hit threshold
+    mock_client = _make_igdb_mock_client([{
+        "name": "Witcher III: Wild Hunt, The",
+        "cover": {"url": "https://images.igdb.com/t_thumb/abc.jpg"},
+        "alternative_names": [{"name": "The Witcher 3: Wild Hunt"}],
+    }])
+    with patch("app.tasks.enrichment.settings") as s, \
+         patch("app.tasks.enrichment.get_igdb_token", return_value="tok"), \
+         patch("app.tasks.enrichment.httpx.Client", return_value=mock_client):
+        s.igdb_client_id = "test-id"
+        s.igdb_client_secret = "test-secret"
+        cover_url, score = _igdb_search("The Witcher 3")
+    assert score >= 0.85
+    assert cover_url == "https://images.igdb.com/t_cover_big/abc.jpg"
