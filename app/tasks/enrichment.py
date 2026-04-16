@@ -67,8 +67,9 @@ Step 3 — _igdb_search(name) → (cover_url | None, confidence)
       /t_thumb/ → /t_cover_big/  (vertical box art, ~264×352 px)
 
 Step 4 — _steam_search(name) → (app_id | None, cover_url | None)
-  Exact lowercase match against Steam Store search results.
-  Confidence is implicitly 1.0 (exact match or nothing).
+  Fuzzy match against Steam Store search results using the same _confidence()
+  pipeline (sanitize both sides, WRatio, number guard) and CONFIDENCE_THRESHOLD.
+  Takes the highest-scoring candidate; returns (None, None) if none reach 0.85.
   Cover: library_600x900.jpg (vertical portrait, same aspect ratio).
 
 Step 5 — Pipeline decision
@@ -204,7 +205,7 @@ def _igdb_search(name: str) -> tuple[str | None, float]:
 
 
 def _steam_search(name: str) -> tuple[str | None, str | None]:
-    """Returns (app_id, cover_url) on exact match, else (None, None). Raises _RateLimited on 429."""
+    """Returns (app_id, cover_url) on confident match, else (None, None). Raises _RateLimited on 429."""
     with httpx.Client(timeout=10) as client:
         resp = client.get(
             "https://store.steampowered.com/api/storesearch/",
@@ -215,12 +216,22 @@ def _steam_search(name: str) -> tuple[str | None, str | None]:
         raise _RateLimited("Steam")
     resp.raise_for_status()
 
-    norm = name.lower()
+    best_score = 0.0
+    best_app_id: str | None = None
+    best_cover: str | None = None
+
     for item in resp.json().get("items", []):
-        if item.get("name", "").lower() == norm:
-            app_id = str(item["id"])
-            cover = f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/library_600x900.jpg"
-            return app_id, cover
+        item_name = item.get("name", "")
+        if not item_name:
+            continue
+        score = _confidence(name, item_name)
+        if score > best_score:
+            best_score = score
+            best_app_id = str(item["id"])
+            best_cover = f"https://cdn.akamai.steamstatic.com/steam/apps/{best_app_id}/library_600x900.jpg"
+
+    if best_score >= CONFIDENCE_THRESHOLD:
+        return best_app_id, best_cover
 
     return None, None
 
