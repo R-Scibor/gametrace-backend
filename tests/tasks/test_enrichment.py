@@ -156,10 +156,11 @@ def test_igdb_rate_limited_triggers_retry():
     resolved = enrich_game._get_current_object()
     enrich_game.request.retries = 0
 
+    # Patch _run_enrichment as AsyncMock so asyncio.run() actually awaits it
+    # (avoiding an unawaited-coroutine warning from patching asyncio directly).
     with patch.object(resolved, "retry", side_effect=Retry()) as mock_retry, \
-         patch("app.tasks.enrichment.asyncio") as mock_asyncio:
-
-        mock_asyncio.run.side_effect = _RateLimited("IGDB")
+         patch("app.tasks.enrichment._run_enrichment",
+               new_callable=AsyncMock, side_effect=_RateLimited("IGDB")):
 
         with pytest.raises(Retry):
             enrich_game.run(1)
@@ -173,9 +174,8 @@ def test_steam_rate_limited_triggers_retry():
     enrich_game.request.retries = 1
 
     with patch.object(resolved, "retry", side_effect=Retry()) as mock_retry, \
-         patch("app.tasks.enrichment.asyncio") as mock_asyncio:
-
-        mock_asyncio.run.side_effect = _RateLimited("Steam")
+         patch("app.tasks.enrichment._run_enrichment",
+               new_callable=AsyncMock, side_effect=_RateLimited("Steam")):
 
         with pytest.raises(Retry):
             enrich_game.run(1)
