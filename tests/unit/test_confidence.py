@@ -1,14 +1,22 @@
 """
 tests/unit/test_confidence.py
 
-Phase 3 — unit tests for the _confidence() scoring function used by the
-enrichment worker to decide IGDB match quality.
+Unit tests for _confidence() — the scoring function used by the enrichment
+worker to decide IGDB match quality.
 
-After the rapidfuzz refactor: uses WRatio on sanitized names, so partial
-title matches, roman numeral normalization, and .exe stripping all work.
+Scoring pipeline (see enrichment.py module docstring for full spec):
+  1. Both strings are _sanitize()-d (lowercase, strip extensions/brackets/separators,
+     roman numerals → arabic digits).
+  2. fuzz.WRatio on sanitized forms.
+  3. Number guard: if digit sets differ, score is capped at _NUMBER_MISMATCH_CAP (0.75),
+     keeping same-franchise-different-entry pairs below the 0.85 CONFIDENCE_THRESHOLD.
 """
 from app.tasks.enrichment import _confidence
 
+THRESHOLD = 0.85
+
+
+# ── Exact / case ────────────────────────────────────────────────────────────
 
 def test_exact_match():
     assert _confidence("Cyberpunk 2077", "Cyberpunk 2077") == 1.0
@@ -18,31 +26,58 @@ def test_case_insensitive():
     assert _confidence("cyberpunk 2077", "Cyberpunk 2077") == 1.0
 
 
-def test_high_similarity():
-    # Partial title match — same game, should clear the 0.85 threshold
-    # FAILS with difflib SequenceMatcher (scores ~0.70); passes with WRatio
-    assert _confidence("The Witcher 3", "The Witcher 3: Wild Hunt") >= 0.85
+# ── Partial title / subtitle ─────────────────────────────────────────────────
 
+def test_high_similarity():
+    # Same number on both sides → no number guard → WRatio handles subtitle
+    # FAILS with difflib SequenceMatcher (~0.70); passes with WRatio
+    assert _confidence("The Witcher 3", "The Witcher 3: Wild Hunt") >= THRESHOLD
+
+
+# ── Roman numeral normalisation ──────────────────────────────────────────────
 
 def test_roman_numeral_normalization():
-    # Both sanitize to "diablo 4" → exact match
+    # Both sanitize to "diablo 4" → identical strings → 1.0
     assert _confidence("Diablo IV", "Diablo 4") == 1.0
 
 
+# ── Extension stripping ──────────────────────────────────────────────────────
+
 def test_exe_extension_stripped():
-    # .exe suffix stripped before comparison → exact match
+    # .exe stripped before comparison → exact match
     assert _confidence("The Witcher 3.exe", "The Witcher 3") == 1.0
 
+
+# ── Number guard — different sequel entries ───────────────────────────────────
+
+def test_number_guard_missing_vs_sequel():
+    # One string has no number, the other has "2" (after roman numeral map)
+    # WRatio alone would return ~0.95; guard caps at 0.75
+    assert _confidence("Hades", "Hades II") < THRESHOLD
+
+
+def test_number_guard_different_entries():
+    # Both strings have numbers but they differ → guard applies
+    assert _confidence("Diablo 3", "Diablo 4") < THRESHOLD
+
+
+def test_number_guard_same_number_no_penalty():
+    # Same number on both sides → no cap, WRatio result stands
+    assert _confidence("Cyberpunk 2077", "Cyberpunk 2077: Phantom Liberty") >= THRESHOLD
+
+
+# ── Dissimilar games ─────────────────────────────────────────────────────────
 
 def test_low_similarity():
     assert _confidence("Minecraft", "Cyberpunk 2077") < 0.3
 
 
 def test_just_below_threshold():
-    # Share "Dragon Age" prefix but are clearly different titles
-    # WRatio should stay below 0.85 (verified empirically post-rebuild)
-    assert _confidence("Dragon Age Origins", "Dragon Age Inquisition") < 0.85
+    # Share "Dragon Age" prefix but clearly different titles; no numbers → WRatio only
+    assert _confidence("Dragon Age Origins", "Dragon Age Inquisition") < THRESHOLD
 
+
+# ── Edge ─────────────────────────────────────────────────────────────────────
 
 def test_empty_string():
     assert _confidence("", "Minecraft") == 0.0
