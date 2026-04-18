@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_router
 
-COVERS_DIR = "/app/covers"
+COVERS_DIR = os.environ.get("COVERS_DIR", "/app/covers")
 
 app = FastAPI(title="GameTrace API", version="1.0.0")
 

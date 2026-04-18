@@ -49,6 +49,7 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://gametrace_user:gametrace_pass@localhost:5432/gametrace_db
       REDIS_URL: redis://localhost:6379/0
+      COVERS_DIR: /tmp/gametrace_covers
 
     steps:
       - uses: actions/checkout@v6
@@ -74,8 +75,18 @@ jobs:
       - name: Run tests
         run: pytest
 
-  deploy:
+  build:
     needs: test
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build Docker image
+        run: docker build -t gametrace-backend:ci .
+
+  deploy:
+    needs: build
     if: github.ref == 'refs/heads/main'
     runs-on: self-hosted
 
