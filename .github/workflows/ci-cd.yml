@@ -1,0 +1,87 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'tests/**'
+      - 'alembic/**'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - '.github/workflows/ci-cd.yml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'tests/**'
+      - 'alembic/**'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - '.github/workflows/ci-cd.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: self-hosted
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: gametrace_db
+          POSTGRES_USER: gametrace_user
+          POSTGRES_PASSWORD: gametrace_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://gametrace_user:gametrace_pass@localhost:5432/gametrace_db
+      REDIS_URL: redis://localhost:6379/0
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-${{ hashFiles('requirements.txt') }}
+
+      - name: Set up venv
+        run: |
+          python3 -m venv .venv
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create test database
+        run: |
+          PGPASSWORD=gametrace_pass psql -h localhost -U gametrace_user -d gametrace_db \
+            -c "CREATE DATABASE gametrace_test OWNER gametrace_user;"
+
+      - name: Run tests
+        run: pytest
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: self-hosted
+
+    steps:
+      - name: Deploy
+        run: |
+          cd /home/endmin/homelab/gametrace-backend
+          git pull
+          docker compose up --build -d
