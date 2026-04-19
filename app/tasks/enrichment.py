@@ -28,6 +28,13 @@ Step 1 — _sanitize(s)
          number sets; same-game comparisons are unaffected (both sides transform
          identically).
     9. collapse whitespace, strip
+   10. remove all spaces → single token
+       "witcher3" vs "thewitcher3wildhunt": WRatio's partial_ratio finds
+       "witcher3" as an exact substring → ~0.90, crosses the 0.85 threshold.
+       Without this step "witcher3" vs "the witcher 3 wild hunt" reaches only
+       ~0.80 because the space between "witcher" and "3" breaks substring
+       alignment. Applied to both sides, so space-full canonical names also
+       collapse and the comparison stays symmetric.
 
 Step 2 — _confidence(a, b) → float [0.0, 1.0]
   a.  Compute fuzz.WRatio on the sanitized forms.
@@ -137,7 +144,10 @@ def _sanitize(s: str) -> str:
     s = re.sub(r'[:\-_]', ' ', s)                 # structural separators → space
     s = re.sub(r'[^a-z0-9\s]', '', s)             # strip remaining non-alphanumeric
     tokens = [_ROMAN_MAP.get(t, t) for t in s.split()]
-    return ' '.join(tokens).strip()
+    # Collapse to single token so partial_ratio finds exe-style names (e.g.
+    # "witcher3") as substrings of canonical titles ("thewitcher3wildhunt").
+    # Applied to both sides — comparison stays symmetric.
+    return ''.join(tokens)
 
 
 def _confidence(a: str, b: str) -> float:
@@ -209,7 +219,7 @@ def _steam_search(name: str) -> tuple[str | None, str | None]:
     with httpx.Client(timeout=10) as client:
         resp = client.get(
             "https://store.steampowered.com/api/storesearch/",
-            params={"term": name, "l": "english", "cc": "US"},
+            params={"term": _sanitize(name), "l": "english", "cc": "US"},
         )
 
     if resp.status_code == 429:
