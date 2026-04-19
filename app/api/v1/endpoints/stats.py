@@ -1,12 +1,12 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.auth import get_current_user
 from app.core.database import get_db
-from app.models.game import Game
+from app.models.game import Game, UserGamePreference
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
 from app.schemas.stats import ActiveSessionBrief, DashboardResponse, PendingErrorEntry, StatsSummaryResponse
@@ -37,17 +37,30 @@ async def get_dashboard(
     window_30d = now - timedelta(days=30)
     window_7d = now - timedelta(days=7)
 
-    # Compute totals for 30-day window (superset), then filter for 7-day in Python
+    # Compute totals for 30-day window (superset), then filter for 7-day in Python.
+    # LEFT JOIN on user_game_preferences so games without a pref row are kept;
+    # games with is_ignored=true are excluded (matches /stats/summary behaviour).
     totals_stmt = (
         select(
             GameSession.start_time.label("window_start"),
             func.coalesce(GameSession.duration_seconds, 0).label("total_seconds"),
+        )
+        .outerjoin(
+            UserGamePreference,
+            and_(
+                UserGamePreference.game_id == GameSession.game_id,
+                UserGamePreference.user_id == user.discord_id,
+            ),
         )
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.status == SessionStatus.COMPLETED,
             GameSession.deleted_at.is_(None),
             GameSession.start_time >= window_30d,
+            or_(
+                UserGamePreference.is_ignored.is_(None),
+                UserGamePreference.is_ignored == False,  # noqa: E712
+            ),
         )
     )
     totals_result = await db.execute(totals_stmt)
