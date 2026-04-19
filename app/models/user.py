@@ -1,7 +1,7 @@
 import secrets
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -13,6 +13,12 @@ class User(Base):
     discord_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     username: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC", server_default="UTC")
+    weekly_report_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
+    push_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -46,9 +52,14 @@ class UserDevice(Base):
     __tablename__ = "user_devices"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.discord_id", ondelete="CASCADE"))
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.discord_id", ondelete="CASCADE"), index=True
+    )
     fcm_token: Mapped[str] = mapped_column(String(512), unique=True)
     device_type: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     last_active: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
