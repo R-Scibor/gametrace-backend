@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import DailyUserStat, GameSession, SessionSource, SessionStatus
-from app.models.user import User, UserAuthToken
+from app.models.user import User, UserAuthToken, UserDevice
 
 
 async def make_user(
@@ -94,6 +94,18 @@ async def make_pref(
     db.add(pref)
     await db.flush()
     return pref
+
+
+async def make_device(
+    db,
+    user_id: str,
+    fcm_token: str,
+    device_type: str = "android",
+) -> UserDevice:
+    device = UserDevice(user_id=user_id, fcm_token=fcm_token, device_type=device_type)
+    db.add(device)
+    await db.flush()
+    return device
 
 
 async def make_daily_stat(

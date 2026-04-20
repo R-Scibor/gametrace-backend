@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     igdb_client_id: str = ""
     igdb_client_secret: str = ""
 
+    firebase_credentials_path: str = ""
+
     session_token_expire_days: int = 30
 
 
