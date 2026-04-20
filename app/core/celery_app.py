@@ -10,6 +10,7 @@ celery_app = Celery(
     include=[
         "app.tasks.enrichment",
         "app.tasks.weekly_report",
+        "app.tasks.cleanup",
     ],
 )
 
@@ -24,6 +25,10 @@ celery_app.conf.update(
         "weekly_report": {
             "task": "tasks.weekly_report",
             "schedule": crontab(day_of_week="mon", hour=9, minute=0),
+        },
+        "hard_delete_sweep": {
+            "task": "tasks.hard_delete_sweep",
+            "schedule": crontab(hour=3, minute=30),
         },
     },
 )
