@@ -40,6 +40,7 @@ services:
     volumes:
       - .:/app # Hot-reload kodu
       - covers_data:/app/covers # Wolumen na okładki CUSTOM
+      - ./credentials/firebase-cred.json:/app/credentials/firebase-cred.json:ro
     env_file:
       - .env
     depends_on:
@@ -64,6 +65,8 @@ services:
     container_name: gametrace_celery_worker
     restart: always
     command: celery -A app.core.celery_app worker --loglevel=info
+    volumes:
+      - ./credentials/firebase-cred.json:/app/credentials/firebase-cred.json:ro
     env_file:
       - .env
     depends_on:
@@ -77,6 +80,8 @@ services:
     container_name: gametrace_celery_beat
     restart: always
     command: celery -A app.core.celery_app beat --loglevel=info
+    volumes:
+      - ./credentials/firebase-cred.json:/app/credentials/firebase-cred.json:ro
     env_file:
       - .env
     depends_on:

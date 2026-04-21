@@ -27,9 +27,10 @@ venv/
 env/
 .env/
 
-# Konfiguracja środowiskowa i sekrety (BARDZO WAŻNE)
+# Konfiguracja środowiskowa i sekrety
 .env
 .env.local
+credentials/
 
 # Celery
 celerybeat-schedule
