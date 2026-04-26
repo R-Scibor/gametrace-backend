@@ -90,6 +90,33 @@ services:
       redis:
         condition: service_started
 
+  flower:
+    image: mher/flower:2.0
+    container_name: gametrace_flower
+    restart: always
+    # Variable is renamed to GAMETRACE_FLOWER_AUTH so the mher image does not
+    # auto-pick it up — empty FLOWER_BASIC_AUTH triggers a broken 401 mode.
+    # Only add --basic-auth=... when the value is non-empty.
+    entrypoint: ["sh", "-c"]
+    command:
+      - >
+        if [ -n "$$GAMETRACE_FLOWER_AUTH" ]; then
+          exec celery flower --basic-auth="$$GAMETRACE_FLOWER_AUTH";
+        else
+          exec celery flower;
+        fi
+    environment:
+      CELERY_BROKER_URL: ${REDIS_URL:-redis://redis:6379/0}
+      GAMETRACE_FLOWER_AUTH: ${FLOWER_BASIC_AUTH:-}
+      FLOWER_PORT: "5555"
+    # Uncomment for direct local-dev access. In a homelab, prefer routing
+    # through Nginx Proxy Manager so Flower stays off the public port.
+    # ports:
+    #   - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_started
+
 volumes:
   postgres_data:
   covers_data:
