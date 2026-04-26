@@ -10,7 +10,6 @@ class SessionCreate(BaseModel):
     game_id: int
     start_time: datetime
     end_time: datetime
-    notes: Optional[str] = None
 
     @model_validator(mode="after")
     def check_times(self):
@@ -21,7 +20,6 @@ class SessionCreate(BaseModel):
 
 class SessionPatch(BaseModel):
     end_time: Optional[datetime] = None
-    notes: Optional[str] = None
     discard: bool = False
 
 

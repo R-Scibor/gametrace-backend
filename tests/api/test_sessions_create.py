@@ -26,23 +26,6 @@ async def test_create_session_success(authed_client, db):
     assert data["duration_seconds"] == 3600
 
 
-async def test_create_session_saves_notes(authed_client, db):
-    game = await make_game(db)
-
-    resp = await authed_client.post(
-        "/api/v1/sessions",
-        json={
-            "game_id": game.id,
-            "start_time": dt(hours_ago=2).isoformat(),
-            "end_time": dt(hours_ago=1).isoformat(),
-            "notes": "great session",
-        },
-    )
-
-    assert resp.status_code == 201
-    assert resp.json()["notes"] == "great session"
-
-
 async def test_create_session_game_not_found(authed_client):
     resp = await authed_client.post(
         "/api/v1/sessions",

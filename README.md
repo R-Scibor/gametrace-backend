@@ -62,7 +62,7 @@ Token expires after 30 days of inactivity (sliding window).
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/v1/sessions` | Add a manual session (COMPLETED, overlap check → 409) |
-| `PATCH` | `/api/v1/sessions/{id}` | Edit end_time/notes or discard an ERROR session |
+| `PATCH` | `/api/v1/sessions/{id}` | Edit end_time or discard an ERROR session |
 
 Session state machine (bot-sourced): `ONGOING → COMPLETED`, `ONGOING → ERROR`, `ERROR → COMPLETED`, `ERROR → soft-delete`. Manual sessions are saved directly as `COMPLETED`.
 

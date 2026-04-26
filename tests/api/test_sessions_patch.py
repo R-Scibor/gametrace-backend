@@ -83,44 +83,6 @@ async def test_edit_end_time_recalculates_duration(authed_client, db, user):
     assert data["duration_seconds"] == 9000
 
 
-async def test_edit_notes_only(authed_client, db, user):
-    game = await make_game(db)
-    original_end = dt(hours_ago=1)
-    session = await make_session(
-        db, user.discord_id, game.id,
-        dt(hours_ago=2), original_end,
-        notes="old note",
-    )
-
-    resp = await authed_client.patch(
-        f"/api/v1/sessions/{session.id}",
-        json={"notes": "updated note"},
-    )
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["notes"] == "updated note"
-    # end_time should not change
-    assert data["duration_seconds"] == session.duration_seconds
-
-
-async def test_edit_notes_to_null(authed_client, db, user):
-    game = await make_game(db)
-    session = await make_session(
-        db, user.discord_id, game.id,
-        dt(hours_ago=2), dt(hours_ago=1),
-        notes="some note",
-    )
-
-    resp = await authed_client.patch(
-        f"/api/v1/sessions/{session.id}",
-        json={"notes": None},
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["notes"] is None
-
-
 # ── ONGOING (bot-managed) ─────────────────────────────────────────────────────
 
 async def test_cannot_edit_ongoing_session(authed_client, db, user):
@@ -134,7 +96,7 @@ async def test_cannot_edit_ongoing_session(authed_client, db, user):
 
     resp = await authed_client.patch(
         f"/api/v1/sessions/{session.id}",
-        json={"notes": "trying to edit"},
+        json={"end_time": dt(hours_ago=0).isoformat()},
     )
 
     assert resp.status_code == 403
@@ -207,7 +169,7 @@ async def test_cannot_patch_other_users_session(authed_client, db):
 
     resp = await authed_client.patch(
         f"/api/v1/sessions/{session.id}",
-        json={"notes": "hacking"},
+        json={"end_time": dt(hours_ago=0).isoformat()},
     )
 
     assert resp.status_code == 404
@@ -223,7 +185,7 @@ async def test_patch_soft_deleted_returns_404(authed_client, db, user):
 
     resp = await authed_client.patch(
         f"/api/v1/sessions/{session.id}",
-        json={"notes": "should not work"},
+        json={"end_time": dt(hours_ago=0).isoformat()},
     )
 
     assert resp.status_code == 404

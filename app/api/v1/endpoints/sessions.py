@@ -96,7 +96,6 @@ async def create_session(
         duration_seconds=duration,
         status=SessionStatus.COMPLETED,
         source=SessionSource.MANUAL,
-        notes=payload.notes,
     )
     db.add(session)
     await db.commit()
@@ -149,10 +148,6 @@ async def patch_session(
         await db.commit()
         await db.refresh(session)
         return session
-
-    # Update notes if explicitly provided
-    if "notes" in payload.model_fields_set:
-        session.notes = payload.notes
 
     # Update end_time → fixes ERROR or updates COMPLETED
     if payload.end_time is not None:
