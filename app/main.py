@@ -5,8 +5,11 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_router
+from app.core.observability import init_sentry
 
 COVERS_DIR = os.environ.get("COVERS_DIR", "/app/covers")
+
+init_sentry("api")
 
 app = FastAPI(title="GameTrace API", version="1.0.0")
 
