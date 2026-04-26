@@ -27,6 +27,9 @@ rapidfuzz==3.9.7
 # Push notifications
 firebase-admin==6.5.0
 
+# Observability
+sentry-sdk[fastapi,celery]==2.18.0
+
 # Testing
 pytest==8.2.2
 pytest-asyncio==0.23.7

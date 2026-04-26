@@ -16,6 +16,11 @@ class Settings(BaseSettings):
 
     firebase_credentials_path: str = ""
 
+    sentry_dsn: str = ""
+    sentry_environment: str = "homelab"
+
+    flower_basic_auth: str = ""
+
     session_token_expire_days: int = 30
 
 
