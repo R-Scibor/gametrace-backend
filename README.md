@@ -125,6 +125,18 @@ docker exec -it gametrace_db psql -U gametrace_user -d gametrace_db \
 | Document | Description |
 |----------|-------------|
 | [docs/game-matching.md](docs/game-matching.md) | Game name matching pipeline — sanitization, WRatio, number guard, IGDB alternative names |
+| [docs/roadmap.md](docs/roadmap.md) | Future plans — auth, voice pipeline, hardening, scale |
+
+## Future plans
+
+High-level — see [docs/roadmap.md](docs/roadmap.md) for full context.
+
+- **Discord OAuth2 login** — replace username-based auth; Discord owns the auth surface, closes the rate-limit / enumeration gap as a side effect.
+- **Pre-release hardening** — request body size cap (nginx), rate-limit on `/voice/transcribe` (per-user, Redis-backed), MIME sniffing on cover + audio uploads.
+- **Voice pipeline robustness** — regex fallback when Vertex AI is unavailable, bring-your-own-key (user-supplied GCP / OpenAI), self-hosted Whisper option.
+- **Timezone-aware weekly reports** — hourly fan-out so each user gets the digest at their local Monday 09:00, not UTC's.
+- **Scale: range-partition `game_sessions`** by month when the table crosses ~10M rows or `/stats/summary` slows down.
+- **Bot flicker debounce** — coalesce `ONGOING → COMPLETED → ONGOING` transitions shorter than ~2 minutes into a single continuous session.
 
 ## Project structure
 
