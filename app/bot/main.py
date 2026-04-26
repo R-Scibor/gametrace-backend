@@ -11,6 +11,7 @@ from discord import app_commands
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
+from app.core.observability import init_sentry
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,7 @@ def _queue_enrichment(game_id: int) -> None:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    init_sentry("bot")
     if not settings.discord_bot_token:
         raise RuntimeError("DISCORD_BOT_TOKEN is not set")
     bot.run(settings.discord_bot_token)

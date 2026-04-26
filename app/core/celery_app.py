@@ -2,6 +2,9 @@ from celery import Celery
 from celery.schedules import crontab
 
 from app.core.config import settings
+from app.core.observability import init_sentry
+
+init_sentry("celery")
 
 celery_app = Celery(
     "gametrace",
