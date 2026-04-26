@@ -33,6 +33,7 @@ api           FastAPI — REST API for the mobile app
 bot           Discord bot — presence tracking
 worker        Celery worker — async game metadata enrichment
 beat          Celery beat — scheduled tasks (cleanup, reports)
+flower        Celery monitor (port 5555, internal)
 ```
 
 ## User onboarding
@@ -90,6 +91,13 @@ docker compose run --rm api alembic revision --autogenerate -m "description"
 # Rollback one migration
 docker compose run --rm api alembic downgrade -1
 ```
+
+## Observability
+
+Two optional integrations, both off by default:
+
+- **Sentry** — set `SENTRY_DSN` in `.env` and api / bot / worker / beat will start reporting unhandled exceptions, tagged with `component={api,bot,celery}`. Bearer tokens in `Authorization` headers and `?token=` query strings are scrubbed before send. Empty DSN keeps the SDK uninitialised — zero overhead.
+- **Flower** — Celery queue monitor on port 5555 inside the docker network. Set `FLOWER_BASIC_AUTH=user:pass` in `.env` to require auth. Flower has no read-only mode, so do not expose it publicly without auth — route through Nginx Proxy Manager and gate on the LAN if you want a browser view.
 
 ## Discord Developer Portal prerequisites
 
