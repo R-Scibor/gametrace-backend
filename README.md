@@ -130,7 +130,7 @@ app/
 ├── models/                  # SQLAlchemy ORM models
 │   ├── user.py              # User, UserAuthToken, UserDevice
 │   ├── game.py              # Game, GameAlias, UserGamePreference
-│   └── session.py           # GameSession, DailyUserStat
+│   └── session.py           # GameSession
 ├── schemas/
 │   ├── auth.py              # Pydantic: LoginRequest, LoginResponse
 │   ├── session.py           # Pydantic: SessionCreate, SessionPatch, SessionResponse
@@ -147,9 +147,13 @@ app/
 │   ├── session_manager.py   # DB operations for the bot
 │   └── self_healing.py      # Reconciliation of ONGOING sessions on restart
 └── tasks/
-    └── enrichment.py        # Celery task — game metadata enrichment (stub, Phase 3)
+    └── enrichment.py        # Celery task — game metadata enrichment
 alembic/
 └── versions/
     ├── 0001_initial_schema.py
-    └── 0002_unique_username.py
+    ├── 0002_unique_username.py
+    ├── 0003_user_notif_prefs_and_device_created_at.py
+    ├── 0004_game_sessions_user_start_index.py
+    ├── 0005_game_sessions_deleted_at_partial_index.py
+    └── 0006_drop_daily_user_stats.py
 ```
