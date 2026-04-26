@@ -3,10 +3,10 @@ Test factories — all use db.flush() so IDs are populated without committing.
 The same session is shared between the factory and the endpoint under test,
 so flushed-but-not-committed data is visible to all DB queries within a test.
 """
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
-from app.models.session import DailyUserStat, GameSession, SessionSource, SessionStatus
+from app.models.session import GameSession, SessionSource, SessionStatus
 from app.models.user import User, UserAuthToken, UserDevice
 
 
@@ -106,24 +106,6 @@ async def make_device(
     db.add(device)
     await db.flush()
     return device
-
-
-async def make_daily_stat(
-    db,
-    user_id: str,
-    game_id: int,
-    stat_date: date,
-    total_seconds: int,
-) -> DailyUserStat:
-    stat = DailyUserStat(
-        user_id=user_id,
-        game_id=game_id,
-        date=stat_date,
-        total_seconds=total_seconds,
-    )
-    db.add(stat)
-    await db.flush()
-    return stat
 
 
 def dt(hours_ago: float = 0, hours_from_now: float = 0) -> datetime:

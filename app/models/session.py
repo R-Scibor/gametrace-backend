@@ -1,7 +1,7 @@
 import enum
-from datetime import date, datetime
+from datetime import datetime
 
-from sqlalchemy import DATE, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -37,14 +37,3 @@ class GameSession(Base):
 
     user: Mapped["User"] = relationship()  # noqa: F821
     game: Mapped["Game"] = relationship()  # noqa: F821
-
-
-class DailyUserStat(Base):
-    __tablename__ = "daily_user_stats"
-    __table_args__ = (UniqueConstraint("user_id", "game_id", "date"),)
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.discord_id", ondelete="CASCADE"))
-    game_id: Mapped[int] = mapped_column(ForeignKey("games.id"))
-    date: Mapped[date] = mapped_column(DATE)
-    total_seconds: Mapped[int] = mapped_column(Integer, default=0)

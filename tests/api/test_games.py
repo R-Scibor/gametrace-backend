@@ -1,16 +1,15 @@
 import base64
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from unittest.mock import mock_open, patch
 
 from sqlalchemy import select
 
 from app.models.game import CoverSource, EnrichmentStatus, UserGamePreference
-from app.models.session import DailyUserStat, GameSession
+from app.models.session import GameSession
 
 from tests.factories import (
     dt,
     make_alias,
-    make_daily_stat,
     make_game,
     make_pref,
     make_session,
@@ -166,35 +165,6 @@ async def test_aliases_reassigned(authed_client, db, user):
 
     await db.refresh(alias)
     assert alias.game_id == target.id
-
-
-async def test_daily_stats_aggregated_on_overlap(authed_client, db, user):
-    """UNIQUE(user_id, game_id, date) collision → source seconds folded into target."""
-    source = await make_game(db, "Source")
-    target = await make_game(db, "Target")
-    overlap_date = date(2025, 1, 15)
-    src_stat = await make_daily_stat(db, user.discord_id, source.id, overlap_date, 3600)
-    tgt_stat = await make_daily_stat(db, user.discord_id, target.id, overlap_date, 7200)
-
-    resp = await authed_client.post(f"/api/v1/games/{source.id}/merge/{target.id}")
-
-    assert resp.status_code == 204
-    await db.refresh(tgt_stat)
-    assert tgt_stat.total_seconds == 10800  # 3600 + 7200
-    result = await db.execute(select(DailyUserStat).where(DailyUserStat.id == src_stat.id))
-    assert result.scalar_one_or_none() is None
-
-
-async def test_daily_stats_reassigned_no_overlap(authed_client, db, user):
-    """Non-overlapping source stats are simply re-pointed to target."""
-    source = await make_game(db, "Source")
-    target = await make_game(db, "Target")
-    src_stat = await make_daily_stat(db, user.discord_id, source.id, date(2025, 2, 1), 1800)
-
-    await authed_client.post(f"/api/v1/games/{source.id}/merge/{target.id}")
-
-    await db.refresh(src_stat)
-    assert src_stat.game_id == target.id
 
 
 async def test_user_preference_conflict_resolved(authed_client, db, user):

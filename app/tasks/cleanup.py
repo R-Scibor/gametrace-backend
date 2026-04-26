@@ -4,9 +4,6 @@ Two deletes in one transaction:
 1. Soft-deleted game sessions older than 7 days go for real.
 2. FCM tokens idle for 6+ months are purged so the weekly fan-out
    doesn't waste send attempts on abandoned devices.
-
-`daily_user_stats` has no FK to `game_sessions`, so the aggregate
-rollups produced by the Downsampling Engine aren't affected.
 """
 from __future__ import annotations
 

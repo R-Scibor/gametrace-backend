@@ -3,14 +3,14 @@ import logging
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.v1.endpoints.auth import get_current_user
 from app.core.database import get_db
 from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, UserGamePreference
-from app.models.session import DailyUserStat, GameSession
+from app.models.session import GameSession
 from app.models.user import User
 from app.schemas.game import CoverUpload, GameResponse
 from app.schemas.session import SessionResponse
@@ -122,7 +122,7 @@ async def merge_game(
     Merge game_id into target_id (ACID transaction):
     1. Reassign all game_aliases → target_id
     2. Reassign all game_sessions → target_id
-    3. Reassign all daily_user_stats → target_id  (prevents orphaned rollups)
+    3. Merge user_game_preferences (drop conflicts, reassign rest)
     4. Delete source game record
 
     Returns 204 No Content on success.
@@ -150,39 +150,7 @@ async def merge_game(
         update(GameSession).where(GameSession.game_id == game_id).values(game_id=target_id)
     )
 
-    # 3. DailyUserStat has UNIQUE (user_id, game_id, date).
-    #    Aggregate overlapping rows into the target, then remove the source rows.
-    await db.execute(
-        text(
-            """
-            UPDATE daily_user_stats AS t
-            SET total_seconds = t.total_seconds + s.total_seconds
-            FROM daily_user_stats AS s
-            WHERE s.game_id   = :src
-              AND t.game_id   = :tgt
-              AND s.user_id   = t.user_id
-              AND s.date      = t.date
-            """
-        ),
-        {"src": game_id, "tgt": target_id},
-    )
-    await db.execute(
-        text(
-            """
-            DELETE FROM daily_user_stats
-            WHERE game_id = :src
-              AND (user_id, date) IN (
-                  SELECT user_id, date FROM daily_user_stats WHERE game_id = :tgt
-              )
-            """
-        ),
-        {"src": game_id, "tgt": target_id},
-    )
-    await db.execute(
-        update(DailyUserStat).where(DailyUserStat.game_id == game_id).values(game_id=target_id)
-    )
-
-    # 4. UserGamePreference has UNIQUE (user_id, game_id).
+    # 3. UserGamePreference has UNIQUE (user_id, game_id).
     #    Drop source rows where target already has a preference for the same user.
     await db.execute(
         delete(UserGamePreference).where(
@@ -200,7 +168,7 @@ async def merge_game(
         .values(game_id=target_id)
     )
 
-    # 5. Delete the source game record
+    # 4. Delete the source game record
     await db.delete(source)
     await db.commit()
 
