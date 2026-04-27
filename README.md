@@ -11,17 +11,18 @@ Distributed game-time tracking system. A Discord bot detects game activity via `
 | Task queue | Celery + Redis |
 | Bot | discord.py |
 | Push notifications | Firebase Cloud Messaging |
-| Voice pipeline | OpenAI Whisper + Gemini Flash |
+| Voice pipeline | OpenAI Whisper + Gemini Flash via Vertex AI |
+| Game enrichment | IGDB (primary, via Twitch OAuth) + Steam Store (fallback) |
 
 ## Quick start
 
 ```bash
 cp example.env .env
-# fill in .env values
+# fill in .env values — see example.env for the full list
 docker compose up
 ```
 
-API available at `http://localhost:8010`. Interactive docs at `http://localhost:8010/docs`.
+API at `http://localhost:8010`. Interactive Swagger docs at `http://localhost:8010/docs`.
 
 ## Services
 
@@ -32,52 +33,35 @@ alembic_init  Runs migrations before API starts (Init Container pattern)
 api           FastAPI — REST API for the mobile app
 bot           Discord bot — presence tracking
 worker        Celery worker — async game metadata enrichment
-beat          Celery beat — scheduled tasks (cleanup, reports)
+beat          Celery beat — scheduled tasks (weekly report, hard-delete sweeper)
 flower        Celery monitor (port 5555, internal)
 ```
 
 ## User onboarding
 
-1. User runs `/login` on any Discord server where the bot is present
-2. Bot registers them in the database (captures Discord ID and username automatically)
-3. User opens the mobile app and logs in with their Discord username
+1. User runs `/login` on any Discord server where the bot is present.
+2. Bot registers them in the database (captures Discord ID and username automatically).
+3. User opens the mobile app and logs in with their Discord username.
 
 ## API
 
-All endpoints are prefixed `/api/v1/`. Auth uses `Authorization: Bearer <token>`.
+All endpoints are prefixed `/api/v1/`. Auth is `Authorization: Bearer <token>`. Token expires after 30 days of inactivity (sliding window — every authed call bumps the expiry).
 
-### Auth
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/v1/auth/login` | Login by Discord username, returns session token |
-| `POST` | `/api/v1/auth/logout` | Invalidate token |
+Full endpoint reference: **[docs/api.md](docs/api.md)**. Live schemas: `http://localhost:8010/docs`.
 
-Token expires after 30 days of inactivity (sliding window).
+## Session state machine
 
-### Games
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/games/{game_id}/sessions` | Paginated session list for a game (`?skip=0&limit=20`) |
+Bot-sourced sessions (`source=BOT`):
 
-### Sessions
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/v1/sessions` | Add a manual session (COMPLETED, overlap check → 409) |
-| `PATCH` | `/api/v1/sessions/{id}` | Edit end_time or discard an ERROR session |
+```
+ONGOING ──► COMPLETED         (bot detects game closed)
+ONGOING ──► ERROR             (Self-Healing on bot restart: different game, or >12h elapsed)
+ERROR   ──► COMPLETED         (user supplies end_time via PATCH /sessions/{id})
+ERROR   ──► soft-deleted      (user discards via PATCH /sessions/{id} with discard=true)
+COMPLETED ──► COMPLETED       (user edits end_time; must remain > start_time)
+```
 
-Session state machine (bot-sourced): `ONGOING → COMPLETED`, `ONGOING → ERROR`, `ERROR → COMPLETED`, `ERROR → soft-delete`. Manual sessions are saved directly as `COMPLETED`.
-
-### Stats
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/stats/summary` | Aggregated stats + pending errors (`?days=7`, max 365) |
-
-`/stats/summary` response includes `total_seconds`, per-game breakdown, and `pending_errors` — a list of all unresolved ERROR sessions.
-
-### Other
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/health` | Health check |
+Manual sessions (`source=MANUAL`) skip the cycle and are saved directly as `COMPLETED`. `ERROR` sessions are excluded from all aggregates until resolved. `ONGOING` sessions cannot be soft-deleted directly — only the bot owns those rows.
 
 ## Database migrations
 
@@ -92,6 +76,8 @@ docker compose run --rm api alembic revision --autogenerate -m "description"
 docker compose run --rm api alembic downgrade -1
 ```
 
+Migrations also run automatically via the `alembic_init` init container before the API starts.
+
 ## Observability
 
 Two optional integrations, both off by default:
@@ -103,7 +89,7 @@ Two optional integrations, both off by default:
 
 Before first run, in the [Discord Developer Portal](https://discord.com/developers/applications):
 
-1. **Bot → Privileged Gateway Intents:** enable `PRESENCE INTENT` and `SERVER MEMBERS INTENT`
+1. **Bot → Privileged Gateway Intents:** enable `PRESENCE INTENT` and `SERVER MEMBERS INTENT`.
 2. **OAuth2 → URL Generator:** select scopes `bot` **and** `applications.commands` — both are required. Regenerate the invite URL and re-invite the bot if it was previously added without `applications.commands`.
 
 ## Development commands
@@ -124,7 +110,10 @@ docker exec -it gametrace_db psql -U gametrace_user -d gametrace_db \
 
 | Document | Description |
 |----------|-------------|
-| [docs/game-matching.md](docs/game-matching.md) | Game name matching pipeline — sanitization, WRatio, number guard, IGDB alternative names |
+| [docs/api.md](docs/api.md) | Full endpoint reference |
+| [docs/bot.md](docs/bot.md) | Bot architecture — presence tracking, `/login` flow, Self-Healing |
+| [docs/schema.md](docs/schema.md) | Database schema — tables, relationships, indexes, invariants |
+| [docs/game-matching.md](docs/game-matching.md) | Game-name matching pipeline — sanitization, WRatio, number guard, IGDB alternative names |
 | [docs/roadmap.md](docs/roadmap.md) | Future plans — auth, voice pipeline, hardening, scale |
 
 ## Future plans
@@ -138,42 +127,6 @@ High-level — see [docs/roadmap.md](docs/roadmap.md) for full context.
 - **Scale: range-partition `game_sessions`** by month when the table crosses ~10M rows or `/stats/summary` slows down.
 - **Bot flicker debounce** — coalesce `ONGOING → COMPLETED → ONGOING` transitions shorter than ~2 minutes into a single continuous session.
 
-## Project structure
+## License
 
-```
-app/
-├── main.py                  # FastAPI entry point
-├── core/
-│   ├── config.py            # Settings from .env (pydantic-settings)
-│   ├── database.py          # SQLAlchemy async engine + get_db dependency
-│   └── celery_app.py        # Celery instance
-├── models/                  # SQLAlchemy ORM models
-│   ├── user.py              # User, UserAuthToken, UserDevice
-│   ├── game.py              # Game, GameAlias, UserGamePreference
-│   └── session.py           # GameSession
-├── schemas/
-│   ├── auth.py              # Pydantic: LoginRequest, LoginResponse
-│   ├── session.py           # Pydantic: SessionCreate, SessionPatch, SessionResponse
-│   └── stats.py             # Pydantic: StatsSummaryResponse
-├── api/v1/
-│   ├── router.py            # Main v1 router
-│   └── endpoints/
-│       ├── auth.py          # Auth endpoints + get_current_user dependency
-│       ├── games.py         # GET /games/{id}/sessions
-│       ├── sessions.py      # POST/PATCH /sessions
-│       └── stats.py         # GET /stats/summary?days=N
-├── bot/
-│   ├── main.py              # Discord client, /login slash command, on_presence_update
-│   ├── session_manager.py   # DB operations for the bot
-│   └── self_healing.py      # Reconciliation of ONGOING sessions on restart
-└── tasks/
-    └── enrichment.py        # Celery task — game metadata enrichment
-alembic/
-└── versions/
-    ├── 0001_initial_schema.py
-    ├── 0002_unique_username.py
-    ├── 0003_user_notif_prefs_and_device_created_at.py
-    ├── 0004_game_sessions_user_start_index.py
-    ├── 0005_game_sessions_deleted_at_partial_index.py
-    └── 0006_drop_daily_user_stats.py
-```
+MIT — © 2026 R-Scibor
