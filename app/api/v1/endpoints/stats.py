@@ -33,6 +33,11 @@ async def get_dashboard(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """
+    Polling tile endpoint for the Dashboard tab — small fixed payload (two
+    totals, the active ONGOING session if any, error banner). Sibling to
+    /stats/summary, which returns the user-selectable per-game breakdown.
+    """
     now = datetime.now(timezone.utc)
     window_30d = now - timedelta(days=30)
     window_7d = now - timedelta(days=7)
