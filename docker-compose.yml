@@ -21,7 +21,12 @@ services:
     restart: always
 
   alembic_init:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+        APP_VERSION: ${APP_VERSION:-dev}
     container_name: gametrace_alembic_init
     command: alembic upgrade head
     env_file:
@@ -31,7 +36,12 @@ services:
         condition: service_healthy
 
   api:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+        APP_VERSION: ${APP_VERSION:-dev}
     container_name: gametrace_api
     restart: always
     command: uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload
@@ -50,7 +60,12 @@ services:
         condition: service_started
 
   bot:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+        APP_VERSION: ${APP_VERSION:-dev}
     container_name: gametrace_bot
     restart: always
     command: python -m app.bot.main
@@ -61,7 +76,12 @@ services:
         condition: service_completed_successfully
 
   worker:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+        APP_VERSION: ${APP_VERSION:-dev}
     container_name: gametrace_celery_worker
     restart: always
     command: celery -A app.core.celery_app worker --loglevel=info
@@ -76,7 +96,12 @@ services:
         condition: service_started
 
   beat:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+        APP_VERSION: ${APP_VERSION:-dev}
     container_name: gametrace_celery_beat
     restart: always
     command: celery -A app.core.celery_app beat --loglevel=info

@@ -23,5 +23,9 @@ class Settings(BaseSettings):
 
     session_token_expire_days: int = 30
 
+    app_version: str = "dev"
+    git_sha: str = "dev"
+    build_time: str = "unknown"
+
 
 settings = Settings()

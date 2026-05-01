@@ -95,4 +95,7 @@ jobs:
         run: |
           cd /home/endmin/homelab/gametrace-backend
           git pull
+          export GIT_SHA=$(git rev-parse --short HEAD)
+          export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          export APP_VERSION=$(git describe --tags --always --dirty)
           docker compose up --build -d
