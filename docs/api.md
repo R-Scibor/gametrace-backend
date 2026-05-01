@@ -72,7 +72,27 @@ Both endpoints exclude soft-deleted sessions, `ERROR` sessions, and `is_ignored`
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/health` | Liveness probe (no auth, no DB hit). Returns `{"status": "ok"}`. |
+| `GET` | `/health` | Plain liveness probe (no auth, no Redis hit). Returns `{"status": "ok"}`. Use this for container/orchestrator health checks. |
+| `GET` | `/api/v1/health` | Rich status payload — version metadata + bot liveness. No auth. Safe to poll. Fails-soft on Redis loss (returns `bot.status: "unknown"` instead of erroring). |
+
+`GET /api/v1/health` response shape:
+
+```json
+{
+  "status": "ok",
+  "version": "v1.4.2",
+  "commit_sha": "a3f9c1",
+  "build_time": "2026-05-01T12:34:56Z",
+  "api": { "uptime_seconds": 4821 },
+  "bot": {
+    "status": "online",
+    "uptime_seconds": 84213,
+    "last_heartbeat_seconds_ago": 12
+  }
+}
+```
+
+`bot.status` is `"online"` when Redis has a heartbeat key written within the last 90s, `"offline"` if the key is absent or stale, `"unknown"` if Redis is unreachable. The bot writes `bot:started_at` on `on_ready` and refreshes `bot:heartbeat` every 30s with a 90s TTL. Version fields come from Docker build args (`GIT_SHA`, `BUILD_TIME`, `APP_VERSION`) — `"dev"` / `"unknown"` for local builds without those set.
 
 ## Static
 
