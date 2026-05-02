@@ -90,6 +90,8 @@ async def test_create_session_overlap_with_ongoing(authed_client, db, user):
 
 
 async def test_create_session_overlap_with_error_session(authed_client, db, user):
+    """ERROR sessions are excluded from overlap validation — their end_time is
+    unknown, so they can't define a conflict boundary."""
     game = await make_game(db)
     await make_session(
         db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=1),
@@ -105,7 +107,7 @@ async def test_create_session_overlap_with_error_session(authed_client, db, user
         },
     )
 
-    assert resp.status_code == 409
+    assert resp.status_code == 201
 
 
 async def test_create_session_adjacent_does_not_conflict(authed_client, db, user):
