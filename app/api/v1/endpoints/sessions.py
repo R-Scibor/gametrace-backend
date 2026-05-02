@@ -29,7 +29,7 @@ async def _check_overlap(
             GameSession.user_id == user_id,
             GameSession.deleted_at.is_(None),
             GameSession.status.in_(
-                [SessionStatus.ONGOING, SessionStatus.COMPLETED, SessionStatus.ERROR]
+                [SessionStatus.ONGOING, SessionStatus.COMPLETED]
             ),
             GameSession.start_time < end_time,
             or_(GameSession.end_time.is_(None), GameSession.end_time > start_time),
