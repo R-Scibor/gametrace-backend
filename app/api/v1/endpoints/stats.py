@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, func, or_, select
@@ -42,6 +43,18 @@ async def get_dashboard(
     window_30d = now - timedelta(days=30)
     window_7d = now - timedelta(days=7)
 
+    # "Today" is wall-clock midnight in the user's timezone — unlike the rolling
+    # 7d/30d windows, local-vs-UTC drift matters here. Fall back to UTC if the
+    # stored tz string is unrecognized (zoneinfo raises on invalid IANA names).
+    try:
+        user_tz = ZoneInfo(user.timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        user_tz = timezone.utc
+    local_midnight = datetime.now(user_tz).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    window_today = local_midnight.astimezone(timezone.utc)
+
     # Compute totals for 30-day window (superset), then filter for 7-day in Python.
     # LEFT JOIN on user_game_preferences so games without a pref row are kept;
     # games with is_ignored=true are excluded (matches /stats/summary behaviour).
@@ -73,10 +86,13 @@ async def get_dashboard(
 
     total_seconds_30d = sum(r.total_seconds for r in rows)
     total_seconds_7d = sum(r.total_seconds for r in rows if r.window_start >= window_7d)
+    total_seconds_today = sum(
+        r.total_seconds for r in rows if r.window_start >= window_today
+    )
 
     # Active session (ONGOING, not soft-deleted)
     active_stmt = (
-        select(GameSession, Game.primary_name)
+        select(GameSession, Game.primary_name, Game.cover_image_url)
         .join(Game, GameSession.game_id == Game.id)
         .where(
             GameSession.user_id == user.discord_id,
@@ -91,7 +107,9 @@ async def get_dashboard(
     active_session = (
         ActiveSessionBrief(
             id=active_row[0].id,
+            game_id=active_row[0].game_id,
             game_name=active_row[1],
+            cover_image_url=active_row[2],
             start_time=active_row[0].start_time,
         )
         if active_row
@@ -122,6 +140,7 @@ async def get_dashboard(
     ]
 
     return DashboardResponse(
+        total_seconds_today=total_seconds_today,
         total_seconds_7d=total_seconds_7d,
         total_seconds_30d=total_seconds_30d,
         active_session=active_session,

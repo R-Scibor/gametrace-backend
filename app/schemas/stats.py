@@ -30,11 +30,14 @@ class StatsSummaryResponse(BaseModel):
 
 class ActiveSessionBrief(BaseModel):
     id: int
+    game_id: int
     game_name: str
+    cover_image_url: Optional[str] = None
     start_time: datetime
 
 
 class DashboardResponse(BaseModel):
+    total_seconds_today: int
     total_seconds_7d: int
     total_seconds_30d: int
     active_session: Optional[ActiveSessionBrief] = None

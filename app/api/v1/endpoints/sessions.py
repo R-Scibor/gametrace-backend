@@ -42,6 +42,36 @@ async def _check_overlap(
     return result.scalar_one_or_none()
 
 
+@router.get("", response_model=list[SessionResponse])
+async def list_sessions(
+    status_filter: list[SessionStatus] | None = Query(default=None, alias="status"),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    List the caller's sessions across all games — primarily for the Dashboard
+    "Recents" tile. Excludes soft-deleted rows. Optional `?status=` filter
+    accepts multiple values (e.g. `?status=COMPLETED&status=ERROR`).
+    """
+    stmt = (
+        select(GameSession)
+        .options(selectinload(GameSession.game))
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.deleted_at.is_(None),
+        )
+        .order_by(GameSession.start_time.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    if status_filter:
+        stmt = stmt.where(GameSession.status.in_(status_filter))
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
 @router.get("/{session_id}", response_model=SessionResponse)
 async def get_session(
     session_id: int,
