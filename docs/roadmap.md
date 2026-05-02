@@ -49,6 +49,11 @@ Current Celery Beat fires the weekly digest on Monday 09:00 UTC for everyone. Us
 
 When `game_sessions` crosses ~10 million rows or `/stats/summary` p95 starts climbing past 100 ms despite the existing indexes, the next move is range-partitioning by month using native Postgres partitioning. No data loss, no rollups, partition pruning makes time-windowed queries trivial. Full design notes live in [`internal/scaling_for_released_app.md`](internal/scaling_for_released_app.md). Not relevant at homelab scale.
 
+## Session data quality
+
+### Source flip on user edit
+When a user edits a `BOT` session (fixes an ERROR or adjusts end_time via PATCH), the `source` field stays `BOT`. It should flip to `MANUAL` at that point — the session's times are now user-attested, not bot-observed. One-line change in `patch_session`: set `session.source = SessionSource.MANUAL` alongside the `end_time` update.
+
 ## Ops / quality
 
 ### Bot flicker debounce
