@@ -11,9 +11,18 @@ Scoring pipeline (see enrichment.py module docstring for full spec):
   3. Number guard: if digit sets differ, score is capped at _NUMBER_MISMATCH_CAP (0.75),
      keeping same-franchise-different-entry pairs below the 0.85 CONFIDENCE_THRESHOLD.
 """
-from app.tasks.enrichment import _confidence
+from app.tasks.enrichment import _confidence, _sanitize
 
 THRESHOLD = 0.85
+
+
+# ── _sanitize: word boundaries preserved (regression guard) ──────────────────
+
+def test_sanitize_preserves_word_boundaries():
+    # _sanitize output is also fed verbatim to IGDB/Steam as the search term.
+    # Gluing tokens kills full-text recall — see docs/game-matching.md gotcha.
+    assert _sanitize("The Farmer Was Replaced") == "the farmer was replaced"
+    assert _sanitize("Europa Universalis V") == "europa universalis 5"
 
 
 # ── Exact / case ────────────────────────────────────────────────────────────

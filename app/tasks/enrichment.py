@@ -27,22 +27,31 @@ Step 1 — _sanitize(s)
          Cross-game comparisons involving such titles may produce unexpected
          number sets; same-game comparisons are unaffected (both sides transform
          identically).
-    9. collapse whitespace, strip
-   10. remove all spaces → single token
-       "witcher3" vs "thewitcher3wildhunt": WRatio's partial_ratio finds
-       "witcher3" as an exact substring → ~0.90, crosses the 0.85 threshold.
-       Without this step "witcher3" vs "the witcher 3 wild hunt" reaches only
-       ~0.80 because the space between "witcher" and "3" breaks substring
-       alignment. Applied to both sides, so space-full canonical names also
-       collapse and the comparison stays symmetric.
+    9. collapse whitespace, strip → words remain space-separated
+
+  ⚠ _sanitize keeps word boundaries. Earlier versions glued tokens into a
+    single string ("the witcher 3 wild hunt" → "thewitcher3wildhunt"); that
+    helped _confidence's substring trick but killed recall when the same
+    output was used as the IGDB / Steam search term. IGDB and Steam run
+    word-tokenized full-text search and return zero hits for glued blobs
+    (e.g. "thefarmerwasreplaced", "europauniversalis5"). The space-collapse
+    now lives inside _confidence (Step 2) where it's actually needed.
+    See docs/game-matching.md "Search-query vs scoring" gotcha.
 
 Step 2 — _confidence(a, b) → float [0.0, 1.0]
-  a.  Compute fuzz.WRatio on the sanitized forms.
+  a.  Sanitize both sides, then strip remaining whitespace before scoring.
+      The whitespace strip is local to _confidence — it lets WRatio's
+      partial_ratio find "witcher3" as a substring of "thewitcher3wildhunt"
+      (~0.90); without it the same pair reaches only ~0.80 because the space
+      between "witcher" and "3" breaks substring alignment. Applied to both
+      sides — comparison stays symmetric.
+
+  b.  Compute fuzz.WRatio on the collapsed forms.
       WRatio picks the best of ratio / partial_ratio /
       token_sort_ratio / token_set_ratio, so subtitles, word-
       order differences, and partial containment are all handled.
 
-  b.  Number guard (NUMBER_MISMATCH_CAP = 0.75):
+  c.  Number guard (NUMBER_MISMATCH_CAP = 0.75):
       Extract all digit sequences from each sanitized string.
       If the two sets differ AND at least one string contains digits,
       cap the score at 0.75 (below the 0.85 CONFIDENCE_THRESHOLD).
@@ -144,14 +153,18 @@ def _sanitize(s: str) -> str:
     s = re.sub(r'[:\-_]', ' ', s)                 # structural separators → space
     s = re.sub(r'[^a-z0-9\s]', '', s)             # strip remaining non-alphanumeric
     tokens = [_ROMAN_MAP.get(t, t) for t in s.split()]
-    # Collapse to single token so partial_ratio finds exe-style names (e.g.
-    # "witcher3") as substrings of canonical titles ("thewitcher3wildhunt").
-    # Applied to both sides — comparison stays symmetric.
-    return ''.join(tokens)
+    # Words stay space-separated. The space-collapse trick (for substring
+    # alignment of exe-style names) lives inside _confidence — gluing here
+    # would break IGDB / Steam search recall on multi-word titles.
+    return ' '.join(tokens)
 
 
 def _confidence(a: str, b: str) -> float:
-    sa, sb = _sanitize(a), _sanitize(b)
+    # Strip whitespace from sanitized forms so partial_ratio finds exe-style
+    # names (e.g. "witcher3") as substrings of canonical titles
+    # ("thewitcher3wildhunt"). Applied symmetrically; scoring-only.
+    sa = _sanitize(a).replace(' ', '')
+    sb = _sanitize(b).replace(' ', '')
     score = fuzz.WRatio(sa, sb) / 100.0
 
     nums_a = set(re.findall(r'\d+', sa))

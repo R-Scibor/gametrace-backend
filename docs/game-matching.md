@@ -40,15 +40,28 @@ Applied to **both** sides of every comparison before any scoring. This lets the 
 | Roman numerals → arabic digits (i–xv, standalone tokens) | `"Diablo IV"` → `"diablo 4"` |
 | Collapse whitespace | `"dark souls  remastered"` → `"dark souls remastered"` |
 
+Words stay space-separated. The whitespace strip needed for substring scoring (e.g. `"witcher3"` vs `"thewitcher3wildhunt"`) lives inside `_confidence`, not here — see "Search-query vs scoring" below.
+
 ### Known limitations
 
 - **Parenthesis content is dropped entirely.** `"Dark Souls (Remastered)"` loses the word `"Remastered"`. The score usually still clears the threshold via WRatio partial matching, but information is gone.
 - **Standalone `i` and `v` are treated as roman numerals.** A game title containing these as words (e.g. `"I Am Alive"`) gets digits injected (`"1 am alive"`). Same-game comparisons are unaffected since both sides transform identically, but cross-game comparisons involving such titles may produce unexpected number sets.
 - **Non-ASCII characters are stripped.** `"Pokémon"` → `"pokmon"`. Because the same transformation applies to both sides, the match still works for the same title; it only fails if the two sides use different encodings of the same accented character (rare in practice).
 
+## Gotcha — search-query vs scoring sanitization
+
+`_sanitize` is used in two different places and the requirements pull in opposite directions:
+
+| Consumer | Needs |
+|---|---|
+| IGDB / Steam **search query** (the `term=…` we send the API) | Word boundaries preserved — both APIs run word-tokenized full-text search; a glued blob like `thefarmerwasreplaced` or `europauniversalis5` matches **nothing** |
+| `_confidence` **scoring** of fetched candidates | Spaces stripped — so `partial_ratio` finds `"witcher3"` as a substring of `"thewitcher3wildhunt"` (~0.90); with the space between `"witcher"` and `"3"` it only reaches ~0.80 |
+
+Resolution: `_sanitize` keeps spaces. The whitespace strip is local to `_confidence` (`sa.replace(' ', '')`). This was an actual regression — the bot couldn't enrich titles like *The Farmer Was Replaced* or *Europa Universalis V* because IGDB returned zero hits for the glued query. Don't re-introduce a `''.join` in `_sanitize`.
+
 ## Step 2 — `fuzz.WRatio`
 
-`rapidfuzz.fuzz.WRatio` picks the highest score among four algorithms run on the sanitized strings:
+`rapidfuzz.fuzz.WRatio` picks the highest score among four algorithms run on the sanitized strings (with whitespace stripped inside `_confidence` for substring alignment, as noted above):
 
 | Algorithm | Handles |
 |-----------|---------|
