@@ -42,3 +42,14 @@ class DashboardResponse(BaseModel):
     total_seconds_30d: int
     active_session: Optional[ActiveSessionBrief] = None
     pending_errors: list[PendingErrorEntry]
+
+
+class HeatmapCell(BaseModel):
+    dow: int    # 0=Monday, 6=Sunday
+    hour: int   # 0..23
+    seconds: int
+
+
+class HeatmapResponse(BaseModel):
+    days: int
+    cells: list[HeatmapCell]   # always 168 entries

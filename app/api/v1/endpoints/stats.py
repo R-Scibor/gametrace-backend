@@ -10,8 +10,14 @@ from app.core.database import get_db
 from app.models.game import Game, UserGamePreference
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
-from app.schemas.stats import ActiveSessionBrief, DashboardResponse, PendingErrorEntry, StatsSummaryResponse
-from app.services.stats import summary_for_user
+from app.schemas.stats import (
+    ActiveSessionBrief,
+    DashboardResponse,
+    HeatmapResponse,
+    PendingErrorEntry,
+    StatsSummaryResponse,
+)
+from app.services.stats import heatmap_for_user, summary_for_user
 
 router = APIRouter()
 
@@ -23,6 +29,15 @@ async def get_stats_summary(
     user: User = Depends(get_current_user),
 ):
     return await summary_for_user(db, user, days)
+
+
+@router.get("/heatmap", response_model=HeatmapResponse)
+async def get_heatmap(
+    days: int = Query(default=90, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return await heatmap_for_user(db, user, days)
 
 
 def _total_seconds_for_window(rows: list, window_start: datetime) -> int:
