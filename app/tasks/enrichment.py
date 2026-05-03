@@ -114,6 +114,7 @@ from typing import NamedTuple
 import httpx
 from rapidfuzz import fuzz
 from celery.exceptions import MaxRetriesExceededError
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.celery_app import celery_app
@@ -461,3 +462,63 @@ def enrich_game(self, game_id: int) -> None:
     except Exception:
         logger.exception("enrich_game: unexpected error for game_id=%d", game_id)
         asyncio.run(_save_needs_review(game_id))
+
+
+# ---------------------------------------------------------------------------
+# One-shot backfill task — re-queues legacy ENRICHED games missing metadata
+# ---------------------------------------------------------------------------
+
+async def _run_backfill(batch_size: int) -> int:
+    """Iterate ENRICHED games with empty genres in chunks; dispatch enrich_game per row.
+
+    Returns the total number of games queued.
+    """
+    engine = create_async_engine(settings.database_url, echo=False)
+    SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    queued = 0
+    last_id = 0
+    try:
+        while True:
+            async with SessionLocal() as db:
+                stmt = (
+                    select(Game.id)
+                    .where(
+                        Game.enrichment_status == EnrichmentStatus.ENRICHED,
+                        func.jsonb_array_length(Game.genres) == 0,
+                        Game.id > last_id,
+                    )
+                    .order_by(Game.id)
+                    .limit(batch_size)
+                )
+                result = await db.execute(stmt)
+                rows = list(result.scalars().all())
+
+            if not rows:
+                break
+
+            for game_id in rows:
+                enrich_game.apply_async(
+                    args=[game_id],
+                    task_id=f"enrich_game_{game_id}",
+                )
+                queued += 1
+
+            last_id = rows[-1]
+            if len(rows) < batch_size:
+                break
+
+        return queued
+    finally:
+        await engine.dispose()
+
+
+@celery_app.task(name="tasks.backfill_metadata")
+def backfill_metadata(batch_size: int = 500) -> int:
+    """Re-queue every ENRICHED game whose genres array is empty for re-enrichment.
+
+    Returns the number of games queued. Idempotent (re-queueing relies on the
+    enrich_game dedup key task_id=enrich_game_{game_id}).
+    """
+    queued = asyncio.run(_run_backfill(batch_size))
+    logger.info("backfill_metadata: queued %d games for re-enrichment", queued)
+    return queued

@@ -15,7 +15,13 @@ import pytest
 from celery.exceptions import Retry
 
 from app.models.game import CoverSource, EnrichmentStatus, Game
-from app.tasks.enrichment import IGDBResult, _RateLimited, _run_enrichment, enrich_game
+from app.tasks.enrichment import (
+    IGDBResult,
+    _RateLimited,
+    _run_backfill,
+    _run_enrichment,
+    enrich_game,
+)
 
 
 def _igdb_result(
@@ -367,3 +373,70 @@ def test_steam_rate_limited_triggers_retry():
     assert mock_retry.call_args.kwargs["countdown"] == 120  # 2^1 * 60
     # Reset to avoid cross-test pollution
     enrich_game.request.retries = 0
+
+
+# ── backfill_metadata ─────────────────────────────────────────────────────────
+
+def _backfill_session_mock(execute_results: list[list[int]]) -> tuple[MagicMock, AsyncMock]:
+    """Build a mock async session whose db.execute() returns scalars().all() = each
+    list in execute_results in turn."""
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+
+    def make_result(ids: list[int]) -> MagicMock:
+        scalars = MagicMock()
+        scalars.all.return_value = ids
+        result = MagicMock()
+        result.scalars.return_value = scalars
+        return result
+
+    session.execute = AsyncMock(side_effect=[make_result(ids) for ids in execute_results])
+    factory = MagicMock(return_value=session)
+    return factory, session
+
+
+def _backfill_engine_patches(factory: MagicMock):
+    mock_engine = MagicMock()
+    mock_engine.dispose = AsyncMock()
+    return (
+        patch("app.tasks.enrichment.create_async_engine", return_value=mock_engine),
+        patch("app.tasks.enrichment.async_sessionmaker", return_value=factory),
+    )
+
+
+async def test_backfill_only_queues_empty_genre_games():
+    """SELECT filters at the SQL layer; mock returns only the 2 empty-genre ENRICHED rows."""
+    factory, session = _backfill_session_mock([[10, 20]])
+    p_engine, p_sm = _backfill_engine_patches(factory)
+
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment.enrich_game.apply_async") as mock_apply:
+
+        queued = await _run_backfill(batch_size=500)
+
+    assert queued == 2
+    assert mock_apply.call_count == 2
+    assert mock_apply.call_args_list[0].kwargs == {
+        "args": [10],
+        "task_id": "enrich_game_10",
+    }
+    assert mock_apply.call_args_list[1].kwargs == {
+        "args": [20],
+        "task_id": "enrich_game_20",
+    }
+
+
+async def test_backfill_chunks_correctly():
+    """First chunk fills batch_size → loop continues; second chunk empty → stop."""
+    factory, session = _backfill_session_mock([[1, 2, 3], []])
+    p_engine, p_sm = _backfill_engine_patches(factory)
+
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment.enrich_game.apply_async") as mock_apply:
+
+        queued = await _run_backfill(batch_size=3)
+
+    assert queued == 3
+    assert session.execute.call_count == 2
+    assert mock_apply.call_count == 3
