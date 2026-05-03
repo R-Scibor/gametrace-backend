@@ -36,23 +36,23 @@ def _call_igdb(items: list) -> tuple:
 
 
 def test_protocol_relative_becomes_https():
-    cover_url, _ = _call_igdb([
+    result = _call_igdb([
         {"name": "Test Game", "cover": {"url": "//images.igdb.com/t_thumb/abc.jpg"}}
     ])
-    assert cover_url is not None
-    assert cover_url.startswith("https://images.igdb.com/")
+    assert result.cover_url is not None
+    assert result.cover_url.startswith("https://images.igdb.com/")
 
 
 def test_thumb_replaced_with_cover_big():
-    cover_url, _ = _call_igdb([
+    result = _call_igdb([
         {"name": "Test Game", "cover": {"url": "https://images.igdb.com/t_thumb/abc.jpg"}}
     ])
-    assert cover_url == "https://images.igdb.com/t_cover_big/abc.jpg"
+    assert result.cover_url == "https://images.igdb.com/t_cover_big/abc.jpg"
 
 
 def test_missing_cover_field():
-    cover_url, _ = _call_igdb([{"name": "Test Game"}])
-    assert cover_url is None
+    result = _call_igdb([{"name": "Test Game"}])
+    assert result.cover_url is None
 
 
 def test_alt_name_raises_score():
@@ -67,6 +67,6 @@ def test_alt_name_raises_score():
          patch("app.tasks.enrichment.httpx.Client", return_value=mock_client):
         s.igdb_client_id = "test-id"
         s.igdb_client_secret = "test-secret"
-        cover_url, score = _igdb_search("The Witcher 3")
-    assert score >= 0.85
-    assert cover_url == "https://images.igdb.com/t_cover_big/abc.jpg"
+        result = _igdb_search("The Witcher 3")
+    assert result.confidence >= 0.85
+    assert result.cover_url == "https://images.igdb.com/t_cover_big/abc.jpg"
