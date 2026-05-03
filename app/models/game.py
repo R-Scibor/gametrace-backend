@@ -1,6 +1,8 @@
 import enum
+from datetime import date
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, ForeignKey, String, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -29,6 +31,19 @@ class Game(Base):
     )
     enrichment_status: Mapped[EnrichmentStatus] = mapped_column(
         String(16), default=EnrichmentStatus.PENDING, server_default=EnrichmentStatus.PENDING
+    )
+    first_release_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    genres: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
+    themes: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
+    developers: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
+    publishers: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
     )
 
     aliases: Mapped[list["GameAlias"]] = relationship(back_populates="game")
