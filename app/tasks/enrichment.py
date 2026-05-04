@@ -72,7 +72,7 @@ Step 2 — _confidence(a, b) → float [0.0, 1.0]
         patterns appear in Discord activity names, the enrichment falls
         through to Steam or NEEDS_REVIEW.
 
-Step 3 — _igdb_search(name) → (cover_url | None, confidence)
+Step 3 — _igdb_search(name) → IGDBResult(cover_url, confidence, genres, themes, developers, publishers, first_release_date)
   - Sends _sanitize(name) as the IGDB search query to strip process-name
     noise before the API call.
   - Requests alternative_names.name alongside the primary name field.
@@ -108,10 +108,13 @@ fresh engine created inside it, sync HTTP calls via asyncio.to_thread().
 import asyncio
 import logging
 import re
+from datetime import date
+from typing import NamedTuple
 
 import httpx
 from rapidfuzz import fuzz
 from celery.exceptions import MaxRetriesExceededError
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.celery_app import celery_app
@@ -175,11 +178,36 @@ def _confidence(a: str, b: str) -> float:
     return score
 
 
-def _igdb_search(name: str) -> tuple[str | None, float]:
-    """Returns (cover_url, best_confidence). Raises _RateLimited on HTTP 429 or 401."""
+class IGDBResult(NamedTuple):
+    cover_url: str | None
+    confidence: float
+    genres: list[str]
+    themes: list[str]
+    developers: list[str]
+    publishers: list[str]
+    first_release_date: date | None
+
+
+def _empty_igdb_result() -> IGDBResult:
+    return IGDBResult(
+        cover_url=None,
+        confidence=0.0,
+        genres=[],
+        themes=[],
+        developers=[],
+        publishers=[],
+        first_release_date=None,
+    )
+
+
+def _igdb_search(name: str) -> IGDBResult:
+    """Returns IGDBResult with cover, confidence, and metadata for the best candidate.
+
+    Raises _RateLimited on HTTP 429 or 401.
+    """
     if not settings.igdb_client_id or not settings.igdb_client_secret:
         logger.warning("IGDB credentials not set — skipping IGDB search")
-        return None, 0.0
+        return _empty_igdb_result()
 
     token = get_igdb_token()
     clean_name = _sanitize(name)
@@ -193,7 +221,14 @@ def _igdb_search(name: str) -> tuple[str | None, float]:
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "text/plain",
             },
-            content=f'search "{safe_name}"; fields name,cover.url,cover.image_id,alternative_names.name; limit 5;',
+            content=(
+                f'search "{safe_name}"; '
+                'fields name,cover.url,cover.image_id,alternative_names.name,'
+                'genres.name,themes.name,'
+                'involved_companies.company.name,involved_companies.developer,'
+                'involved_companies.publisher,first_release_date; '
+                'limit 5;'
+            ),
         )
 
     if resp.status_code == 401:
@@ -207,6 +242,12 @@ def _igdb_search(name: str) -> tuple[str | None, float]:
 
     best_score = 0.0
     best_cover: str | None = None
+    best_genres: list[str] = []
+    best_themes: list[str] = []
+    best_developers: list[str] = []
+    best_publishers: list[str] = []
+    best_release: date | None = None
+
     for game in resp.json():
         candidate_names = [game.get("name", "")]
         for alt in game.get("alternative_names", []):
@@ -216,6 +257,7 @@ def _igdb_search(name: str) -> tuple[str | None, float]:
 
         if score > best_score:
             best_score = score
+
             cover = game.get("cover")
             if cover and cover.get("url"):
                 url = cover["url"]
@@ -223,8 +265,33 @@ def _igdb_search(name: str) -> tuple[str | None, float]:
                     url = "https:" + url
                 url = url.replace("/t_thumb/", "/t_cover_big/")
                 best_cover = url
+            else:
+                best_cover = None
 
-    return best_cover, best_score
+            best_genres = [g["name"] for g in game.get("genres", []) if g.get("name")]
+            best_themes = [t["name"] for t in game.get("themes", []) if t.get("name")]
+            best_developers = [
+                ic["company"]["name"]
+                for ic in game.get("involved_companies", [])
+                if ic.get("developer") and ic.get("company", {}).get("name")
+            ]
+            best_publishers = [
+                ic["company"]["name"]
+                for ic in game.get("involved_companies", [])
+                if ic.get("publisher") and ic.get("company", {}).get("name")
+            ]
+            ts = game.get("first_release_date")
+            best_release = date.fromtimestamp(ts) if ts else None
+
+    return IGDBResult(
+        cover_url=best_cover,
+        confidence=best_score,
+        genres=best_genres,
+        themes=best_themes,
+        developers=best_developers,
+        publishers=best_publishers,
+        first_release_date=best_release,
+    )
 
 
 def _steam_search(name: str) -> tuple[str | None, str | None]:
@@ -281,19 +348,25 @@ async def _run_enrichment(game_id: int) -> tuple[EnrichmentStatus, str | None, s
             name: str = game.primary_name
 
         # ── IGDB (sync HTTP in thread pool) ──────────────────────────────────
-        igdb_cover: str | None = None
-        igdb_confidence = 0.0
+        igdb_result: IGDBResult = _empty_igdb_result()
         try:
-            igdb_cover, igdb_confidence = await asyncio.to_thread(_igdb_search, name)
+            igdb_result = await asyncio.to_thread(_igdb_search, name)
         except _RateLimited:
             raise
         except Exception:
             logger.exception("enrich_game: IGDB lookup failed for game_id=%d", game_id)
 
-        if igdb_confidence >= CONFIDENCE_THRESHOLD:
+        if igdb_result.confidence >= CONFIDENCE_THRESHOLD:
             async with SessionLocal() as db:
-                await _apply(db, game_id, EnrichmentStatus.ENRICHED, igdb_cover, None)
-            return EnrichmentStatus.ENRICHED, igdb_cover, None
+                await _apply(
+                    db,
+                    game_id,
+                    EnrichmentStatus.ENRICHED,
+                    igdb_result.cover_url,
+                    None,
+                    metadata=igdb_result,
+                )
+            return EnrichmentStatus.ENRICHED, igdb_result.cover_url, None
 
         # ── Steam fallback ───────────────────────────────────────────────────
         steam_id: str | None = None
@@ -336,6 +409,8 @@ async def _apply(
     status: EnrichmentStatus,
     cover_url: str | None,
     external_api_id: str | None,
+    *,
+    metadata: IGDBResult | None = None,
 ) -> None:
     game = await db.get(Game, game_id)
     if game is None:
@@ -343,8 +418,15 @@ async def _apply(
     game.enrichment_status = status
     if external_api_id is not None:
         game.external_api_id = external_api_id
-    if game.cover_source != CoverSource.CUSTOM and cover_url is not None:
-        game.cover_image_url = cover_url
+    if game.cover_source != CoverSource.CUSTOM:
+        if cover_url is not None:
+            game.cover_image_url = cover_url
+        if metadata is not None:
+            game.genres = metadata.genres
+            game.themes = metadata.themes
+            game.developers = metadata.developers
+            game.publishers = metadata.publishers
+            game.first_release_date = metadata.first_release_date
     await db.commit()
 
 
@@ -380,3 +462,63 @@ def enrich_game(self, game_id: int) -> None:
     except Exception:
         logger.exception("enrich_game: unexpected error for game_id=%d", game_id)
         asyncio.run(_save_needs_review(game_id))
+
+
+# ---------------------------------------------------------------------------
+# One-shot backfill task — re-queues legacy ENRICHED games missing metadata
+# ---------------------------------------------------------------------------
+
+async def _run_backfill(batch_size: int) -> int:
+    """Iterate ENRICHED games with empty genres in chunks; dispatch enrich_game per row.
+
+    Returns the total number of games queued.
+    """
+    engine = create_async_engine(settings.database_url, echo=False)
+    SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    queued = 0
+    last_id = 0
+    try:
+        while True:
+            async with SessionLocal() as db:
+                stmt = (
+                    select(Game.id)
+                    .where(
+                        Game.enrichment_status == EnrichmentStatus.ENRICHED,
+                        func.jsonb_array_length(Game.genres) == 0,
+                        Game.id > last_id,
+                    )
+                    .order_by(Game.id)
+                    .limit(batch_size)
+                )
+                result = await db.execute(stmt)
+                rows = list(result.scalars().all())
+
+            if not rows:
+                break
+
+            for game_id in rows:
+                enrich_game.apply_async(
+                    args=[game_id],
+                    task_id=f"enrich_game_{game_id}",
+                )
+                queued += 1
+
+            last_id = rows[-1]
+            if len(rows) < batch_size:
+                break
+
+        return queued
+    finally:
+        await engine.dispose()
+
+
+@celery_app.task(name="tasks.backfill_metadata")
+def backfill_metadata(batch_size: int = 500) -> int:
+    """Re-queue every ENRICHED game whose genres array is empty for re-enrichment.
+
+    Returns the number of games queued. Idempotent (re-queueing relies on the
+    enrich_game dedup key task_id=enrich_game_{game_id}).
+    """
+    queued = asyncio.run(_run_backfill(batch_size))
+    logger.info("backfill_metadata: queued %d games for re-enrichment", queued)
+    return queued

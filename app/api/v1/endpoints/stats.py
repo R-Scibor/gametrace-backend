@@ -10,8 +10,30 @@ from app.core.database import get_db
 from app.models.game import Game, UserGamePreference
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
-from app.schemas.stats import ActiveSessionBrief, DashboardResponse, PendingErrorEntry, StatsSummaryResponse
-from app.services.stats import summary_for_user
+from app.schemas.stats import (
+    ActiveSessionBrief,
+    CompaniesResponse,
+    CompanyRole,
+    DashboardResponse,
+    GenresResponse,
+    HeatmapResponse,
+    PendingErrorEntry,
+    ReleaseYearsResponse,
+    StatsSummaryResponse,
+    StreakResponse,
+    ThemesResponse,
+    WeeklyTrendResponse,
+)
+from app.services.stats import (
+    companies_for_user,
+    genres_for_user,
+    heatmap_for_user,
+    release_years_for_user,
+    streak_for_user,
+    summary_for_user,
+    themes_for_user,
+    weekly_trend_for_user,
+)
 
 router = APIRouter()
 
@@ -23,6 +45,84 @@ async def get_stats_summary(
     user: User = Depends(get_current_user),
 ):
     return await summary_for_user(db, user, days)
+
+
+@router.get("/heatmap", response_model=HeatmapResponse)
+async def get_heatmap(
+    days: int = Query(default=90, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return await heatmap_for_user(db, user, days)
+
+
+@router.get("/streak", response_model=StreakResponse)
+async def get_streak(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return await streak_for_user(db, user)
+
+
+@router.get("/weekly-trend", response_model=WeeklyTrendResponse)
+async def get_weekly_trend(
+    weeks: int = Query(default=12, ge=1, le=52),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return await weekly_trend_for_user(db, user, weeks)
+
+
+@router.get("/genres", response_model=GenresResponse)
+async def get_genres(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Time spent with games tagged by each genre.
+
+    Sums can exceed total playtime: a game can carry multiple genres and
+    each session counts toward every genre on its game. This is "genre
+    exposure," not a partition. Frontend should clarify in tooltips.
+    """
+    return await genres_for_user(db, user)
+
+
+@router.get("/themes", response_model=ThemesResponse)
+async def get_themes(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Time spent with games tagged by each theme. Same caveat as /genres."""
+    return await themes_for_user(db, user)
+
+
+@router.get("/companies", response_model=CompaniesResponse)
+async def get_companies(
+    role: CompanyRole = Query(..., description="developer or publisher"),
+    limit: int = Query(default=10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Top developers or publishers by total seconds played.
+
+    `role` selects which JSONB column is unnested (developers or publishers).
+    Same exclusion filter as /genres: ERROR/deleted/is_ignored excluded.
+    Ties broken by name asc for deterministic ordering.
+    """
+    return await companies_for_user(db, user, role, limit)
+
+
+@router.get("/release-years", response_model=ReleaseYearsResponse)
+async def get_release_years(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Total seconds played, bucketed by decade of game release.
+
+    Games with first_release_date IS NULL are excluded. Same exclusion
+    filter as other stats endpoints. Ordered by decade asc.
+    """
+    return await release_years_for_user(db, user)
 
 
 def _total_seconds_for_window(rows: list, window_start: datetime) -> int:
