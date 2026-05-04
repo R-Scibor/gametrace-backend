@@ -54,7 +54,17 @@ When `game_sessions` crosses ~10 million rows or `/stats/summary` p95 starts cli
 ### Source flip on user edit
 When a user edits a `BOT` session (fixes an ERROR or adjusts end_time via PATCH), the `source` field stays `BOT`. It should flip to `MANUAL` at that point — the session's times are now user-attested, not bot-observed. One-line change in `patch_session`: set `session.source = SessionSource.MANUAL` alongside the `end_time` update.
 
+## Stats
+
+### Click genre → games
+Currently, genres and themes are stored as JSONB arrays on the `games` table. This is efficient for aggregation but doesn't easily support "show me all RPGs" with pagination. Deferring normalization to M2M tables until there is a clear UI need for click-through navigation.
+
 ## Ops / quality
 
 ### Bot flicker debounce
 Discord rich-presence is occasionally flaky — a single real play session can fragment into multiple short sessions if presence drops for a few seconds. Fix is at the bot: debounce `ONGOING → COMPLETED → ONGOING` transitions shorter than ~2 minutes into a single continuous session. Independent of any storage decisions; the user's session list just stops looking noisy.
+
+### Short-session threshold
+Today every bot-detected session is stored, even if it's a few seconds long — launching a game by accident, a misfired presence event, or a quick "is this still installed?" check all become rows in `game_sessions`. Plan: in `complete_session` (`app/bot/session_manager.py`), if `duration_seconds < N` (proposed: 180s / 3 minutes), drop the session instead of marking it COMPLETED. Manual sessions (`source=MANUAL`) are unaffected — the user is explicitly asserting the time.
+
+Threshold belongs at write time, not at stats time: keeping noise out of storage is cleaner than filtering it on every aggregation. Pairs naturally with the flicker debounce above — debounce first (so a real session split across two short fragments isn't discarded), then apply the floor.
