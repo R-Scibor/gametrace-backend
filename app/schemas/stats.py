@@ -1,7 +1,13 @@
 from datetime import date, datetime
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel
+
+
+class CompanyRole(str, Enum):
+    developer = "developer"
+    publisher = "publisher"
 
 
 class GameStatEntry(BaseModel):
@@ -85,3 +91,13 @@ class ThemeEntry(BaseModel):
 
 class ThemesResponse(BaseModel):
     items: list[ThemeEntry]
+
+
+class CompanyEntry(BaseModel):
+    name: str
+    total_seconds: int
+    game_count: int
+
+
+class CompaniesResponse(BaseModel):
+    items: list[CompanyEntry]

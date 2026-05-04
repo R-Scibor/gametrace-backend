@@ -8,6 +8,9 @@ from app.models.game import Game, UserGamePreference
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
 from app.schemas.stats import (
+    CompaniesResponse,
+    CompanyEntry,
+    CompanyRole,
     GameStatEntry,
     GenreEntry,
     GenresResponse,
@@ -390,4 +393,64 @@ async def themes_for_user(db: AsyncSession, user: User) -> ThemesResponse:
     rows = await _jsonb_breakdown(db, user, Game.themes)
     return ThemesResponse(
         items=[ThemeEntry(theme=t, total_seconds=s) for t, s in rows]
+    )
+
+
+async def companies_for_user(
+    db: AsyncSession, user: User, role: CompanyRole, limit: int
+) -> CompaniesResponse:
+    """Top companies by total seconds played for the given role.
+
+    role chooses Game.developers vs Game.publishers JSONB column.
+    Same exclusion filter as other stats endpoints. Ties broken by name asc.
+    """
+    jsonb_col = (
+        Game.developers if role == CompanyRole.developer else Game.publishers
+    )
+
+    name_col = func.jsonb_array_elements_text(jsonb_col).label("name")
+    duration = func.coalesce(
+        GameSession.duration_seconds,
+        func.extract("epoch", func.now() - GameSession.start_time),
+    ).cast(Integer)
+    total_col = func.sum(duration).label("total_seconds")
+    game_count_col = func.count(func.distinct(GameSession.game_id)).label(
+        "game_count"
+    )
+
+    stmt = (
+        select(name_col, total_col, game_count_col)
+        .select_from(GameSession)
+        .join(Game, GameSession.game_id == Game.id)
+        .outerjoin(
+            UserGamePreference,
+            and_(
+                UserGamePreference.game_id == GameSession.game_id,
+                UserGamePreference.user_id == user.discord_id,
+            ),
+        )
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.status != SessionStatus.ERROR,
+            GameSession.deleted_at.is_(None),
+            or_(
+                UserGamePreference.is_ignored.is_(None),
+                UserGamePreference.is_ignored == False,  # noqa: E712
+            ),
+        )
+        .group_by(name_col)
+        .order_by(total_col.desc(), name_col.asc())
+        .limit(limit)
+    )
+
+    rows = (await db.execute(stmt)).all()
+    return CompaniesResponse(
+        items=[
+            CompanyEntry(
+                name=r.name,
+                total_seconds=int(r.total_seconds or 0),
+                game_count=int(r.game_count or 0),
+            )
+            for r in rows
+        ]
     )

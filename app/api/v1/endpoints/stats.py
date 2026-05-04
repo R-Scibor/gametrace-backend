@@ -12,6 +12,8 @@ from app.models.session import GameSession, SessionStatus
 from app.models.user import User
 from app.schemas.stats import (
     ActiveSessionBrief,
+    CompaniesResponse,
+    CompanyRole,
     DashboardResponse,
     GenresResponse,
     HeatmapResponse,
@@ -22,6 +24,7 @@ from app.schemas.stats import (
     WeeklyTrendResponse,
 )
 from app.services.stats import (
+    companies_for_user,
     genres_for_user,
     heatmap_for_user,
     streak_for_user,
@@ -89,6 +92,22 @@ async def get_themes(
 ):
     """Time spent with games tagged by each theme. Same caveat as /genres."""
     return await themes_for_user(db, user)
+
+
+@router.get("/companies", response_model=CompaniesResponse)
+async def get_companies(
+    role: CompanyRole = Query(..., description="developer or publisher"),
+    limit: int = Query(default=10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Top developers or publishers by total seconds played.
+
+    `role` selects which JSONB column is unnested (developers or publishers).
+    Same exclusion filter as /genres: ERROR/deleted/is_ignored excluded.
+    Ties broken by name asc for deterministic ordering.
+    """
+    return await companies_for_user(db, user, role, limit)
 
 
 def _total_seconds_for_window(rows: list, window_start: datetime) -> int:
