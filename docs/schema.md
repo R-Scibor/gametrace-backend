@@ -60,6 +60,13 @@ Game catalog. Created as stubs by the bot, enriched asynchronously by the Celery
 | `cover_image_url` | `VARCHAR(512)` | Optional. |
 | `cover_source` | `ENUM('EXTERNAL', 'CUSTOM')` | If `CUSTOM`, the enrichment worker will not overwrite `cover_image_url`. Set by `PUT /games/{id}/cover`. |
 | `enrichment_status` | `ENUM('PENDING', 'ENRICHED', 'NEEDS_REVIEW')` | `PENDING` on insert; `ENRICHED` when match confidence ≥ 85%; `NEEDS_REVIEW` when no source crossed the threshold. |
+| `first_release_date` | `DATE` | Optional. IGDB `first_release_date` (Unix seconds → DATE). NULL when unknown or when matched only via Steam fallback (Steam doesn't expose this). |
+| `genres` | `JSONB` | Array of names from IGDB, e.g. `["RPG", "Adventure"]`. Defaults to `'[]'`. GIN-indexed. |
+| `themes` | `JSONB` | Array of names from IGDB. Defaults to `'[]'`. GIN-indexed. |
+| `developers` | `JSONB` | Array of company names where IGDB `involved_companies.developer = true`. A company can also appear in `publishers`. Defaults to `'[]'`. GIN-indexed. |
+| `publishers` | `JSONB` | Array of company names where IGDB `involved_companies.publisher = true`. Defaults to `'[]'`. GIN-indexed. |
+
+Metadata fields (`genres`, `themes`, `developers`, `publishers`, `first_release_date`) are populated by the IGDB enrichment path only. Steam fallback leaves them at defaults. The `cover_source=CUSTOM` rule applies: the enrichment worker will not overwrite metadata on a CUSTOM-cover game (treats the row as user-owned). Existing ENRICHED rows can be re-queued via the manual `tasks.backfill_metadata` Celery task.
 
 ### `game_aliases`
 
@@ -141,3 +148,4 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 | `0004_game_sessions_user_start_index.py` | Composite index for overlap and stats queries |
 | `0005_game_sessions_deleted_at_partial_index.py` | Partial index for the hard-delete sweeper |
 | `0006_drop_daily_user_stats.py` | Removed an earlier rollup table — sessions are kept raw indefinitely. Range-partitioning by month is on the [roadmap](roadmap.md#scale) for when the table grows past ~10M rows. |
+| `0007_game_metadata.py` | Adds `first_release_date` + `genres`/`themes`/`developers`/`publishers` JSONB columns to `games` with GIN indexes. |

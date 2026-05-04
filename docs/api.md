@@ -46,8 +46,15 @@ Session state machine — see the README's "State machine" section.
 |---|---|---|
 | `GET` | `/api/v1/stats/summary` | User-selectable window analytical view — `?days=N` (1–365, default 7). Returns `total_seconds`, full `per_game` breakdown, and `pending_errors`. Reused by the weekly Celery report so push content matches the screen. |
 | `GET` | `/api/v1/stats/dashboard` | Polling tile endpoint — `total_seconds_today` (wall-clock midnight in `users.timezone`) + `total_seconds_7d` + `total_seconds_30d`, the active `ONGOING` session brief (with `game_id` + `cover_image_url` for direct render), and `pending_errors`. No per-game breakdown. Designed for 30s polling on the Dashboard tab. The "Recents" list is fetched separately via `GET /api/v1/sessions?status=COMPLETED&status=ERROR`. |
+| `GET` | `/api/v1/stats/heatmap` | 7×24 grid of seconds played, bucketed by day-of-week × hour in `users.timezone`. `?days=N` (1–365, default 90). Always returns 168 cells (zero-filled). Sessions bucketed by `start_time` only — not split across hour boundaries. Includes `ONGOING` sessions. |
+| `GET` | `/api/v1/stats/streak` | `current_streak` and `longest_streak` (days). A play day is any session whose `start_time` falls on that local calendar date. `current_streak` survives a one-day grace if today is empty but yesterday played. |
+| `GET` | `/api/v1/stats/weekly-trend` | Total seconds per week, oldest first. `?weeks=N` (1–52, default 12). Weeks start Monday in user TZ. Always returns N entries (zero-filled). Includes `ONGOING`. |
+| `GET` | `/api/v1/stats/genres` | Total seconds aggregated by genre tag (from `games.genres`). Sorted desc. **Sums can exceed total playtime** — multi-genre games count toward each tag. This is "tag exposure," not a partition. |
+| `GET` | `/api/v1/stats/themes` | Same shape as `/genres`, over `games.themes`. Same caveat. |
+| `GET` | `/api/v1/stats/companies` | Top developers or publishers by total seconds played. `?role=developer\|publisher` (required), `?limit=N` (1–50, default 10). Returns `name`, `total_seconds`, `game_count`. Tie-break: name asc. |
+| `GET` | `/api/v1/stats/release-years` | Total seconds bucketed by decade of `games.first_release_date` (e.g. `"2010s"`). Games with NULL release date are excluded. Sorted asc. |
 
-Both endpoints exclude soft-deleted sessions, `ERROR` sessions, and `is_ignored` games from the totals.
+All stats endpoints exclude soft-deleted sessions, `ERROR` sessions, and `is_ignored` games. Time-based endpoints (`/heatmap`, `/streak`, `/weekly-trend`) include `ONGOING` sessions using `now() - start_time` for duration.
 
 ## Voice
 
