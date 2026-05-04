@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel
@@ -58,3 +58,12 @@ class HeatmapResponse(BaseModel):
 class StreakResponse(BaseModel):
     current_streak: int
     longest_streak: int
+
+
+class WeeklyTrendEntry(BaseModel):
+    week_start: date          # Monday in user TZ
+    total_seconds: int
+
+
+class WeeklyTrendResponse(BaseModel):
+    weeks: list[WeeklyTrendEntry]   # always `weeks` entries, oldest first

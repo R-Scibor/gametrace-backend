@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import Date, Integer, and_, func, or_, select
@@ -14,6 +14,8 @@ from app.schemas.stats import (
     PendingErrorEntry,
     StatsSummaryResponse,
     StreakResponse,
+    WeeklyTrendEntry,
+    WeeklyTrendResponse,
 )
 
 
@@ -255,3 +257,71 @@ async def streak_for_user(db: AsyncSession, user: User) -> StreakResponse:
     today_local = datetime.now(ZoneInfo(tz_name)).date()
     current, longest = _compute_streaks(play_dates, today_local)
     return StreakResponse(current_streak=current, longest_streak=longest)
+
+
+async def weekly_trend_for_user(
+    db: AsyncSession, user: User, weeks: int
+) -> WeeklyTrendResponse:
+    """
+    Total seconds played per ISO week (Monday-start) in the user's timezone,
+    oldest first, zero-filled to exactly `weeks` entries. Includes ONGOING
+    sessions (now() - start_time as duration). Excludes soft-deleted, ERROR
+    sessions, and is_ignored games.
+    """
+    try:
+        ZoneInfo(user.timezone)
+        tz_name = user.timezone
+    except (ZoneInfoNotFoundError, ValueError):
+        tz_name = "UTC"
+
+    tz = ZoneInfo(tz_name)
+    today_local = datetime.now(tz).date()
+    monday_this_week = today_local - timedelta(days=today_local.weekday())
+    oldest_monday = monday_this_week - timedelta(weeks=weeks - 1)
+    # Aware datetime at local midnight on oldest_monday — comparable to
+    # GameSession.start_time (DateTime(timezone=True)). Lets Postgres use the
+    # (user_id, start_time) btree index for the lower bound.
+    oldest_monday_utc = datetime.combine(oldest_monday, time.min, tzinfo=tz)
+
+    local_start = func.timezone(tz_name, GameSession.start_time)
+    week_start_col = func.date_trunc("week", local_start).cast(Date).label("week_start")
+    duration = func.coalesce(
+        GameSession.duration_seconds,
+        func.extract("epoch", func.now() - GameSession.start_time),
+    ).cast(Integer)
+
+    stmt = (
+        select(
+            week_start_col,
+            func.sum(duration).label("total_seconds"),
+        )
+        .outerjoin(
+            UserGamePreference,
+            and_(
+                UserGamePreference.game_id == GameSession.game_id,
+                UserGamePreference.user_id == user.discord_id,
+            ),
+        )
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.status != SessionStatus.ERROR,
+            GameSession.deleted_at.is_(None),
+            GameSession.start_time >= oldest_monday_utc,
+            or_(
+                UserGamePreference.is_ignored.is_(None),
+                UserGamePreference.is_ignored == False,  # noqa: E712
+            ),
+        )
+        .group_by(week_start_col)
+    )
+    rows = (await db.execute(stmt)).all()
+    bucket: dict[date, int] = {row.week_start: int(row.total_seconds or 0) for row in rows}
+
+    entries = [
+        WeeklyTrendEntry(
+            week_start=(monday := oldest_monday + timedelta(weeks=i)),
+            total_seconds=bucket.get(monday, 0),
+        )
+        for i in range(weeks)
+    ]
+    return WeeklyTrendResponse(weeks=entries)
