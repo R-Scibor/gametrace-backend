@@ -13,16 +13,20 @@ from app.models.user import User
 from app.schemas.stats import (
     ActiveSessionBrief,
     DashboardResponse,
+    GenresResponse,
     HeatmapResponse,
     PendingErrorEntry,
     StatsSummaryResponse,
     StreakResponse,
+    ThemesResponse,
     WeeklyTrendResponse,
 )
 from app.services.stats import (
+    genres_for_user,
     heatmap_for_user,
     streak_for_user,
     summary_for_user,
+    themes_for_user,
     weekly_trend_for_user,
 )
 
@@ -62,6 +66,29 @@ async def get_weekly_trend(
     user: User = Depends(get_current_user),
 ):
     return await weekly_trend_for_user(db, user, weeks)
+
+
+@router.get("/genres", response_model=GenresResponse)
+async def get_genres(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Time spent with games tagged by each genre.
+
+    Sums can exceed total playtime: a game can carry multiple genres and
+    each session counts toward every genre on its game. This is "genre
+    exposure," not a partition. Frontend should clarify in tooltips.
+    """
+    return await genres_for_user(db, user)
+
+
+@router.get("/themes", response_model=ThemesResponse)
+async def get_themes(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Time spent with games tagged by each theme. Same caveat as /genres."""
+    return await themes_for_user(db, user)
 
 
 def _total_seconds_for_window(rows: list, window_start: datetime) -> int:

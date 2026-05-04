@@ -9,11 +9,15 @@ from app.models.session import GameSession, SessionStatus
 from app.models.user import User
 from app.schemas.stats import (
     GameStatEntry,
+    GenreEntry,
+    GenresResponse,
     HeatmapCell,
     HeatmapResponse,
     PendingErrorEntry,
     StatsSummaryResponse,
     StreakResponse,
+    ThemeEntry,
+    ThemesResponse,
     WeeklyTrendEntry,
     WeeklyTrendResponse,
 )
@@ -325,3 +329,65 @@ async def weekly_trend_for_user(
         for i in range(weeks)
     ]
     return WeeklyTrendResponse(weeks=entries)
+
+
+async def _jsonb_breakdown(
+    db: AsyncSession, user: User, jsonb_col
+) -> list[tuple[str, int]]:
+    """Aggregate session duration grouped by JSONB-array element from games.<col>.
+
+    Excludes ERROR/deleted/is_ignored. ONGOING sessions counted via
+    coalesce(duration_seconds, extract('epoch', now() - start_time)).
+
+    Returns list of (tag, total_seconds) sorted by total_seconds desc.
+
+    Postgres treats jsonb_array_elements_text in the SELECT list as an
+    implicit lateral join — empty arrays produce zero rows, so empty-tag
+    games drop out automatically.
+    """
+    tag_col = func.jsonb_array_elements_text(jsonb_col).label("tag")
+    duration = func.coalesce(
+        GameSession.duration_seconds,
+        func.extract("epoch", func.now() - GameSession.start_time),
+    ).cast(Integer)
+    total_col = func.sum(duration).label("total_seconds")
+
+    stmt = (
+        select(tag_col, total_col)
+        .select_from(GameSession)
+        .join(Game, GameSession.game_id == Game.id)
+        .outerjoin(
+            UserGamePreference,
+            and_(
+                UserGamePreference.game_id == GameSession.game_id,
+                UserGamePreference.user_id == user.discord_id,
+            ),
+        )
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.status != SessionStatus.ERROR,
+            GameSession.deleted_at.is_(None),
+            or_(
+                UserGamePreference.is_ignored.is_(None),
+                UserGamePreference.is_ignored == False,  # noqa: E712
+            ),
+        )
+        .group_by(tag_col)
+        .order_by(total_col.desc())
+    )
+    rows = (await db.execute(stmt)).all()
+    return [(row.tag, int(row.total_seconds or 0)) for row in rows]
+
+
+async def genres_for_user(db: AsyncSession, user: User) -> GenresResponse:
+    rows = await _jsonb_breakdown(db, user, Game.genres)
+    return GenresResponse(
+        items=[GenreEntry(genre=t, total_seconds=s) for t, s in rows]
+    )
+
+
+async def themes_for_user(db: AsyncSession, user: User) -> ThemesResponse:
+    rows = await _jsonb_breakdown(db, user, Game.themes)
+    return ThemesResponse(
+        items=[ThemeEntry(theme=t, total_seconds=s) for t, s in rows]
+    )

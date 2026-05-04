@@ -67,3 +67,21 @@ class WeeklyTrendEntry(BaseModel):
 
 class WeeklyTrendResponse(BaseModel):
     weeks: list[WeeklyTrendEntry]   # always `weeks` entries, oldest first
+
+
+class GenreEntry(BaseModel):
+    genre: str
+    total_seconds: int
+
+
+class GenresResponse(BaseModel):
+    items: list[GenreEntry]
+
+
+class ThemeEntry(BaseModel):
+    theme: str
+    total_seconds: int
+
+
+class ThemesResponse(BaseModel):
+    items: list[ThemeEntry]
