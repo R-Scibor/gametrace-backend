@@ -1,7 +1,7 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import Integer, and_, func, or_, select
+from sqlalchemy import Date, Integer, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.game import Game, UserGamePreference
@@ -13,6 +13,7 @@ from app.schemas.stats import (
     HeatmapResponse,
     PendingErrorEntry,
     StatsSummaryResponse,
+    StreakResponse,
 )
 
 
@@ -171,3 +172,86 @@ async def heatmap_for_user(
     ]
 
     return HeatmapResponse(days=days, cells=cells)
+
+
+def _compute_streaks(play_dates: set[date], today: date) -> tuple[int, int]:
+    """Pure function — returns (current_streak, longest_streak).
+
+    longest_streak: longest run of consecutive calendar dates in `play_dates`.
+    current_streak: counted backwards from today; if today isn't a play day
+    but yesterday is, the streak is anchored at yesterday (one-day grace
+    so a user looking before they've played today still sees their streak).
+    """
+    if not play_dates:
+        return (0, 0)
+
+    sorted_dates = sorted(play_dates)
+    longest = 1
+    run = 1
+    for prev, curr in zip(sorted_dates, sorted_dates[1:]):
+        if (curr - prev).days == 1:
+            run += 1
+        else:
+            run = 1
+        if run > longest:
+            longest = run
+
+    if today in play_dates:
+        anchor = today
+    elif (today - timedelta(days=1)) in play_dates:
+        anchor = today - timedelta(days=1)
+    else:
+        return (0, longest)
+
+    current = 0
+    cursor = anchor
+    while cursor in play_dates:
+        current += 1
+        cursor -= timedelta(days=1)
+
+    return (current, longest)
+
+
+async def streak_for_user(db: AsyncSession, user: User) -> StreakResponse:
+    """
+    Current and longest play-day streak in the user's timezone.
+
+    A "play day" = any calendar date (in user's tz) on which the user has
+    at least one non-error, non-deleted session for a non-ignored game.
+    No time window — longest_streak needs full history. v1 simplification:
+    a session is attributed to the local date of its start_time only.
+    """
+    try:
+        ZoneInfo(user.timezone)
+        tz_name = user.timezone
+    except (ZoneInfoNotFoundError, ValueError):
+        tz_name = "UTC"
+
+    local_date = func.timezone(tz_name, GameSession.start_time).cast(Date)
+
+    stmt = (
+        select(local_date.label("d"))
+        .outerjoin(
+            UserGamePreference,
+            and_(
+                UserGamePreference.game_id == GameSession.game_id,
+                UserGamePreference.user_id == user.discord_id,
+            ),
+        )
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.status != SessionStatus.ERROR,
+            GameSession.deleted_at.is_(None),
+            or_(
+                UserGamePreference.is_ignored.is_(None),
+                UserGamePreference.is_ignored == False,  # noqa: E712
+            ),
+        )
+        .distinct()
+    )
+    rows = (await db.execute(stmt)).all()
+    play_dates: set[date] = {row.d for row in rows}
+
+    today_local = datetime.now(ZoneInfo(tz_name)).date()
+    current, longest = _compute_streaks(play_dates, today_local)
+    return StreakResponse(current_streak=current, longest_streak=longest)

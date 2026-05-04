@@ -53,3 +53,8 @@ class HeatmapCell(BaseModel):
 class HeatmapResponse(BaseModel):
     days: int
     cells: list[HeatmapCell]   # always 168 entries
+
+
+class StreakResponse(BaseModel):
+    current_streak: int
+    longest_streak: int

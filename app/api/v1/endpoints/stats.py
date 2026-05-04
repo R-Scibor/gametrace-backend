@@ -16,8 +16,9 @@ from app.schemas.stats import (
     HeatmapResponse,
     PendingErrorEntry,
     StatsSummaryResponse,
+    StreakResponse,
 )
-from app.services.stats import heatmap_for_user, summary_for_user
+from app.services.stats import heatmap_for_user, streak_for_user, summary_for_user
 
 router = APIRouter()
 
@@ -38,6 +39,14 @@ async def get_heatmap(
     user: User = Depends(get_current_user),
 ):
     return await heatmap_for_user(db, user, days)
+
+
+@router.get("/streak", response_model=StreakResponse)
+async def get_streak(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return await streak_for_user(db, user)
 
 
 def _total_seconds_for_window(rows: list, window_start: datetime) -> int:
