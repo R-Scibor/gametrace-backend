@@ -101,3 +101,12 @@ class CompanyEntry(BaseModel):
 
 class CompaniesResponse(BaseModel):
     items: list[CompanyEntry]
+
+
+class ReleaseYearEntry(BaseModel):
+    decade: str          # e.g. "1990s", "2020s"
+    total_seconds: int
+
+
+class ReleaseYearsResponse(BaseModel):
+    items: list[ReleaseYearEntry]   # sorted by decade asc

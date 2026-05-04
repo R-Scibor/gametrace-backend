@@ -17,6 +17,8 @@ from app.schemas.stats import (
     HeatmapCell,
     HeatmapResponse,
     PendingErrorEntry,
+    ReleaseYearEntry,
+    ReleaseYearsResponse,
     StatsSummaryResponse,
     StreakResponse,
     ThemeEntry,
@@ -450,6 +452,62 @@ async def companies_for_user(
                 name=r.name,
                 total_seconds=int(r.total_seconds or 0),
                 game_count=int(r.game_count or 0),
+            )
+            for r in rows
+        ]
+    )
+
+
+async def release_years_for_user(
+    db: AsyncSession, user: User
+) -> ReleaseYearsResponse:
+    """Total seconds played, bucketed by decade of game release.
+
+    Games without first_release_date are excluded (NULL filter).
+    Same exclusion filter as other stats endpoints. Ordered by decade asc.
+    """
+    duration = func.coalesce(
+        GameSession.duration_seconds,
+        func.extract("epoch", func.now() - GameSession.start_time),
+    ).cast(Integer)
+
+    # decade as int: floor(year / 10) * 10. SQLAlchemy emits CAST(... AS NUMERIC)
+    # for `/`, and casting NUMERIC to INTEGER rounds — so 2019/10=201.9 rounds
+    # to 202, not 201. Use func.floor explicitly to get truncation semantics.
+    year_int = func.extract("year", Game.first_release_date).cast(Integer)
+    decade_int = (func.floor(year_int / 10).cast(Integer) * 10).label("decade_int")
+
+    stmt = (
+        select(decade_int, func.sum(duration).label("total_seconds"))
+        .select_from(GameSession)
+        .join(Game, GameSession.game_id == Game.id)
+        .outerjoin(
+            UserGamePreference,
+            and_(
+                UserGamePreference.game_id == GameSession.game_id,
+                UserGamePreference.user_id == user.discord_id,
+            ),
+        )
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.status != SessionStatus.ERROR,
+            GameSession.deleted_at.is_(None),
+            Game.first_release_date.is_not(None),
+            or_(
+                UserGamePreference.is_ignored.is_(None),
+                UserGamePreference.is_ignored == False,  # noqa: E712
+            ),
+        )
+        .group_by(decade_int)
+        .order_by(decade_int.asc())
+    )
+
+    rows = (await db.execute(stmt)).all()
+    return ReleaseYearsResponse(
+        items=[
+            ReleaseYearEntry(
+                decade=f"{int(r.decade_int)}s",
+                total_seconds=int(r.total_seconds or 0),
             )
             for r in rows
         ]

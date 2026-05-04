@@ -18,6 +18,7 @@ from app.schemas.stats import (
     GenresResponse,
     HeatmapResponse,
     PendingErrorEntry,
+    ReleaseYearsResponse,
     StatsSummaryResponse,
     StreakResponse,
     ThemesResponse,
@@ -27,6 +28,7 @@ from app.services.stats import (
     companies_for_user,
     genres_for_user,
     heatmap_for_user,
+    release_years_for_user,
     streak_for_user,
     summary_for_user,
     themes_for_user,
@@ -108,6 +110,19 @@ async def get_companies(
     Ties broken by name asc for deterministic ordering.
     """
     return await companies_for_user(db, user, role, limit)
+
+
+@router.get("/release-years", response_model=ReleaseYearsResponse)
+async def get_release_years(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Total seconds played, bucketed by decade of game release.
+
+    Games with first_release_date IS NULL are excluded. Same exclusion
+    filter as other stats endpoints. Ordered by decade asc.
+    """
+    return await release_years_for_user(db, user)
 
 
 def _total_seconds_for_window(rows: list, window_start: datetime) -> int:
