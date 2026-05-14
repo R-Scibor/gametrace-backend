@@ -36,6 +36,7 @@ Session state machine — see the README's "State machine" section.
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/v1/games` | List games the user has at least one session for. Excludes ignored games. Optional `?status=NEEDS_REVIEW` filter for the Unrecognized tab. Paginated. |
+| `GET` | `/api/v1/games/resolve?name=<string>` | Map a free-text name to `{game_id, name}` from the user's library (games with at least one non-soft-deleted session — `ERROR` counts, ignored games still resolve). Exact case-insensitive match on `primary_name`, then on `game_aliases.discord_process_name`. Returns `200` with body `null` on miss. Voice-flow prefill. |
 | `GET` | `/api/v1/games/{id}/sessions` | Paginated session list for a game. Returns `[]` if the user has marked the game as ignored. |
 | `POST` | `/api/v1/games/{id}/merge/{target_id}` | Transactional merge — reassigns aliases + sessions + preferences from `id` to `target_id`, deletes the source row. `400` on self-merge, `404` if either game is missing. Returns `204`. |
 | `PUT` | `/api/v1/games/{id}/cover` | Upload a custom cover (Base64 + extension). Saves to the `covers` Docker volume, sets `cover_source=CUSTOM`. The Celery enrichment worker will not overwrite a CUSTOM cover. Allowed extensions: `jpg`, `jpeg`, `png`, `webp`. |
