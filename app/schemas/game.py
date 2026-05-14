@@ -18,3 +18,8 @@ class GameResponse(BaseModel):
 class CoverUpload(BaseModel):
     image_base64: str
     extension: str = "jpg"
+
+
+class GameResolveOut(BaseModel):
+    game_id: int
+    name: str
