@@ -3,7 +3,7 @@ import logging
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -12,7 +12,7 @@ from app.core.database import get_db
 from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession
 from app.models.user import User
-from app.schemas.game import CoverUpload, GameResponse
+from app.schemas.game import CoverUpload, GameResolveOut, GameResponse
 from app.schemas.session import SessionResponse
 
 router = APIRouter()
@@ -68,6 +68,60 @@ async def list_games(
 
     result = await db.execute(query)
     return result.scalars().all()
+
+
+# ---------------------------------------------------------------------------
+# GET /resolve
+# ---------------------------------------------------------------------------
+
+@router.get("/resolve", response_model=GameResolveOut | None)
+async def resolve_game(
+    name: str = Query(..., min_length=1),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Map a free-text game name to a Game record from the calling user's library.
+
+    Match strategy (exact, case-insensitive):
+      1. games.primary_name == name
+      2. game_aliases.discord_process_name == name
+
+    Scope: games the user has at least one non-soft-deleted session for.
+      - ERROR sessions count (the user played the game).
+      - is_ignored games still resolve (ignore is a display filter).
+
+    Returns 200 with the matched game, or 200 with body `null` on miss.
+    """
+    needle = name.strip().lower()
+
+    user_games_sq = (
+        select(GameSession.game_id)
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.deleted_at.is_(None),
+        )
+        .distinct()
+        .scalar_subquery()
+    )
+
+    query = (
+        select(Game.id, Game.primary_name)
+        .outerjoin(GameAlias, GameAlias.game_id == Game.id)
+        .where(
+            Game.id.in_(user_games_sq),
+            or_(
+                func.lower(Game.primary_name) == needle,
+                func.lower(GameAlias.discord_process_name) == needle,
+            ),
+        )
+        .limit(1)
+    )
+
+    row = (await db.execute(query)).first()
+    if row is None:
+        return None
+    return GameResolveOut(game_id=row.id, name=row.primary_name)
 
 
 # ---------------------------------------------------------------------------
