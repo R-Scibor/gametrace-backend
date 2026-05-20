@@ -20,8 +20,8 @@ discord.py==2.3.2
 python-multipart==0.0.9
 
 # AI / enrichment
-openai==1.51.0
-google-cloud-aiplatform==1.67.1
+openai==2.36.0
+google-cloud-aiplatform==1.152.0
 rapidfuzz==3.9.7
 
 # Push notifications
@@ -33,5 +33,5 @@ sentry-sdk[fastapi,celery]==2.18.0
 # Testing
 pytest==8.2.2
 pytest-asyncio==0.23.7
-httpx==0.27.0
+httpx==0.28.1
 aiosqlite==0.20.0
