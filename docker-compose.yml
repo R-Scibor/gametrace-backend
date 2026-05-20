@@ -50,6 +50,7 @@ services:
     volumes:
       - .:/app # Hot-reload kodu
       - covers_data:/app/covers # Wolumen na okładki CUSTOM
+      - ./credentials/gcp-sa.json:/app/credentials/gcp-sa.json:ro
       - ./credentials/firebase-cred.json:/app/credentials/firebase-cred.json:ro
     env_file:
       - .env
