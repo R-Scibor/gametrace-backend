@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     gcp_project: str = ""
     gcp_location: str = "us-central1"
+    gemini_model: str = "gemini-3-flash-preview"
+    default_timezone: str = "Europe/Warsaw"
     igdb_client_id: str = ""
     igdb_client_secret: str = ""
 

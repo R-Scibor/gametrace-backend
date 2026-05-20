@@ -7,9 +7,20 @@ Things on the horizon for GameTrace. Nothing here is committed to a date — thi
 ### Discord OAuth2 login
 Replaces the current username-based login. Today, `POST /auth/login` accepts a Discord username and (if the user was pre-registered via the `/login` slash command) issues a 30-day sliding token. This is intentional minimal-friction auth for a homelab build, but the username is effectively a credential — anyone who knows it and has network access to the API can log in.
 
-OAuth2 flips the model: Discord owns the auth surface. The backend gets a signed identity from Discord (`identify` scope), maps it to a user record by `discord_id` (already in the schema), and issues its own session token from there. Mobile app handles the OAuth flow via `expo-auth-session`. Backend adds a `/auth/discord/callback` endpoint.
+**Update (Audit 2026-05-14):** This is categorized as a P0 security risk (Identity Impersonation). Transitioning to OAuth2 or an OTP-based handshake is the primary priority for the next development cycle.
 
-This also closes a related gap: there's currently no per-IP or per-username rate-limit on `/auth/login`. Adding one now would be wasted work — under OAuth, brute-force / enumeration is Discord's problem, not ours.
+### Administrative Access (RBAC)
+**New (Audit 2026-05-14):** Destructive endpoints like `POST /games/{id}/merge/{target_id}` are currently open to all authenticated users. We need to introduce a `is_admin` flag on the `User` model and implement Role-Based Access Control (RBAC) to protect global game data.
+
+### Secure Token Storage
+**New (Audit 2026-05-14):** Current authentication tokens are stored in plain text. We should transition to storing SHA-256 hashes of the tokens to protect active sessions in the event of a database compromise.
+
+## Pre-release hardening
+
+A bundle of items that don't block any user flow today but should land before the API is exposed publicly (i.e. before sharing with users outside the homelab network).
+
+### Auth Performance: Token Debouncing
+**New (Audit 2026-05-14):** The `get_current_user` dependency currently performs a database commit on every single request to update activity timestamps. This is a significant performance bottleneck. We should implement "debouncing" — only updating the database if the token's `last_active` is older than 5-10 minutes.
 
 ## Pre-release hardening
 
@@ -20,6 +31,14 @@ FastAPI/Starlette has no default body size limit. A single 5 GB upload to `/voic
 
 ### Rate-limit on `/voice/transcribe`
 Each call to this endpoint is a paid OpenAI Whisper request. A leaked auth token plus a loop equals a real invoice. Plan: `slowapi` with Redis backend, keyed on `user_id` (not IP — we already have auth context, and the threat is leaked-credential abuse, not anonymous traffic). Budget around 10 requests/hour/user — well above legitimate use, well below "ouch". Stays correct after the OAuth migration since the key is still the authenticated user.
+
+**Update (Audit 2026-05-14):** Added as a P3 security risk.
+
+### Centralized Logging
+**New (Audit 2026-05-14):** Individual modules currently manage their own logging inconsistently. We need a unified logging configuration in `app/core/observability.py` to ensure consistent formatting and log levels across the API, Bot, and Celery workers.
+
+### CI Quality Gates
+**New (Audit 2026-05-14):** The CI pipeline only runs tests. We should add `ruff` for linting and `mypy` for static type checking to ensure code quality and prevent regressions in type safety.
 
 Why this is deferred: the voice pipeline isn't fully validated end-to-end with the frontend yet. Adding rate-limiting before the happy path is locked in introduces a debugging variable we don't need.
 

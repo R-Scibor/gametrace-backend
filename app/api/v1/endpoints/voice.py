@@ -19,36 +19,63 @@ import json
 import logging
 import os
 import tempfile
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.auth import get_current_user
 from app.core.config import settings
+from app.core.database import get_db
 from app.models.user import User
+from app.services.voice_context import (
+    build_candidate_block,
+    build_datetime_block,
+    fetch_user_library,
+    match_candidates,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-1.5-flash-002"
 
 GEMINI_PROMPT = """\
 You are a structured data extractor. The user dictated a gaming session in Polish or English.
-Extract the following fields from the transcription and return ONLY a valid JSON object with these keys:
-- "game": string — the name of the game (as the user said it), or null if not mentioned
-- "date": string — date in YYYY-MM-DD format, or null if not mentioned
-- "start_time": string — start time in HH:MM format (24h), or null if not mentioned
-- "end_time": string — end time in HH:MM format (24h), or null if not mentioned
-- "duration_minutes": integer — duration in minutes, or null if not mentioned
+Extract these fields from the transcription:
+- game: the name of the game (as the user said it), or null if not mentioned
+- date: date in YYYY-MM-DD format, or null if not mentioned
+- start_time: start time in HH:MM format (24h), or null if not mentioned
+- end_time: end time in HH:MM format (24h), or null if not mentioned
+- duration_minutes: duration in minutes, or null if not mentioned
 
 If a value is ambiguous or absent, use null.
-Return ONLY the JSON object, no explanation.
+When duration is given without explicit times, leave start_time and end_time null
+unless the transcript anchors them ("I just finished" + 30 min → end_time = now, start_time = now - 30 min).
+
+{datetime_block}
+
+Transcript language (auto-detected by Whisper): {language}
+
+{candidate_block}
 
 Transcription:
 {transcript}
 """
+
+
+GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "game": {"type": "string", "nullable": True},
+        "date": {"type": "string", "nullable": True},
+        "start_time": {"type": "string", "nullable": True},
+        "end_time": {"type": "string", "nullable": True},
+        "duration_minutes": {"type": "integer", "nullable": True},
+    },
+    "required": ["game", "date", "start_time", "end_time", "duration_minutes"],
+}
 
 
 class TranscribeResponse(BaseModel):
@@ -60,27 +87,36 @@ class TranscribeResponse(BaseModel):
     raw_transcript: str
 
 
-def _gemini_parse(transcript: str) -> dict:
+def _gemini_parse(
+    transcript: str,
+    datetime_block: str,
+    language: str | None,
+    candidate_block: str,
+) -> dict:
     """
-    Call Gemini Flash via Vertex AI (sync — run in thread executor).
-    Returns parsed dict; empty dict on JSON decode failure.
+    Call Gemini Flash via Vertex AI with structured output.
+    Sync — run in thread executor.
     """
     import vertexai
-    from vertexai.generative_models import GenerativeModel
+    from vertexai.generative_models import GenerationConfig, GenerativeModel
 
     vertexai.init(project=settings.gcp_project, location=settings.gcp_location)
-    model = GenerativeModel(GEMINI_MODEL)
-    prompt = GEMINI_PROMPT.format(transcript=transcript)
-    response = model.generate_content(prompt)
-    raw_json = response.text.strip()
-
-    # Strip markdown code fences if Gemini wraps the response
-    if raw_json.startswith("```"):
-        raw_json = raw_json.split("```")[1]
-        if raw_json.startswith("json"):
-            raw_json = raw_json[4:]
-        raw_json = raw_json.strip()
-
+    model = GenerativeModel(settings.gemini_model)
+    prompt = GEMINI_PROMPT.format(
+        transcript=transcript,
+        datetime_block=datetime_block,
+        language=language or "unknown",
+        candidate_block=candidate_block,
+    )
+    response = model.generate_content(
+        prompt,
+        generation_config=GenerationConfig(
+            response_mime_type="application/json",
+            response_schema=GEMINI_RESPONSE_SCHEMA,
+        ),
+    )
+    raw_json = response.text
+    logger.warning("voice/transcribe: gemini raw response=%r", raw_json)
     return json.loads(raw_json)
 
 
@@ -88,6 +124,7 @@ def _gemini_parse(transcript: str) -> dict:
 async def transcribe_audio(
     file: UploadFile,
     user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Upload an audio file (m4a/wav/mp3/ogg).
@@ -124,8 +161,10 @@ async def transcribe_audio(
                 model="whisper-1",
                 file=audio_file,
                 language=None,  # auto-detect — handles Polish + English mixed
+                response_format="verbose_json",
             )
         transcript: str = transcription.text
+        detected_language: Optional[str] = getattr(transcription, "language", None)
     except Exception as exc:
         logger.exception("Whisper transcription failed")
         raise HTTPException(status_code=502, detail=f"Transcription failed: {exc}") from exc
@@ -135,15 +174,25 @@ async def transcribe_audio(
         except OSError:
             pass
 
-    logger.info("voice/transcribe: transcript=%r", transcript[:120])
+    logger.warning(
+        "voice/transcribe: whisper transcript=%r language=%r",
+        transcript,
+        detected_language,
+    )
 
     # ── Step 2: Gemini Flash via Vertex AI — JSON extraction ─────────────────
     # Vertex AI SDK is synchronous; run in thread pool to avoid blocking the loop.
+    datetime_block = build_datetime_block(user.timezone)
+    library = await fetch_user_library(db, user.discord_id)
+    matches = match_candidates(transcript, library)
+    candidate_block = build_candidate_block(matches)
+    logger.warning("voice/transcribe: library_size=%d matches=%r", len(library), matches)
+
     try:
-        parsed = await asyncio.to_thread(_gemini_parse, transcript)
-    except json.JSONDecodeError as exc:
-        logger.warning("Gemini returned non-JSON: %s", exc)
-        parsed = {}
+        parsed = await asyncio.to_thread(
+            _gemini_parse, transcript, datetime_block, detected_language, candidate_block
+        )
+        logger.warning("voice/transcribe: parsed=%r", parsed)
     except Exception as exc:
         logger.exception("Gemini/Vertex AI parsing failed")
         raise HTTPException(status_code=502, detail=f"Parsing failed: {exc}") from exc

@@ -10,9 +10,6 @@ to test the stripping logic inside the function itself.
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.api.v1.endpoints.voice import _gemini_parse
-
-
 def _voice_settings(openai_key: str = "test-key", gcp_project: str = "test-project"):
     s = MagicMock()
     s.openai_api_key = openai_key
@@ -90,8 +87,8 @@ async def test_partial_fields_preserved(authed_client):
 
 # ── Gemini failure modes ──────────────────────────────────────────────────────
 
-async def test_gemini_returns_non_json(authed_client):
-    """When Gemini returns non-JSON, endpoint returns 200 with null fields and raw_transcript."""
+async def test_gemini_failure_returns_502(authed_client):
+    """When the Gemini call fails the endpoint returns 502 (structured output is required now)."""
     with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
          patch("app.api.v1.endpoints.voice.AsyncOpenAI",
                return_value=_mock_openai("some transcript")), \
@@ -103,25 +100,7 @@ async def test_gemini_returns_non_json(authed_client):
             files={"file": ("session.m4a", b"data", "audio/m4a")},
         )
 
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["game"] is None
-    assert data["date"] is None
-    assert data["raw_transcript"] == "some transcript"
-
-
-def test_gemini_markdown_fence_stripped():
-    """_gemini_parse strips ```json...``` fences before calling json.loads."""
-    mock_response = MagicMock()
-    mock_response.text = '```json\n{"game": "Hades", "date": null}\n```'
-
-    with patch("vertexai.init"), \
-         patch("vertexai.generative_models.GenerativeModel") as MockModel:
-        MockModel.return_value.generate_content.return_value = mock_response
-        result = _gemini_parse("test transcript")
-
-    assert result["game"] == "Hades"
-    assert result["date"] is None
+    assert resp.status_code == 502
 
 
 # ── Whisper failure ───────────────────────────────────────────────────────────
