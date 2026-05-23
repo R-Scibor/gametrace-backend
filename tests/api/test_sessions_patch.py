@@ -120,20 +120,43 @@ async def test_cannot_patch_other_users_session(authed_client, db):
     assert resp.status_code == 404
 
 
-async def test_patch_soft_deleted_returns_404(authed_client, db, user):
+async def test_patch_trashed_session_allows_edit(authed_client, db, user):
     game = await make_game(db)
     session = await make_session(
         db, user.discord_id, game.id,
-        dt(hours_ago=2), dt(hours_ago=1),
+        dt(hours_ago=3), dt(hours_ago=1),
         deleted_at=datetime.now(timezone.utc),
     )
 
     resp = await authed_client.patch(
         f"/api/v1/sessions/{session.id}",
-        json={"end_time": dt(hours_ago=0).isoformat()},
+        json={"end_time": dt(hours_ago=0.5).isoformat()},
     )
 
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["duration_seconds"] == 9000  # 2.5h
+
+
+async def test_patch_trashed_session_skips_overlap_check(authed_client, db, user):
+    """Trashed row can be edited into times that overlap a live session;
+    the conflict is re-evaluated on restore, not on edit."""
+    game = await make_game(db)
+    # Live COMPLETED at [5h ago, 2h ago]
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=5), dt(hours_ago=2))
+    # Trashed at [4h ago, 3.5h ago]
+    trashed = await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=4), dt(hours_ago=3.5),
+        deleted_at=datetime.now(timezone.utc),
+    )
+
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{trashed.id}",
+        json={"end_time": dt(hours_ago=2.5).isoformat()},  # overlaps the live row
+    )
+
+    assert resp.status_code == 200  # no overlap check while trashed
 
 
 async def test_patch_with_discard_field_rejected_as_unknown(authed_client, db, user):

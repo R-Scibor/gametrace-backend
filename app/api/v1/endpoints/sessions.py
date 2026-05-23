@@ -158,8 +158,6 @@ async def patch_session(
     session = result.scalar_one_or_none()
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    if session.deleted_at is not None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     if session.status == SessionStatus.ONGOING:
         raise HTTPException(
@@ -174,17 +172,18 @@ async def patch_session(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="end_time must be after start_time",
             )
-        conflict = await _check_overlap(
-            db, user.discord_id, session.start_time, payload.end_time, exclude_id=session_id
-        )
-        if conflict is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "detail": "Session overlaps with an existing session",
-                    "conflicting_session": SessionResponse.model_validate(conflict).model_dump(mode="json"),
-                },
+        if session.deleted_at is None:
+            conflict = await _check_overlap(
+                db, user.discord_id, session.start_time, payload.end_time, exclude_id=session_id
             )
+            if conflict is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "detail": "Session overlaps with an existing session",
+                        "conflicting_session": SessionResponse.model_validate(conflict).model_dump(mode="json"),
+                    },
+                )
         session.end_time = payload.end_time
         session.duration_seconds = int(
             (payload.end_time - session.start_time).total_seconds()
