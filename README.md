@@ -54,14 +54,18 @@ Full endpoint reference: **[docs/api.md](docs/api.md)**. Live schemas: `http://l
 Bot-sourced sessions (`source=BOT`):
 
 ```
-ONGOING ──► COMPLETED         (bot detects game closed)
-ONGOING ──► ERROR             (Self-Healing on bot restart: different game, or >12h elapsed)
-ERROR   ──► COMPLETED         (user supplies end_time via PATCH /sessions/{id})
-ERROR   ──► soft-deleted      (user discards via PATCH /sessions/{id} with discard=true)
-COMPLETED ──► COMPLETED       (user edits end_time; must remain > start_time)
+ONGOING   ──► COMPLETED         (bot detects game closed)
+ONGOING   ──► ERROR             (Self-Healing on bot restart: different game, or >12h elapsed)
+ERROR     ──► COMPLETED         (user supplies end_time via PATCH /sessions/{id})
+ERROR     ──► soft-deleted      (user discards via DELETE /sessions/{id})
+COMPLETED ──► soft-deleted      (user deletes via DELETE /sessions/{id})
+COMPLETED ──► COMPLETED         (user edits end_time; must remain > start_time)
+soft-deleted ──► COMPLETED/ERROR (user restores via POST /sessions/{id}/restore; status preserved)
 ```
 
 Manual sessions (`source=MANUAL`) skip the cycle and are saved directly as `COMPLETED`. `ERROR` sessions are excluded from all aggregates until resolved. `ONGOING` sessions cannot be soft-deleted directly — only the bot owns those rows.
+
+Trashed sessions appear in `GET /api/v1/sessions/trash` and are permanently purged by the Hard Delete Sweeper after 7 days. Use `DELETE /sessions/{id}?hard=true` to remove a trashed session immediately.
 
 ## Database migrations
 
