@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_, select
@@ -6,11 +6,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.v1.endpoints.auth import get_current_user
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.game import Game
 from app.models.session import GameSession, SessionSource, SessionStatus
 from app.models.user import User
-from app.schemas.session import ConflictResponse, SessionCreate, SessionPatch, SessionResponse
+from app.schemas.session import (
+    ConflictResponse,
+    SessionCreate,
+    SessionPatch,
+    SessionResponse,
+    TrashedSessionResponse,
+)
 
 router = APIRouter()
 
@@ -70,6 +77,35 @@ async def list_sessions(
         stmt = stmt.where(GameSession.status.in_(status_filter))
     result = await db.execute(stmt)
     return result.scalars().all()
+
+
+@router.get("/trash", response_model=list[TrashedSessionResponse])
+async def list_trashed_sessions(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List the caller's trashed sessions, newest first, with purges_at countdown."""
+    result = await db.execute(
+        select(GameSession)
+        .options(selectinload(GameSession.game))
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.deleted_at.is_not(None),
+        )
+        .order_by(GameSession.deleted_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    rows = result.scalars().all()
+    retention = timedelta(days=settings.trash_retention_days)
+    return [
+        TrashedSessionResponse.model_validate(
+            {**SessionResponse.model_validate(s).model_dump(), "purges_at": s.deleted_at + retention}
+        )
+        for s in rows
+    ]
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
@@ -158,26 +194,12 @@ async def patch_session(
     session = result.scalar_one_or_none()
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    if session.deleted_at is not None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     if session.status == SessionStatus.ONGOING:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot edit an ONGOING session — managed by bot",
         )
-
-    # Discard: only for ERROR sessions
-    if payload.discard:
-        if session.status != SessionStatus.ERROR:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Only ERROR sessions can be discarded",
-            )
-        session.deleted_at = datetime.now(timezone.utc)
-        await db.commit()
-        await db.refresh(session)
-        return session
 
     # Update end_time → fixes ERROR or updates COMPLETED
     if payload.end_time is not None:
@@ -186,17 +208,18 @@ async def patch_session(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="end_time must be after start_time",
             )
-        conflict = await _check_overlap(
-            db, user.discord_id, session.start_time, payload.end_time, exclude_id=session_id
-        )
-        if conflict is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "detail": "Session overlaps with an existing session",
-                    "conflicting_session": SessionResponse.model_validate(conflict).model_dump(mode="json"),
-                },
+        if session.deleted_at is None:
+            conflict = await _check_overlap(
+                db, user.discord_id, session.start_time, payload.end_time, exclude_id=session_id
             )
+            if conflict is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "detail": "Session overlaps with an existing session",
+                        "conflicting_session": SessionResponse.model_validate(conflict).model_dump(mode="json"),
+                    },
+                )
         session.end_time = payload.end_time
         session.duration_seconds = int(
             (payload.end_time - session.start_time).total_seconds()
@@ -207,4 +230,89 @@ async def patch_session(
     await db.refresh(session)
     return session
 
+
+@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_session(
+    session_id: int,
+    hard: bool = Query(default=False),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Soft-delete a session (sets deleted_at). With ?hard=true, permanently
+    removes a session that is already trashed. ONGOING sessions cannot be
+    soft-deleted (bot-managed).
+    """
+    result = await db.execute(
+        select(GameSession).where(
+            GameSession.id == session_id,
+            GameSession.user_id == user.discord_id,
+        )
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    if hard:
+        if session.deleted_at is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Session must be trashed before hard delete",
+            )
+        await db.delete(session)
+        await db.commit()
+        return
+
+    if session.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    if session.status == SessionStatus.ONGOING:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot delete an ONGOING session — managed by bot",
+        )
+
+    session.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
+
+
+@router.post("/{session_id}/restore", response_model=SessionResponse)
+async def restore_session(
+    session_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Restore a trashed session. Status is preserved (ERROR stays ERROR).
+    For COMPLETED sessions, overlap is re-validated; returns 409 on conflict.
+    """
+    result = await db.execute(
+        select(GameSession)
+        .options(selectinload(GameSession.game))
+        .where(
+            GameSession.id == session_id,
+            GameSession.user_id == user.discord_id,
+        )
+    )
+    session = result.scalar_one_or_none()
+    if session is None or session.deleted_at is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    if session.status == SessionStatus.COMPLETED and session.end_time is not None:
+        conflict = await _check_overlap(
+            db, user.discord_id, session.start_time, session.end_time, exclude_id=session_id
+        )
+        if conflict is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "detail": "Session overlaps with an existing session",
+                    "conflicting_session": SessionResponse.model_validate(conflict).model_dump(mode="json"),
+                },
+            )
+
+    session.deleted_at = None
+    await db.commit()
+    await db.refresh(session)
+    return session
 

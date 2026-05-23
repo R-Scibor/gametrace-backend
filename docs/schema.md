@@ -95,13 +95,19 @@ The core table. State machine described in the [README](../README.md#session-sta
 | `status` | `ENUM('ONGOING', 'COMPLETED', 'ERROR')` | |
 | `source` | `ENUM('BOT', 'MANUAL')` | `BOT` rows go through the state machine; `MANUAL` rows are inserted directly as `COMPLETED`. |
 | `notes` | `TEXT` | System-owned — written by Self-Healing as the human-readable reason an ERROR occurred. Read-only via the API. |
-| `deleted_at` | `TIMESTAMPTZ` | NULL = live. Set when a user discards an ERROR session. The hard-delete sweeper removes rows where `deleted_at < NOW() - 7 days`. |
+| `deleted_at` | `TIMESTAMPTZ` | NULL = live. Set by `DELETE /api/v1/sessions/{id}` (soft-delete). The hard-delete sweeper removes rows where `deleted_at < NOW() - 7 days`. |
 | `created_at` | `TIMESTAMPTZ` | |
 
 **Indexes:**
 
 - `ix_game_sessions_user_id_start_time` — composite btree on `(user_id, start_time)`. Used by overlap validation in `POST/PATCH /sessions` and by `/stats/summary` window aggregation. Migration `0004`.
 - `ix_game_sessions_deleted_at_partial` — partial btree on `deleted_at WHERE deleted_at IS NOT NULL`. Used by the hard-delete sweeper. Migration `0005`.
+
+**State-machine transitions (soft-delete layer):**
+
+- `COMPLETED` or `ERROR` → soft-deleted via `DELETE /api/v1/sessions/{id}` (sets `deleted_at`).
+- soft-deleted → `COMPLETED` or `ERROR` (status preserved) via `POST /api/v1/sessions/{id}/restore` (clears `deleted_at`). For `COMPLETED`, overlap is re-validated on restore.
+- soft-deleted → permanently gone via `DELETE /api/v1/sessions/{id}?hard=true` (bypasses the sweeper) or automatically by the Hard Delete Sweeper after 7 days.
 
 **Invariants:**
 

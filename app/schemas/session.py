@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.models.session import SessionSource, SessionStatus
 
@@ -19,8 +19,9 @@ class SessionCreate(BaseModel):
 
 
 class SessionPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     end_time: Optional[datetime] = None
-    discard: bool = False
 
 
 class GameBrief(BaseModel):
@@ -42,8 +43,13 @@ class SessionResponse(BaseModel):
     source: SessionSource
     notes: Optional[str] = None
     created_at: datetime
+    deleted_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+class TrashedSessionResponse(SessionResponse):
+    purges_at: datetime
 
 
 class ConflictResponse(BaseModel):

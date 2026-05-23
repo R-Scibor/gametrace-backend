@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     flower_basic_auth: str = ""
 
     session_token_expire_days: int = 30
+    trash_retention_days: int = 7
 
     app_version: str = "dev"
     git_sha: str = "dev"
