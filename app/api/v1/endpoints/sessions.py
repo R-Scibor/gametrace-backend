@@ -239,3 +239,44 @@ async def delete_session(
     session.deleted_at = datetime.now(timezone.utc)
     await db.commit()
 
+
+@router.post("/{session_id}/restore", response_model=SessionResponse)
+async def restore_session(
+    session_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Restore a trashed session. Status is preserved (ERROR stays ERROR).
+    For COMPLETED sessions, overlap is re-validated; returns 409 on conflict.
+    """
+    result = await db.execute(
+        select(GameSession)
+        .options(selectinload(GameSession.game))
+        .where(
+            GameSession.id == session_id,
+            GameSession.user_id == user.discord_id,
+        )
+    )
+    session = result.scalar_one_or_none()
+    if session is None or session.deleted_at is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    if session.status == SessionStatus.COMPLETED and session.end_time is not None:
+        conflict = await _check_overlap(
+            db, user.discord_id, session.start_time, session.end_time, exclude_id=session_id
+        )
+        if conflict is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "detail": "Session overlaps with an existing session",
+                    "conflicting_session": SessionResponse.model_validate(conflict).model_dump(mode="json"),
+                },
+            )
+
+    session.deleted_at = None
+    await db.commit()
+    await db.refresh(session)
+    return session
+
