@@ -102,61 +102,6 @@ async def test_cannot_edit_ongoing_session(authed_client, db, user):
     assert resp.status_code == 403
 
 
-# ── Discard (ERROR → soft-delete) ────────────────────────────────────────────
-
-async def test_discard_error_session(authed_client, db, user):
-    game = await make_game(db)
-    session = await make_session(
-        db, user.discord_id, game.id,
-        dt(hours_ago=3), dt(hours_ago=1),
-        status=SessionStatus.ERROR,
-    )
-
-    resp = await authed_client.patch(
-        f"/api/v1/sessions/{session.id}",
-        json={"discard": True},
-    )
-
-    assert resp.status_code == 200
-
-    # Subsequent GET should return 404
-    get_resp = await authed_client.get(f"/api/v1/sessions/{session.id}")
-    assert get_resp.status_code == 404
-
-
-async def test_cannot_discard_completed_session(authed_client, db, user):
-    game = await make_game(db)
-    session = await make_session(
-        db, user.discord_id, game.id,
-        dt(hours_ago=2), dt(hours_ago=1),
-    )
-
-    resp = await authed_client.patch(
-        f"/api/v1/sessions/{session.id}",
-        json={"discard": True},
-    )
-
-    assert resp.status_code == 422
-
-
-async def test_cannot_discard_ongoing_session(authed_client, db, user):
-    game = await make_game(db)
-    session = await make_session(
-        db, user.discord_id, game.id,
-        dt(hours_ago=1),
-        status=SessionStatus.ONGOING,
-        source=SessionSource.BOT,
-    )
-
-    resp = await authed_client.patch(
-        f"/api/v1/sessions/{session.id}",
-        json={"discard": True},
-    )
-
-    # ONGOING guard fires before discard check
-    assert resp.status_code == 403
-
-
 # ── Auth / ownership ──────────────────────────────────────────────────────────
 
 async def test_cannot_patch_other_users_session(authed_client, db):
@@ -189,3 +134,19 @@ async def test_patch_soft_deleted_returns_404(authed_client, db, user):
     )
 
     assert resp.status_code == 404
+
+
+async def test_patch_with_discard_field_rejected_as_unknown(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=3), dt(hours_ago=1),
+        status=SessionStatus.ERROR,
+    )
+
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"discard": True},
+    )
+
+    assert resp.status_code == 422

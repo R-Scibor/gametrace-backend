@@ -167,18 +167,6 @@ async def patch_session(
             detail="Cannot edit an ONGOING session — managed by bot",
         )
 
-    # Discard: only for ERROR sessions
-    if payload.discard:
-        if session.status != SessionStatus.ERROR:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Only ERROR sessions can be discarded",
-            )
-        session.deleted_at = datetime.now(timezone.utc)
-        await db.commit()
-        await db.refresh(session)
-        return session
-
     # Update end_time → fixes ERROR or updates COMPLETED
     if payload.end_time is not None:
         if payload.end_time <= session.start_time:
