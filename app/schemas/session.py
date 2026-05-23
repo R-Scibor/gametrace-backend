@@ -43,6 +43,7 @@ class SessionResponse(BaseModel):
     source: SessionSource
     notes: Optional[str] = None
     created_at: datetime
+    deleted_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

@@ -65,3 +65,16 @@ async def test_delete_other_users_session_returns_404(authed_client, db):
 
     resp = await authed_client.delete(f"/api/v1/sessions/{session.id}")
     assert resp.status_code == 404
+
+
+async def test_session_response_includes_deleted_at_field(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=3), dt(hours_ago=1),
+    )
+
+    resp = await authed_client.get(f"/api/v1/sessions/{session.id}")
+    assert resp.status_code == 200
+    assert "deleted_at" in resp.json()
+    assert resp.json()["deleted_at"] is None
