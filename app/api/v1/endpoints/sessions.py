@@ -238,7 +238,7 @@ async def delete_session(
 
     if session.status == SessionStatus.ONGOING:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot delete an ONGOING session — managed by bot",
         )
 

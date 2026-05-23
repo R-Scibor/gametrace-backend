@@ -40,7 +40,7 @@ async def test_cannot_delete_ongoing_session(authed_client, db, user):
     )
 
     resp = await authed_client.delete(f"/api/v1/sessions/{session.id}")
-    assert resp.status_code == 422
+    assert resp.status_code == 403
 
 
 async def test_delete_already_trashed_returns_404(authed_client, db, user):
