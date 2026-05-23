@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_, select
@@ -6,11 +6,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.v1.endpoints.auth import get_current_user
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.game import Game
 from app.models.session import GameSession, SessionSource, SessionStatus
 from app.models.user import User
-from app.schemas.session import ConflictResponse, SessionCreate, SessionPatch, SessionResponse
+from app.schemas.session import (
+    ConflictResponse,
+    SessionCreate,
+    SessionPatch,
+    SessionResponse,
+    TrashedSessionResponse,
+)
 
 router = APIRouter()
 
@@ -70,6 +77,35 @@ async def list_sessions(
         stmt = stmt.where(GameSession.status.in_(status_filter))
     result = await db.execute(stmt)
     return result.scalars().all()
+
+
+@router.get("/trash", response_model=list[TrashedSessionResponse])
+async def list_trashed_sessions(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List the caller's trashed sessions, newest first, with purges_at countdown."""
+    result = await db.execute(
+        select(GameSession)
+        .options(selectinload(GameSession.game))
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.deleted_at.is_not(None),
+        )
+        .order_by(GameSession.deleted_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    rows = result.scalars().all()
+    retention = timedelta(days=settings.trash_retention_days)
+    return [
+        TrashedSessionResponse.model_validate(
+            {**SessionResponse.model_validate(s).model_dump(), "purges_at": s.deleted_at + retention}
+        )
+        for s in rows
+    ]
 
 
 @router.get("/{session_id}", response_model=SessionResponse)

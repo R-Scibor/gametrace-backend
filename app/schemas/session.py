@@ -48,6 +48,10 @@ class SessionResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TrashedSessionResponse(SessionResponse):
+    purges_at: datetime
+
+
 class ConflictResponse(BaseModel):
     detail: str
     conflicting_session: SessionResponse

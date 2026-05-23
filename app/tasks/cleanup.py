@@ -21,13 +21,12 @@ from app.models.user import UserDevice
 
 logger = logging.getLogger(__name__)
 
-SESSION_GRACE_DAYS = 7
 DEVICE_STALE_DAYS = 30 * 6
 
 
 async def _run_cleanup(db: AsyncSession) -> tuple[int, int]:
     now = datetime.now(timezone.utc)
-    session_cutoff = now - timedelta(days=SESSION_GRACE_DAYS)
+    session_cutoff = now - timedelta(days=settings.trash_retention_days)
     device_cutoff = now - timedelta(days=DEVICE_STALE_DAYS)
 
     sessions_deleted = (
