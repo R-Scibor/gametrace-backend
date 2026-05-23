@@ -208,3 +208,40 @@ async def patch_session(
     return session
 
 
+@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_session(
+    session_id: int,
+    hard: bool = Query(default=False),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Soft-delete a session (sets deleted_at). With ?hard=true, permanently
+    removes a session that is already trashed. ONGOING sessions cannot be
+    soft-deleted (bot-managed).
+    """
+    result = await db.execute(
+        select(GameSession).where(
+            GameSession.id == session_id,
+            GameSession.user_id == user.discord_id,
+        )
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    if hard:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Not yet implemented")
+
+    if session.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    if session.status == SessionStatus.ONGOING:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot delete an ONGOING session — managed by bot",
+        )
+
+    session.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
+
