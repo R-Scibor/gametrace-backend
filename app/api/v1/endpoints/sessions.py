@@ -218,7 +218,14 @@ async def delete_session(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     if hard:
-        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Not yet implemented")
+        if session.deleted_at is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Session must be trashed before hard delete",
+            )
+        await db.delete(session)
+        await db.commit()
+        return
 
     if session.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
