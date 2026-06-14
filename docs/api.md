@@ -4,11 +4,32 @@ All endpoints are prefixed `/api/v1/`. Auth uses `Authorization: Bearer <token>`
 
 For full request/response schemas, hit the FastAPI interactive docs at `http://localhost:8010/docs` once the stack is running.
 
+## HTTP status reference
+
+Grouped by code — see endpoint sections below for path-specific detail. Authed routes return `401` when the bearer token is missing, unknown, or past `expires_at` (expired tokens are deleted on first use).
+
+| Code | When |
+|---|---|
+| `200` | Successful read or update (`GET`, `PATCH`, `PUT`, `POST /auth/login`, `POST /sessions/{id}/restore`). `GET /games/resolve` also returns `200` with body `null` on miss. |
+| `201` | `POST /sessions` — manual session created. |
+| `204` | Successful delete with no body (`POST /auth/logout`, `DELETE /sessions/{id}`, `DELETE /user/preferences/{game_id}`, `DELETE /notifications/register-token`, `POST /games/{id}/merge/{target_id}`). |
+| `400` | Client input rejected — e.g. self-merge (`POST /games/{id}/merge/{target_id}`), unsupported cover extension or invalid Base64 (`PUT /games/{id}/cover`), empty audio upload (`POST /voice/transcribe`). |
+| `401` | Invalid or expired bearer token (`get_current_user`), or unknown token on `POST /auth/logout`. |
+| `403` | Bot-managed row — `PATCH` or soft `DELETE` on an `ONGOING` session. |
+| `404` | Resource not found or not owned by the caller — user not registered (`POST /auth/login`), session/game missing, game missing on preference upsert. Soft-deleting an already-trashed session also returns `404` (same as not found). |
+| `409` | Session time overlap — `POST /sessions`, `PATCH /sessions/{id}`, `POST /sessions/{id}/restore` (body: `{detail: {detail, conflicting_session}}`). |
+| `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone on `PUT /profile/settings` (Pydantic). |
+| `500` | Unhandled server error (global handler in `app/main.py`). |
+| `502` | Upstream voice failure — OpenAI Whisper or Vertex Gemini error (`POST /voice/transcribe`). |
+| `503` | Voice pipeline not configured — `OPENAI_API_KEY` or `GCP_PROJECT` unset (`POST /voice/transcribe`). |
+
+`GET /health` and `GET /api/v1/health` always return `200`; bot offline or Redis loss is reflected in the JSON payload (`bot.status`: `offline` / `unknown`), not the HTTP status.
+
 ## Auth
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/auth/login` | Login by Discord username (user must be pre-registered via `/login` slash command). Issues a session token. Returns `404` with "Run /login on Discord first." if the user isn't registered. |
+| `POST` | `/api/v1/auth/login` | Login by Discord username (user must be pre-registered via `/login` slash command). Issues a session token. Returns `404` with "User not found. Run /login on Discord first." if the user isn't registered. Accepts optional `timezone` (IANA); non-`UTC` values are persisted on the user row. |
 | `POST` | `/api/v1/auth/logout` | Invalidate the current bearer token server-side. |
 
 Tokens expire after `SESSION_TOKEN_EXPIRE_DAYS` of inactivity (sliding window — every authenticated request bumps `expires_at`). On expiry the token row is deleted and subsequent calls return `401`.
@@ -33,7 +54,7 @@ Tokens expire after `SESSION_TOKEN_EXPIRE_DAYS` of inactivity (sliding window �
 | `DELETE` | `/api/v1/sessions/{id}` | Soft-delete a session. Sets `deleted_at = NOW()`. Allowed on `COMPLETED` and `ERROR`. `403` on `ONGOING` (bot-managed). `404` if already trashed or not found. Returns `204 No Content`. |
 | `DELETE` | `/api/v1/sessions/{id}?hard=true` | Permanently remove a trashed session, bypassing the 7-day sweeper. The session must already be soft-deleted — `422` otherwise. Returns `204 No Content`. |
 
-Session state machine — see the README's "State machine" section.
+Session state machine — see the [README session state machine](../README.md#session-state-machine).
 
 ## Games
 
@@ -59,13 +80,28 @@ Session state machine — see the README's "State machine" section.
 | `GET` | `/api/v1/stats/companies` | Top developers or publishers by total seconds played. `?role=developer\|publisher` (required), `?limit=N` (1–50, default 10). Returns `name`, `total_seconds`, `game_count`. Tie-break: name asc. |
 | `GET` | `/api/v1/stats/release-years` | Total seconds bucketed by decade of `games.first_release_date` (e.g. `"2010s"`). Games with NULL release date are excluded. Sorted asc. |
 
-All stats endpoints exclude soft-deleted sessions, `ERROR` sessions, and `is_ignored` games. Time-based endpoints (`/heatmap`, `/streak`, `/weekly-trend`) include `ONGOING` sessions using `now() - start_time` for duration.
+All stats endpoints exclude soft-deleted sessions, `ERROR` sessions, and `is_ignored` games. `/stats/summary` and `/stats/dashboard` totals count only `COMPLETED` sessions (`duration_seconds`); dashboard also returns the active `ONGOING` session separately. Time-based and tag endpoints (`/heatmap`, `/streak`, `/weekly-trend`, `/genres`, `/themes`, `/companies`, `/release-years`) include `ONGOING` sessions using `now() - start_time` for duration.
 
 ## Voice
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/voice/transcribe` | Multipart audio upload (m4a/wav/mp3/ogg). Pipeline: OpenAI Whisper (STT) → Gemini Flash via Vertex AI (transcript → `{game, date, start_time, end_time, duration_minutes}`). Unknown fields come back as `null`. The user always confirms before saving — this endpoint only suggests values. `503` if `OPENAI_API_KEY` or `GCP_PROJECT` is unset. |
+| `POST` | `/api/v1/voice/transcribe` | Multipart audio upload (m4a/wav/mp3/ogg). See pipeline below. Unknown fields come back as `null`. The user always confirms before saving — this endpoint only suggests values. After transcription, the frontend typically calls `GET /games/resolve?name=` to map the spoken game name to a library entry. `503` if `OPENAI_API_KEY` or `GCP_PROJECT` is unset. |
+
+### Transcribe pipeline
+
+```
+audio upload
+  → OpenAI Whisper (verbose_json — transcript + detected language)
+  → build context blocks (app/services/voice_context.py):
+      • datetime anchor in users.timezone ("wczoraj", "an hour ago", "just finished" → concrete times)
+      • top library candidates via rapidfuzz.partial_ratio over the user's game history
+      • Whisper language hint
+  → Gemini Flash via Vertex AI (structured output, response_schema)
+  → {game, date, start_time, end_time, duration_minutes, raw_transcript}
+```
+
+Gemini uses `response_mime_type="application/json"` + `response_schema` — no markdown-fence stripping. Invalid `users.timezone` values fall back to `DEFAULT_TIMEZONE` (env, default `Europe/Warsaw`) with a warning log; users still at the DB default `UTC` also use `DEFAULT_TIMEZONE` for the voice datetime anchor.
 
 ## Preferences
 

@@ -22,10 +22,6 @@ A bundle of items that don't block any user flow today but should land before th
 ### Auth Performance: Token Debouncing
 **New (Audit 2026-05-14):** The `get_current_user` dependency currently performs a database commit on every single request to update activity timestamps. This is a significant performance bottleneck. We should implement "debouncing" — only updating the database if the token's `last_active` is older than 5-10 minutes.
 
-## Pre-release hardening
-
-A bundle of items that don't block any user flow today but should land before the API is exposed publicly (i.e. before sharing with users outside the homelab network).
-
 ### Request body size cap
 FastAPI/Starlette has no default body size limit. A single 5 GB upload to `/voice/transcribe` could fill the API container's tempdir. Fix is one line in the reverse proxy (`client_max_body_size 10m;` in nginx) — outer ring, zero application code. Per-endpoint inner limits can be tuned later if needed.
 
@@ -51,8 +47,10 @@ Why this is deferred: best-practice rather than blocker. Worth doing before publ
 
 ## Voice pipeline
 
+**Shipped:** Context-aware extraction — datetime anchor in `users.timezone`, library candidate matching via `rapidfuzz.partial_ratio`, Whisper language hint, Gemini structured output (`response_schema`). See `app/services/voice_context.py` and the Voice section in [api.md](api.md).
+
 ### Regex fallback when Vertex AI is unavailable
-Today the voice pipeline is OpenAI Whisper (STT) → Gemini Flash via Vertex AI (text→JSON). If Vertex is down or the GCP project hits a quota, the whole feature breaks. A regex-based extractor as fallback would handle the common cases ("I played Hades for two hours yesterday evening") without the model. Lower accuracy, but graceful degradation beats a hard error.
+If Vertex is down or the GCP project hits a quota, the whole feature still breaks — the context blocks above don't help without the model. A regex-based extractor as fallback would handle the common cases ("I played Hades for two hours yesterday evening") without Gemini. Lower accuracy, but graceful degradation beats a hard error.
 
 ### Bring-your-own-key
 Let users plug in their own GCP project or OpenAI key, stored encrypted in the `users` table. Removes the per-request cost from the host, removes the rate-limit pressure, and is an obvious requirement if GameTrace ever leaves homelab scope.
@@ -66,7 +64,7 @@ Current Celery Beat fires the weekly digest on Monday 09:00 UTC for everyone. Us
 
 ## Scale
 
-When `game_sessions` crosses ~10 million rows or `/stats/summary` p95 starts climbing past 100 ms despite the existing indexes, the next move is range-partitioning by month using native Postgres partitioning. No data loss, no rollups, partition pruning makes time-windowed queries trivial. Full design notes live in [`internal/scaling_for_released_app.md`](internal/scaling_for_released_app.md). Not relevant at homelab scale.
+When `game_sessions` crosses ~10 million rows or `/stats/summary` p95 starts climbing past 100 ms despite the existing indexes, the next move is range-partitioning by month using native Postgres partitioning. No data loss, no rollups, partition pruning makes time-windowed queries trivial. Not relevant at homelab scale.
 
 ## Session data quality
 

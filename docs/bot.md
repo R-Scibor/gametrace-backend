@@ -13,7 +13,7 @@ Source: `app/bot/main.py`, `app/bot/session_manager.py`, `app/bot/self_healing.p
 
 ## Intents and prerequisites
 
-Required Discord intents (set in `app/bot/main.py:18`):
+Required Discord intents (set in `app/bot/main.py` before client init):
 
 - `presences` — needed to receive `on_presence_update`.
 - `members` — needed for guild member lookups during Self-Healing.
@@ -24,7 +24,7 @@ The OAuth2 invite URL must include both `bot` and `applications.commands` scopes
 
 ## `/login` slash command
 
-`app/bot/main.py:49`. Reads `discord_id` and `username` from the interaction context (no user input — Discord supplies them) and upserts a `users` row:
+`login_command` in `app/bot/main.py`. Reads `discord_id` and `username` from the interaction context (no user input — Discord supplies them) and upserts a `users` row:
 
 - New user → INSERT.
 - Existing user → sync the `username` field in case the user renamed on Discord; everything else stays.
@@ -33,7 +33,7 @@ The reply is ephemeral (only the invoking user sees it). After running `/login` 
 
 ## Presence tracking
 
-`on_presence_update` fires whenever any cached member changes activity. The handler at `app/bot/main.py:73` does:
+`on_presence_update` fires whenever any cached member changes activity. The `on_presence_update` handler does:
 
 1. **Filter:** ignore bots; ignore presence changes that didn't change the playing-game name.
 2. **Gate:** look up the user in `users`. If they haven't run `/login`, return — the bot is "blind" to non-registered users.
@@ -54,6 +54,14 @@ Only one `ONGOING` session per user is allowed at a time — this is invariant t
 The bot writes session and stub-game rows immediately, regardless of any user preference (`is_ignored` filtering happens at the API layer, not the bot). It then fires a Celery task `enrich_game_{game_id}` to fetch metadata. The task ID is stable so duplicate enrichments for the same game collapse in Redis. Enrichment failure never blocks session writes — the worst case is a `Game` row with `enrichment_status=PENDING` indefinitely, which is fine.
 
 Game-name matching for enrichment is described in [game-matching.md](game-matching.md).
+
+## Heartbeat and liveness
+
+On `on_ready`, the bot writes `bot:started_at` to Redis (Unix timestamp). A background loop (`@tasks.loop(seconds=30)`) refreshes `bot:heartbeat` with the current timestamp and a 90s TTL.
+
+`GET /api/v1/health` reads these keys to report `bot.status` (`online` / `offline` / `unknown`), `bot.uptime_seconds`, and `bot.last_heartbeat_seconds_ago`. If Redis is unreachable, health fails soft — `bot.status` becomes `"unknown"` instead of erroring. See [api.md](api.md#health).
+
+**Docker Compose note:** the `bot` service does not declare `depends_on: redis` (unlike `api`). Redis usually wins the race on `docker compose up`, but if the bot starts before Redis is ready, the first `bot:started_at` write and a few heartbeat ticks may fail — the loops log a warning and retry every 30s. Until a heartbeat lands, `GET /api/v1/health` reports `bot.status: "offline"`. Session writes are unaffected (Postgres only).
 
 ## Self-Healing
 

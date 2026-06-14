@@ -66,7 +66,11 @@ Game catalog. Created as stubs by the bot, enriched asynchronously by the Celery
 | `developers` | `JSONB` | Array of company names where IGDB `involved_companies.developer = true`. A company can also appear in `publishers`. Defaults to `'[]'`. GIN-indexed. |
 | `publishers` | `JSONB` | Array of company names where IGDB `involved_companies.publisher = true`. Defaults to `'[]'`. GIN-indexed. |
 
-Metadata fields (`genres`, `themes`, `developers`, `publishers`, `first_release_date`) are populated by the IGDB enrichment path only. Steam fallback leaves them at defaults. The `cover_source=CUSTOM` rule applies: the enrichment worker will not overwrite metadata on a CUSTOM-cover game (treats the row as user-owned). Existing ENRICHED rows can be re-queued via the manual `tasks.backfill_metadata` Celery task.
+Metadata fields (`genres`, `themes`, `developers`, `publishers`, `first_release_date`) are populated by the IGDB enrichment path only. Steam fallback leaves them at defaults. The `cover_source=CUSTOM` rule applies: the enrichment worker will not overwrite metadata on a CUSTOM-cover game (treats the row as user-owned). Existing ENRICHED rows can be re-queued via the manual `tasks.backfill_metadata` Celery task (not on Beat schedule):
+
+```bash
+docker compose exec worker celery -A app.core.celery_app call tasks.backfill_metadata
+```
 
 ### `game_aliases`
 
@@ -112,9 +116,9 @@ The core table. State machine described in the [README](../README.md#session-sta
 **Invariants:**
 
 - Only one `ONGOING` session per user at any time. Enforced by bot logic, not a DB constraint.
-- `ERROR` sessions are excluded from all aggregates (`/stats/summary`, `/stats/dashboard`, weekly report) until resolved.
+- `ERROR` sessions are excluded from all aggregates (`/stats/*`, weekly report) until resolved.
 - `ONGOING` sessions cannot be soft-deleted directly — only the bot owns those rows.
-- `cover_source=CUSTOM` overrides `enrichment_status` for the cover field — the worker skips `cover_image_url` updates on those games.
+- `cover_source=CUSTOM` — the enrichment worker skips `cover_image_url` and metadata overwrites on those games (user-owned row).
 
 ### `user_game_preferences`
 
@@ -155,3 +159,10 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 | `0005_game_sessions_deleted_at_partial_index.py` | Partial index for the hard-delete sweeper |
 | `0006_drop_daily_user_stats.py` | Removed an earlier rollup table — sessions are kept raw indefinitely. Range-partitioning by month is on the [roadmap](roadmap.md#scale) for when the table grows past ~10M rows. |
 | `0007_game_metadata.py` | Adds `first_release_date` + `genres`/`themes`/`developers`/`publishers` JSONB columns to `games` with GIN indexes. |
+
+## Scheduled tasks (Celery Beat)
+
+| Task | Schedule (UTC) | Purpose |
+|---|---|---|
+| `tasks.weekly_report` | Monday 09:00 | FCM digest for users with `weekly_report_enabled` and `push_enabled` |
+| `tasks.hard_delete_sweep` | Daily 03:30 | Purge trashed sessions older than `TRASH_RETENTION_DAYS` (default 7); purge FCM tokens idle 6+ months |

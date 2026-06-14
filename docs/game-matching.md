@@ -124,7 +124,7 @@ Cover URLs are normalized: `//…` → `https://…`, `/t_thumb/` → `/t_cover_
 
 ## Step 5 — Steam fallback
 
-If IGDB confidence is below 0.85, the Steam Store Search API is queried with the **original** (unsanitized) name. An exact case-insensitive match against the returned results gives 100% confidence. On a hit: `ENRICHED` with `external_api_id = Steam AppID` and cover `library_600x900.jpg`.
+If IGDB confidence is below 0.85, the Steam Store Search API is queried with the **sanitized** name (same `_sanitize()` as IGDB). Each returned result is scored with `_confidence()`; the best candidate must reach `CONFIDENCE_THRESHOLD` (0.85). On a hit: `ENRICHED` with `external_api_id = Steam AppID` and cover `library_600x900.jpg`.
 
 ## Threshold and constants
 

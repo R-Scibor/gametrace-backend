@@ -19,10 +19,14 @@ Distributed game-time tracking system. A Discord bot detects game activity via `
 ```bash
 cp example.env .env
 # fill in .env values — see example.env for the full list
+mkdir -p credentials
+# place gcp-sa.json (Vertex ADC) and firebase-cred.json (FCM) — see example.env
 docker compose up
 ```
 
 API at `http://localhost:8010`. Interactive Swagger docs at `http://localhost:8010/docs`.
+
+**Required secrets:** `DISCORD_BOT_TOKEN`, `IGDB_CLIENT_ID` / `IGDB_CLIENT_SECRET` (Twitch dev console). **Voice pipeline** additionally needs `OPENAI_API_KEY`, `GCP_PROJECT`, and a mounted GCP service-account JSON. **Push notifications** need `credentials/firebase-cred.json`. Features with missing config return `503` (voice) or silently skip (FCM, Sentry).
 
 ## Services
 
@@ -48,6 +52,8 @@ flower        Celery monitor (port 5555, internal)
 All endpoints are prefixed `/api/v1/`. Auth is `Authorization: Bearer <token>`. Token expires after 30 days of inactivity (sliding window — every authed call bumps the expiry).
 
 Full endpoint reference: **[docs/api.md](docs/api.md)**. Live schemas: `http://localhost:8010/docs`.
+
+Dashboard polling uses `GET /api/v1/stats/dashboard` (tiles + `pending_errors`); the analytical breakdown is `GET /api/v1/stats/summary?days=N`. Additional analytics endpoints (`heatmap`, `streak`, `weekly-trend`, `genres`, `themes`, `companies`, `release-years`) are documented in `docs/api.md`. Bot liveness: `GET /api/v1/health`.
 
 ## Session state machine
 
@@ -88,6 +94,7 @@ Two optional integrations, both off by default:
 
 - **Sentry** — set `SENTRY_DSN` in `.env` and api / bot / worker / beat will start reporting unhandled exceptions, tagged with `component={api,bot,celery}`. Bearer tokens in `Authorization` headers and `?token=` query strings are scrubbed before send. Empty DSN keeps the SDK uninitialised — zero overhead.
 - **Flower** — Celery queue monitor on port 5555 inside the docker network. Set `FLOWER_BASIC_AUTH=user:pass` in `.env` to require auth. Flower has no read-only mode, so do not expose it publicly without auth — route through Nginx Proxy Manager and gate on the LAN if you want a browser view.
+- **Health** — `GET /health` for container liveness; `GET /api/v1/health` for version metadata and bot online/offline status (Redis heartbeat). Optional build args `GIT_SHA`, `BUILD_TIME`, `APP_VERSION` in `docker-compose.yml` populate version fields.
 
 ## Discord Developer Portal prerequisites
 
@@ -130,7 +137,9 @@ High-level — see [docs/roadmap.md](docs/roadmap.md) for full context.
 - **Timezone-aware weekly reports** — hourly fan-out so each user gets the digest at their local Monday 09:00, not UTC's.
 - **Scale: range-partition `game_sessions`** by month when the table crosses ~10M rows or `/stats/summary` slows down.
 - **Bot flicker debounce** — coalesce `ONGOING → COMPLETED → ONGOING` transitions shorter than ~2 minutes into a single continuous session.
+- **Short-session threshold** — drop bot sessions under ~3 minutes at write time instead of storing noise.
+- **Source flip on user edit** — PATCH on a BOT session should set `source=MANUAL` once times are user-attested.
 
 ## License
 
-MIT — © 2026 R-Scibor
+[MIT](LICENSE) — © 2026 R-Scibor
