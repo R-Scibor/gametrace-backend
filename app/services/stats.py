@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.game import Game, UserGamePreference
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
+from app.services.session_visibility import visible_session
 from app.schemas.stats import (
     CompaniesResponse,
     CompanyEntry,
@@ -59,7 +60,7 @@ async def summary_for_user(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.status == SessionStatus.COMPLETED,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
             GameSession.start_time >= window_start,
             or_(
                 UserGamePreference.is_ignored.is_(None),
@@ -88,7 +89,7 @@ async def summary_for_user(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.status == SessionStatus.ERROR,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
         )
         .order_by(GameSession.start_time.desc())
     )
@@ -159,7 +160,7 @@ async def heatmap_for_user(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.status != SessionStatus.ERROR,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
             GameSession.start_time >= window_start,
             or_(
                 UserGamePreference.is_ignored.is_(None),
@@ -252,7 +253,7 @@ async def streak_for_user(db: AsyncSession, user: User) -> StreakResponse:
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.status != SessionStatus.ERROR,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
             or_(
                 UserGamePreference.is_ignored.is_(None),
                 UserGamePreference.is_ignored == False,  # noqa: E712
@@ -314,7 +315,7 @@ async def weekly_trend_for_user(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.status != SessionStatus.ERROR,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
             GameSession.start_time >= oldest_monday_utc,
             or_(
                 UserGamePreference.is_ignored.is_(None),
@@ -371,7 +372,7 @@ async def _jsonb_breakdown(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.status != SessionStatus.ERROR,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
             or_(
                 UserGamePreference.is_ignored.is_(None),
                 UserGamePreference.is_ignored == False,  # noqa: E712
@@ -434,7 +435,7 @@ async def companies_for_user(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.status != SessionStatus.ERROR,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
             or_(
                 UserGamePreference.is_ignored.is_(None),
                 UserGamePreference.is_ignored == False,  # noqa: E712
@@ -491,7 +492,7 @@ async def release_years_for_user(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.status != SessionStatus.ERROR,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
             Game.first_release_date.is_not(None),
             or_(
                 UserGamePreference.is_ignored.is_(None),

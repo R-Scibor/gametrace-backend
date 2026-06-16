@@ -23,6 +23,21 @@ async def test_summary_for_user_excludes_ignored_game(db, user):
     assert [entry.game_name for entry in result.per_game] == ["Normal"]
 
 
+async def test_summary_excludes_flicker_session(db, user):
+    """A flicker session must not contribute to totals."""
+    game = await make_game(db)
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=5), dt(hours_ago=4), is_flicker=True
+    )
+
+    result = await summary_for_user(db, user, days=7)
+
+    # Only the non-flicker session (1 hour) should be counted.
+    assert result.total_seconds == 3600
+    assert len(result.per_game) == 1
+
+
 async def test_summary_for_user_includes_pending_errors(db, user):
     game = await make_game(db)
     await make_session(

@@ -159,6 +159,23 @@ async def test_patch_trashed_session_skips_overlap_check(authed_client, db, user
     assert resp.status_code == 200  # no overlap check while trashed
 
 
+async def test_patch_flicker_session_returns_404(authed_client, db, user):
+    """PATCH /sessions/{id} on a flicker row returns 404."""
+    game = await make_game(db)
+    flicker = await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=3), dt(hours_ago=1),
+        is_flicker=True,
+    )
+
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{flicker.id}",
+        json={"end_time": dt(hours_ago=0.5).isoformat()},
+    )
+
+    assert resp.status_code == 404
+
+
 async def test_patch_with_discard_field_rejected_as_unknown(authed_client, db, user):
     game = await make_game(db)
     session = await make_session(
