@@ -18,6 +18,7 @@ from app.schemas.session import (
     SessionResponse,
     TrashedSessionResponse,
 )
+from app.services.session_visibility import visible_session
 
 router = APIRouter()
 
@@ -34,7 +35,7 @@ async def _check_overlap(
         .options(selectinload(GameSession.game))
         .where(
             GameSession.user_id == user_id,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
             GameSession.status.in_(
                 [SessionStatus.ONGOING, SessionStatus.COMPLETED]
             ),
@@ -67,7 +68,7 @@ async def list_sessions(
         .options(selectinload(GameSession.game))
         .where(
             GameSession.user_id == user.discord_id,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
         )
         .order_by(GameSession.start_time.desc())
         .offset(skip)
@@ -120,7 +121,7 @@ async def get_session(
         .where(GameSession.id == session_id, GameSession.user_id == user.discord_id)
     )
     session = result.scalar_one_or_none()
-    if session is None or session.deleted_at is not None:
+    if session is None or session.deleted_at is not None or session.is_flicker:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     return session
 
@@ -192,7 +193,7 @@ async def patch_session(
         .where(GameSession.id == session_id, GameSession.user_id == user.discord_id)
     )
     session = result.scalar_one_or_none()
-    if session is None:
+    if session is None or session.is_flicker:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     if session.status == SessionStatus.ONGOING:
@@ -250,7 +251,7 @@ async def delete_session(
         )
     )
     session = result.scalar_one_or_none()
-    if session is None:
+    if session is None or session.is_flicker:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
     if hard:

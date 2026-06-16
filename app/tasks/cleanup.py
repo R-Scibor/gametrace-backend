@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.celery_app import celery_app
 from app.core.config import settings
-from app.models.session import GameSession
+from app.models.session import GameSession, SessionStatus
 from app.models.user import UserDevice
 
 logger = logging.getLogger(__name__)
@@ -68,3 +68,38 @@ async def _run_with_engine() -> tuple[int, int]:
 @celery_app.task(name="tasks.hard_delete_sweep")
 def hard_delete_sweep() -> tuple[int, int]:
     return asyncio.run(_run_with_engine())
+
+
+async def _run_flicker_purge(db: AsyncSession) -> int:
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        seconds=settings.session_flicker_gc_margin_seconds
+    )
+    deleted = (
+        await db.execute(
+            delete(GameSession).where(
+                GameSession.is_flicker.is_(True),
+                GameSession.status == SessionStatus.COMPLETED,
+                GameSession.end_time < cutoff,
+            )
+        )
+    ).rowcount or 0
+    await db.commit()
+    logger.info("purge_flicker_sessions: deleted=%d", deleted)
+    return deleted
+
+
+async def _run_flicker_with_engine() -> int:
+    engine = create_async_engine(settings.database_url, echo=False)
+    SessionLocal = async_sessionmaker(
+        bind=engine, class_=AsyncSession, expire_on_commit=False
+    )
+    try:
+        async with SessionLocal() as db:
+            return await _run_flicker_purge(db)
+    finally:
+        await engine.dispose()
+
+
+@celery_app.task(name="tasks.purge_flicker_sessions")
+def purge_flicker_sessions() -> int:
+    return asyncio.run(_run_flicker_with_engine())

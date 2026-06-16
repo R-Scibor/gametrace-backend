@@ -24,6 +24,7 @@ from app.schemas.stats import (
     ThemesResponse,
     WeeklyTrendResponse,
 )
+from app.services.session_visibility import visible_session
 from app.services.stats import (
     companies_for_user,
     genres_for_user,
@@ -173,7 +174,7 @@ async def get_dashboard(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.status == SessionStatus.COMPLETED,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
             GameSession.start_time >= window_30d,
             or_(
                 UserGamePreference.is_ignored.is_(None),
@@ -197,7 +198,7 @@ async def get_dashboard(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.status == SessionStatus.ONGOING,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
         )
         .order_by(GameSession.start_time.desc())
         .limit(1)
@@ -223,7 +224,7 @@ async def get_dashboard(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.status == SessionStatus.ERROR,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
         )
         .order_by(GameSession.start_time.desc())
     )

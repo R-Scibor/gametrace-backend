@@ -49,6 +49,18 @@ The reply is ephemeral (only the invoking user sees it). After running `/login` 
 
 Only one `ONGOING` session per user is allowed at a time — this is invariant the handler relies on.
 
+### Flicker suppression and stitch-resume
+
+Discord rich-presence is occasionally flaky: a single continuous play session can fragment into multiple short `ONGOING → COMPLETED` transitions if presence drops for a few seconds. The bot handles this in real time — no extra process, no background scan.
+
+**Suppress at close:** when `complete_session` finishes, if the session is `source=BOT` and `duration_seconds < SESSION_SHORT_FLICKER_SECONDS` (default 180s), the row is flagged `is_flicker=true`. The session is kept in the database (history preserved) but excluded at every SELECT layer — it is invisible to the API, stats, games list, voice context candidates, and overlap validation. `source=MANUAL` sessions are never auto-flagged, regardless of duration.
+
+**Stitch on resume:** when `start_session` would create a new row for game G, the bot first looks back for the most recent `source=BOT, status=COMPLETED` session for that game. If its `end_time` is within `SESSION_STITCH_WINDOW_SECONDS` (default 180s), the bot reopens that row instead of inserting a new one: `status → ONGOING`, `end_time → NULL`, `duration_seconds → NULL`, `is_flicker → false`. The session continues seamlessly; when it finally closes, `duration_seconds` spans the entire range including the dropout gap.
+
+**Config invariant:** `SESSION_FLICKER_GC_MARGIN_SECONDS` (default 86400s) must exceed `SESSION_STITCH_WINDOW_SECONDS` at startup. This is enforced at boot and guarantees the daily GC task (`tasks.purge_flicker_sessions`) never removes a row that could still be a stitch target.
+
+**Self-Healing is unaffected.** Self-Healing's ERROR path sets no clean `end_time` and never triggers the stitch check. ERROR sessions remain unaffected by flicker logic.
+
 ### Write-then-enrich
 
 The bot writes session and stub-game rows immediately, regardless of any user preference (`is_ignored` filtering happens at the API layer, not the bot). It then fires a Celery task `enrich_game_{game_id}` to fetch metadata. The task ID is stable so duplicate enrichments for the same game collapse in Redis. Enrichment failure never blocks session writes — the worst case is a `Game` row with `enrichment_status=PENDING` indefinitely, which is fine.
@@ -103,4 +115,4 @@ The 12h ceiling is intentionally generous — it's a backstop for "user fell asl
 | Database briefly unavailable | The handler raises and `discord.py` swallows it — the missed presence change is lost. Next restart's Self-Healing catches stuck `ONGOING` rows. |
 | Celery / Redis down at session start | Enrichment task fails to enqueue; the session is still written. Game stays `enrichment_status=PENDING` until the next presence event for that game (which retries the enqueue). |
 | User leaves all guilds the bot is in | Their `ONGOING` session can no longer be reconciled; on next restart Self-Healing marks it `ERROR` with "user not found". |
-| Discord rich-presence flicker | Currently produces fragmented short sessions on rapid `ONGOING → COMPLETED → ONGOING`. Debounce is on the [roadmap](roadmap.md). |
+| Discord rich-presence flicker | Handled by stitch-resume + flicker suppression (see above). Short BOT sessions are flagged `is_flicker=true` at close; if the same game resumes within `SESSION_STITCH_WINDOW_SECONDS`, the session is reopened and the flag is cleared. |

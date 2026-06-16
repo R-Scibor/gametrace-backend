@@ -54,6 +54,8 @@ Tokens expire after `SESSION_TOKEN_EXPIRE_DAYS` of inactivity (sliding window �
 | `DELETE` | `/api/v1/sessions/{id}` | Soft-delete a session. Sets `deleted_at = NOW()`. Allowed on `COMPLETED` and `ERROR`. `403` on `ONGOING` (bot-managed). `404` if already trashed or not found. Returns `204 No Content`. |
 | `DELETE` | `/api/v1/sessions/{id}?hard=true` | Permanently remove a trashed session, bypassing the 7-day sweeper. The session must already be soft-deleted — `422` otherwise. Returns `204 No Content`. |
 
+Flicker sessions (`is_flicker=true`) are excluded from `GET /sessions` (list and detail), all stats aggregates, `GET /games`, `GET /games/resolve`, the voice-context library candidates, and overlap validation — exactly like `ERROR` and soft-deleted rows. `GET /sessions/{id}`, `PATCH /sessions/{id}`, and `DELETE /sessions/{id}` return `404` for a flicker row. `is_flicker` is not exposed in `SessionResponse`.
+
 Session state machine — see the [README session state machine](../README.md#session-state-machine).
 
 ## Games
@@ -80,7 +82,7 @@ Session state machine — see the [README session state machine](../README.md#se
 | `GET` | `/api/v1/stats/companies` | Top developers or publishers by total seconds played. `?role=developer\|publisher` (required), `?limit=N` (1–50, default 10). Returns `name`, `total_seconds`, `game_count`. Tie-break: name asc. |
 | `GET` | `/api/v1/stats/release-years` | Total seconds bucketed by decade of `games.first_release_date` (e.g. `"2010s"`). Games with NULL release date are excluded. Sorted asc. |
 
-All stats endpoints exclude soft-deleted sessions, `ERROR` sessions, and `is_ignored` games. `/stats/summary` and `/stats/dashboard` totals count only `COMPLETED` sessions (`duration_seconds`); dashboard also returns the active `ONGOING` session separately. Time-based and tag endpoints (`/heatmap`, `/streak`, `/weekly-trend`, `/genres`, `/themes`, `/companies`, `/release-years`) include `ONGOING` sessions using `now() - start_time` for duration.
+All stats endpoints exclude soft-deleted sessions, `ERROR` sessions, `is_flicker=true` sessions, and `is_ignored` games. `/stats/summary` and `/stats/dashboard` totals count only `COMPLETED` sessions (`duration_seconds`); dashboard also returns the active `ONGOING` session separately. Time-based and tag endpoints (`/heatmap`, `/streak`, `/weekly-trend`, `/genres`, `/themes`, `/companies`, `/release-years`) include `ONGOING` sessions using `now() - start_time` for duration.
 
 ## Voice
 

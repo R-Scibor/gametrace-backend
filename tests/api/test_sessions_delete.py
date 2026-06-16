@@ -109,6 +109,20 @@ async def test_hard_delete_live_session_returns_422(authed_client, db, user):
     assert resp.status_code == 422
 
 
+async def test_delete_flicker_session_returns_404(authed_client, db, user):
+    """DELETE /sessions/{id} on a flicker row returns 404."""
+    game = await make_game(db)
+    flicker = await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=3), dt(hours_ago=1),
+        is_flicker=True,
+    )
+
+    resp = await authed_client.delete(f"/api/v1/sessions/{flicker.id}")
+
+    assert resp.status_code == 404
+
+
 async def test_hard_delete_other_users_session_returns_404(authed_client, db):
     game = await make_game(db)
     other = await make_user(db, discord_id="333333333333333333", username="other2")

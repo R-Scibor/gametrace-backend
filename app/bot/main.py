@@ -122,7 +122,7 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
             get_ongoing_session,
             get_or_create_game,
             get_user_if_tracked,
-            start_session,
+            start_or_resume_session,
         )
 
         user = await get_user_if_tracked(db, discord_id)
@@ -146,7 +146,7 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
                     f"Self-Healing: unexpected ONGOING session when new game {after_game!r} started.",
                 )
             game, created = await get_or_create_game(db, after_game)
-            await start_session(db, discord_id, game.id)
+            await start_or_resume_session(db, discord_id, game.id)
             if created:
                 _queue_enrichment(game.id)
 
@@ -155,7 +155,7 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
             if ongoing:
                 await complete_session(db, ongoing)
             game, created = await get_or_create_game(db, after_game)
-            await start_session(db, discord_id, game.id)
+            await start_or_resume_session(db, discord_id, game.id)
             if created:
                 _queue_enrichment(game.id)
 

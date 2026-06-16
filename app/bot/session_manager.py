@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.flicker_policy import find_stitch_candidate, is_short_flicker
 from app.models.game import Game, GameAlias
 from app.models.session import GameSession, SessionSource, SessionStatus
 from app.models.user import User
@@ -84,6 +85,7 @@ async def complete_session(db: AsyncSession, session: GameSession) -> GameSessio
     session.status = SessionStatus.COMPLETED
     session.end_time = now
     session.duration_seconds = int((now - session.start_time).total_seconds())
+    session.is_flicker = session.source == SessionSource.BOT and is_short_flicker(session.duration_seconds)
     await db.commit()
     await db.refresh(session)
     logger.info(
@@ -92,6 +94,21 @@ async def complete_session(db: AsyncSession, session: GameSession) -> GameSessio
         session.duration_seconds,
     )
     return session
+
+
+async def start_or_resume_session(db: AsyncSession, user_id: str, game_id: int) -> GameSession:
+    """Reopen a recent same-game BOT session if within the stitch window, else start fresh."""
+    candidate = await find_stitch_candidate(db, user_id, game_id)
+    if candidate is not None:
+        candidate.status = SessionStatus.ONGOING
+        candidate.end_time = None
+        candidate.duration_seconds = None
+        candidate.is_flicker = False
+        await db.commit()
+        await db.refresh(candidate)
+        logger.info("Session RESUMED user=%s game_id=%d session_id=%d", user_id, game_id, candidate.id)
+        return candidate
+    return await start_session(db, user_id, game_id)
 
 
 async def error_session(db: AsyncSession, session: GameSession, notes: str) -> GameSession:

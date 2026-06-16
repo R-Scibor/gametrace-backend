@@ -14,6 +14,7 @@ from app.models.session import GameSession
 from app.models.user import User
 from app.schemas.game import CoverUpload, GameResolveOut, GameResponse
 from app.schemas.session import SessionResponse
+from app.services.session_visibility import visible_session
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ async def list_games(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.deleted_at.is_(None),
+            GameSession.is_flicker.is_(False),
             Game.id.not_in(ignored_sq),
         )
         .distinct()
@@ -100,6 +102,7 @@ async def resolve_game(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.deleted_at.is_(None),
+            GameSession.is_flicker.is_(False),
         )
         .distinct()
         .scalar_subquery()
@@ -152,7 +155,7 @@ async def list_game_sessions(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.game_id == game_id,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
         )
         .order_by(GameSession.start_time.desc())
         .offset(skip)

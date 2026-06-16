@@ -2,6 +2,38 @@ from app.models.session import SessionStatus
 from tests.factories import dt, make_game, make_session
 
 
+async def test_list_sessions_excludes_flicker(authed_client, db, user):
+    """Flicker rows must not appear in GET /sessions results."""
+    game = await make_game(db)
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=2), dt(hours_ago=1))
+    await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        dt(hours_ago=4),
+        dt(hours_ago=3),
+        is_flicker=True,
+    )
+
+    resp = await authed_client.get("/api/v1/sessions")
+
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+
+
+async def test_get_session_flicker_returns_404(authed_client, db, user):
+    """GET /sessions/{id} for a flicker row returns 404."""
+    game = await make_game(db)
+    flicker = await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=2), dt(hours_ago=1), is_flicker=True
+    )
+
+    resp = await authed_client.get(f"/api/v1/sessions/{flicker.id}")
+
+    assert resp.status_code == 404
+
+
 async def test_list_sessions_excludes_soft_deleted(authed_client, db, user):
     game = await make_game(db)
     await make_session(db, user.discord_id, game.id, dt(hours_ago=2), dt(hours_ago=1))

@@ -99,6 +99,7 @@ The core table. State machine described in the [README](../README.md#session-sta
 | `status` | `ENUM('ONGOING', 'COMPLETED', 'ERROR')` | |
 | `source` | `ENUM('BOT', 'MANUAL')` | `BOT` rows go through the state machine; `MANUAL` rows are inserted directly as `COMPLETED`. |
 | `notes` | `TEXT` | System-owned — written by Self-Healing as the human-readable reason an ERROR occurred. Read-only via the API. |
+| `is_flicker` | `BOOLEAN` | Default `false`. System-owned flag. Set to `true` by the bot when a `source=BOT` session closes with `duration_seconds < SESSION_SHORT_FLICKER_SECONDS` (default 180s). Cleared back to `false` if the same game resumes within `SESSION_STITCH_WINDOW_SECONDS` (stitch-resume). `source=MANUAL` sessions are never auto-flagged. Excluded at SELECT like `ERROR` and soft-deleted rows — `is_flicker` is not exposed in API responses. History is preserved until the GC task runs. |
 | `deleted_at` | `TIMESTAMPTZ` | NULL = live. Set by `DELETE /api/v1/sessions/{id}` (soft-delete). The hard-delete sweeper removes rows where `deleted_at < NOW() - 7 days`. |
 | `created_at` | `TIMESTAMPTZ` | |
 
@@ -118,6 +119,8 @@ The core table. State machine described in the [README](../README.md#session-sta
 - Only one `ONGOING` session per user at any time. Enforced by bot logic, not a DB constraint.
 - `ERROR` sessions are excluded from all aggregates (`/stats/*`, weekly report) until resolved.
 - `ONGOING` sessions cannot be soft-deleted directly — only the bot owns those rows.
+- `is_flicker=true` rows are excluded at every SELECT layer (sessions, stats, games, resolve, voice context, overlap validation) — they never surface to the user or cause 409s.
+- Config invariant enforced at startup: `SESSION_FLICKER_GC_MARGIN_SECONDS` must exceed `SESSION_STITCH_WINDOW_SECONDS`. This guarantees the GC never removes a flicker row that is still eligible to be a stitch target.
 - `cover_source=CUSTOM` — the enrichment worker skips `cover_image_url` and metadata overwrites on those games (user-owned row).
 
 ### `user_game_preferences`
@@ -166,3 +169,4 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 |---|---|---|
 | `tasks.weekly_report` | Monday 09:00 | FCM digest for users with `weekly_report_enabled` and `push_enabled` |
 | `tasks.hard_delete_sweep` | Daily 03:30 | Purge trashed sessions older than `TRASH_RETENTION_DAYS` (default 7); purge FCM tokens idle 6+ months |
+| `tasks.purge_flicker_sessions` | Daily 04:00 | Hard-delete `COMPLETED` flicker rows whose `end_time` is older than `SESSION_FLICKER_GC_MARGIN_SECONDS` (default 86400s). Runs after `hard_delete_sweep` to keep the two sweepers separate. |

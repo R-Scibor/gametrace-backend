@@ -69,6 +69,7 @@ async def fetch_user_library(db: AsyncSession, user_id: str) -> list[str]:
             GameSession.user_id == user_id,
             GameSession.deleted_at.is_(None),
             GameSession.status != SessionStatus.ERROR,
+            GameSession.is_flicker.is_(False),
             (UserGamePreference.is_ignored.is_(None))
             | (UserGamePreference.is_ignored.is_(False)),
         )
@@ -87,6 +88,7 @@ async def fetch_user_library(db: AsyncSession, user_id: str) -> list[str]:
             GameSession.user_id == user_id,
             GameSession.deleted_at.is_(None),
             GameSession.status != SessionStatus.ERROR,
+            GameSession.is_flicker.is_(False),
             (UserGamePreference.is_ignored.is_(None))
             | (UserGamePreference.is_ignored.is_(False)),
         )

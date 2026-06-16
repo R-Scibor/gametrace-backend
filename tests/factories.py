@@ -50,6 +50,7 @@ async def make_session(
     source: SessionSource = SessionSource.MANUAL,
     notes: str | None = None,
     deleted_at: datetime | None = None,
+    is_flicker: bool = False,
 ) -> GameSession:
     duration = (
         int((end_time - start_time).total_seconds())
@@ -66,6 +67,7 @@ async def make_session(
         source=source,
         notes=notes,
         deleted_at=deleted_at,
+        is_flicker=is_flicker,
     )
     db.add(session)
     await db.flush()

@@ -103,10 +103,12 @@ Both were wired but never confirmed working against a live backend. They're gate
 - **Sentry** — `init_sentry()` no-ops unless `SENTRY_DSN` is set (`example.env` ships it blank). Verify: set a real DSN, trigger a deliberate exception, confirm it lands in the Sentry project. Separately, `traces_sample_rate` is currently `0.0` (errors only) — Performance tracing is off, so there's no endpoint throughput/latency data yet. Raise it (e.g. `0.1`, or a `traces_sampler` scoped to `/stats/*`) and confirm transactions appear. This is the prerequisite for the "how we'll know it's time" triggers on the caching items above.
 - **Flower** — runs at `:5555` (internal), reads `GAMETRACE_FLOWER_AUTH` (renamed from `FLOWER_BASIC_AUTH` so the image doesn't auto-pick an empty value into a broken 401 mode — see `docker-compose.yml`). Verify: set `FLOWER_BASIC_AUTH`, open the UI, confirm it authenticates and shows live workers/tasks. No read-only mode, so keep it internal-only.
 
-### Bot flicker debounce
-Discord rich-presence is occasionally flaky — a single real play session can fragment into multiple short sessions if presence drops for a few seconds. Fix is at the bot: debounce `ONGOING → COMPLETED → ONGOING` transitions shorter than ~2 minutes into a single continuous session. Independent of any storage decisions; the user's session list just stops looking noisy.
+### Bot flicker handling — shipped
 
-### Short-session threshold
-Today every bot-detected session is stored, even if it's a few seconds long — launching a game by accident, a misfired presence event, or a quick "is this still installed?" check all become rows in `game_sessions`. Plan: in `complete_session` (`app/bot/session_manager.py`), if `duration_seconds < N` (proposed: 180s / 3 minutes), drop the session instead of marking it COMPLETED. Manual sessions (`source=MANUAL`) are unaffected — the user is explicitly asserting the time.
+Discord rich-presence is occasionally flaky — a single real play session can fragment into multiple short sessions if presence drops for a few seconds. This is handled in the bot in real time via two mechanisms:
 
-Threshold belongs at write time, not at stats time: keeping noise out of storage is cleaner than filtering it on every aggregation. Pairs naturally with the flicker debounce above — debounce first (so a real session split across two short fragments isn't discarded), then apply the floor.
+- **Suppress at close:** when `complete_session` finishes, if the session is `source=BOT` and shorter than `SESSION_SHORT_FLICKER_SECONDS` (default 180s), the row is flagged `is_flicker=true`. Flicker rows are excluded at every SELECT layer (sessions list, stats, games, resolve, voice context, overlap validation). `source=MANUAL` sessions are never auto-flagged.
+- **Stitch on resume:** when the same game resumes within `SESSION_STITCH_WINDOW_SECONDS` (default 180s) of a just-closed BOT session, the bot reopens that row (`is_flicker → false`, `status → ONGOING`) instead of creating a new one. The final `duration_seconds` spans the entire range including the dropout gap.
+- **GC:** `tasks.purge_flicker_sessions` (Celery Beat, daily 04:00 UTC) hard-deletes `COMPLETED` flicker rows older than `SESSION_FLICKER_GC_MARGIN_SECONDS` (default 86400s). A startup invariant enforces `GC_MARGIN > STITCH_WINDOW` so the GC can never remove a row still eligible to stitch.
+
+See [bot.md](bot.md#flicker-suppression-and-stitch-resume) and [schema.md](schema.md) for implementation detail.

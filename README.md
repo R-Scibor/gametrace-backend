@@ -136,8 +136,7 @@ High-level — see [docs/roadmap.md](docs/roadmap.md) for full context.
 - **Voice pipeline robustness** — regex fallback when Vertex AI is unavailable, bring-your-own-key (user-supplied GCP / OpenAI), self-hosted Whisper option.
 - **Timezone-aware weekly reports** — hourly fan-out so each user gets the digest at their local Monday 09:00, not UTC's.
 - **Scale: range-partition `game_sessions`** by month when the table crosses ~10M rows or `/stats/summary` slows down.
-- **Bot flicker debounce** — coalesce `ONGOING → COMPLETED → ONGOING` transitions shorter than ~2 minutes into a single continuous session.
-- **Short-session threshold** — drop bot sessions under ~3 minutes at write time instead of storing noise.
+- **Bot flicker handling** — short BOT sessions are flagged `is_flicker=true` at close and excluded at SELECT; if the same game resumes within the stitch window, the session is reopened and the flag cleared. A daily GC task purges stale flicker rows.
 - **Source flip on user edit** — PATCH on a BOT session should set `source=MANUAL` once times are user-attested.
 
 ## License
