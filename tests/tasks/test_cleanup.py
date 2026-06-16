@@ -83,3 +83,102 @@ def test_beat_schedule_has_hard_delete_sweep():
     sched = celery_app.conf.beat_schedule
     assert "hard_delete_sweep" in sched
     assert sched["hard_delete_sweep"]["task"] == "tasks.hard_delete_sweep"
+
+
+# ---------------------------------------------------------------------------
+# _run_flicker_purge tests
+# ---------------------------------------------------------------------------
+
+from app.models.session import SessionSource, SessionStatus  # noqa: E402
+from app.tasks.cleanup import _run_flicker_purge  # noqa: E402
+
+
+async def test_flicker_purge_deletes_old_completed_flicker(db, user):
+    game = await make_game(db, primary_name="FlickerGame")
+    now = datetime.now(timezone.utc)
+
+    old_flicker = await make_session(
+        db, user.discord_id, game.id,
+        now - timedelta(days=3), now - timedelta(days=2),
+        status=SessionStatus.COMPLETED,
+        source=SessionSource.BOT,
+        is_flicker=True,
+    )
+
+    count = await _run_flicker_purge(db)
+
+    assert count == 1
+    result = (await db.execute(
+        select(GameSession).where(GameSession.id == old_flicker.id)
+    )).scalar_one_or_none()
+    assert result is None
+
+
+async def test_flicker_purge_leaves_recent_flicker(db, user):
+    game = await make_game(db, primary_name="RecentFlicker")
+    now = datetime.now(timezone.utc)
+
+    recent_flicker = await make_session(
+        db, user.discord_id, game.id,
+        now - timedelta(hours=2), now - timedelta(hours=1),
+        status=SessionStatus.COMPLETED,
+        source=SessionSource.BOT,
+        is_flicker=True,
+    )
+
+    count = await _run_flicker_purge(db)
+
+    assert count == 0
+    result = (await db.execute(
+        select(GameSession).where(GameSession.id == recent_flicker.id)
+    )).scalar_one_or_none()
+    assert result is not None
+
+
+async def test_flicker_purge_leaves_non_flicker_old_session(db, user):
+    game = await make_game(db, primary_name="OldNormal")
+    now = datetime.now(timezone.utc)
+
+    normal = await make_session(
+        db, user.discord_id, game.id,
+        now - timedelta(days=3), now - timedelta(days=2),
+        status=SessionStatus.COMPLETED,
+        source=SessionSource.BOT,
+        is_flicker=False,
+    )
+
+    count = await _run_flicker_purge(db)
+
+    assert count == 0
+    result = (await db.execute(
+        select(GameSession).where(GameSession.id == normal.id)
+    )).scalar_one_or_none()
+    assert result is not None
+
+
+async def test_flicker_purge_leaves_ongoing_session(db, user):
+    game = await make_game(db, primary_name="OngoingGame")
+    now = datetime.now(timezone.utc)
+
+    ongoing = await make_session(
+        db, user.discord_id, game.id,
+        now - timedelta(hours=1),
+        end_time=None,
+        status=SessionStatus.ONGOING,
+        source=SessionSource.BOT,
+        is_flicker=False,
+    )
+
+    count = await _run_flicker_purge(db)
+
+    assert count == 0
+    result = (await db.execute(
+        select(GameSession).where(GameSession.id == ongoing.id)
+    )).scalar_one_or_none()
+    assert result is not None
+
+
+def test_beat_schedule_has_purge_flicker_sessions():
+    sched = celery_app.conf.beat_schedule
+    assert "purge_flicker_sessions" in sched
+    assert sched["purge_flicker_sessions"]["task"] == "tasks.purge_flicker_sessions"
