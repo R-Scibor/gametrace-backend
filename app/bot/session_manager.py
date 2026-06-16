@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.flicker_policy import is_short_flicker
 from app.models.game import Game, GameAlias
 from app.models.session import GameSession, SessionSource, SessionStatus
 from app.models.user import User
@@ -84,6 +85,7 @@ async def complete_session(db: AsyncSession, session: GameSession) -> GameSessio
     session.status = SessionStatus.COMPLETED
     session.end_time = now
     session.duration_seconds = int((now - session.start_time).total_seconds())
+    session.is_flicker = session.source == SessionSource.BOT and is_short_flicker(session.duration_seconds)
     await db.commit()
     await db.refresh(session)
     logger.info(
