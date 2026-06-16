@@ -62,14 +62,16 @@ Bot-sourced sessions (`source=BOT`):
 ```
 ONGOING   ──► COMPLETED         (bot detects game closed)
 ONGOING   ──► ERROR             (Self-Healing on bot restart: different game, or >12h elapsed)
-ERROR     ──► COMPLETED         (user supplies end_time via PATCH /sessions/{id})
+ERROR     ──► COMPLETED         (user supplies end_time via PATCH /sessions/{id}; source → MANUAL)
 ERROR     ──► soft-deleted      (user discards via DELETE /sessions/{id})
 COMPLETED ──► soft-deleted      (user deletes via DELETE /sessions/{id})
-COMPLETED ──► COMPLETED         (user edits end_time; must remain > start_time)
+COMPLETED ──► COMPLETED         (user edits end_time; must remain > start_time; source → MANUAL)
 soft-deleted ──► COMPLETED/ERROR (user restores via POST /sessions/{id}/restore; status preserved)
 ```
 
 Manual sessions (`source=MANUAL`) skip the cycle and are saved directly as `COMPLETED`. `ERROR` sessions are excluded from all aggregates until resolved. `ONGOING` sessions cannot be soft-deleted directly — only the bot owns those rows.
+
+Discord presence flicker (brief dropouts mid-session) is handled by the bot: short BOT sessions are suppressed at close and stitched on same-game resume within a configurable window. See [docs/bot.md](docs/bot.md#flicker-suppression-and-stitch-resume).
 
 Trashed sessions appear in `GET /api/v1/sessions/trash` and are permanently purged by the Hard Delete Sweeper after 7 days. Use `DELETE /sessions/{id}?hard=true` to remove a trashed session immediately.
 
@@ -136,8 +138,6 @@ High-level — see [docs/roadmap.md](docs/roadmap.md) for full context.
 - **Voice pipeline robustness** — regex fallback when Vertex AI is unavailable, bring-your-own-key (user-supplied GCP / OpenAI), self-hosted Whisper option.
 - **Timezone-aware weekly reports** — hourly fan-out so each user gets the digest at their local Monday 09:00, not UTC's.
 - **Scale: range-partition `game_sessions`** by month when the table crosses ~10M rows or `/stats/summary` slows down.
-- **Bot flicker handling** — short BOT sessions are flagged `is_flicker=true` at close and excluded at SELECT; if the same game resumes within the stitch window, the session is reopened and the flag cleared. A daily GC task purges stale flicker rows.
-- **Source flip on user edit** — PATCH on a BOT session should set `source=MANUAL` once times are user-attested.
 
 ## License
 

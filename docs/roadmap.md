@@ -68,8 +68,9 @@ When `game_sessions` crosses ~10 million rows or `/stats/summary` p95 starts cli
 
 ## Session data quality
 
-### Source flip on user edit
-When a user edits a `BOT` session (fixes an ERROR or adjusts end_time via PATCH), the `source` field stays `BOT`. It should flip to `MANUAL` at that point — the session's times are now user-attested, not bot-observed. One-line change in `patch_session`: set `session.source = SessionSource.MANUAL` alongside the `end_time` update.
+### Source flip on user edit — shipped
+
+When a user edits a `BOT` session (fixes an ERROR or adjusts `end_time` via PATCH), `source` flips to `MANUAL` — the session's times are now user-attested, not bot-observed. Implemented in `patch_session` alongside the `end_time` update. See the `PATCH /sessions/{id}` row in [api.md](api.md).
 
 ## Stats
 
