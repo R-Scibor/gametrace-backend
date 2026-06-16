@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.game import Game, GameAlias, UserGamePreference
 from app.models.session import GameSession, SessionStatus
+from app.services.session_visibility import visible_session
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +68,8 @@ async def fetch_user_library(db: AsyncSession, user_id: str) -> list[str]:
         )
         .where(
             GameSession.user_id == user_id,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
             GameSession.status != SessionStatus.ERROR,
-            GameSession.is_flicker.is_(False),
             (UserGamePreference.is_ignored.is_(None))
             | (UserGamePreference.is_ignored.is_(False)),
         )
@@ -86,9 +86,8 @@ async def fetch_user_library(db: AsyncSession, user_id: str) -> list[str]:
         )
         .where(
             GameSession.user_id == user_id,
-            GameSession.deleted_at.is_(None),
+            *visible_session(),
             GameSession.status != SessionStatus.ERROR,
-            GameSession.is_flicker.is_(False),
             (UserGamePreference.is_ignored.is_(None))
             | (UserGamePreference.is_ignored.is_(False)),
         )
