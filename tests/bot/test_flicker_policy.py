@@ -182,6 +182,43 @@ async def test_find_stitch_candidate_none_when_outside_window(db):
     assert result is None
 
 
+async def test_find_stitch_candidate_none_at_exact_window_boundary(db):
+    """Dropout gap of exactly STITCH_WINDOW (180s) does not stitch — strict >."""
+    user = await make_user(db)
+    game = await make_game(db)
+    now = datetime.now(timezone.utc)
+    await make_session(
+        db, user.discord_id, game.id,
+        start_time=now - timedelta(seconds=240),
+        end_time=now - timedelta(seconds=180),
+        status=SessionStatus.COMPLETED,
+        source=SessionSource.BOT,
+    )
+
+    result = await find_stitch_candidate(db, user.discord_id, game.id)
+
+    assert result is None
+
+
+async def test_find_stitch_candidate_matches_just_inside_window(db):
+    """Dropout gap of 179s (end_time 1s inside window) → stitches."""
+    user = await make_user(db)
+    game = await make_game(db)
+    now = datetime.now(timezone.utc)
+    session = await make_session(
+        db, user.discord_id, game.id,
+        start_time=now - timedelta(seconds=240),
+        end_time=now - timedelta(seconds=179),
+        status=SessionStatus.COMPLETED,
+        source=SessionSource.BOT,
+    )
+
+    result = await find_stitch_candidate(db, user.discord_id, game.id)
+
+    assert result is not None
+    assert result.id == session.id
+
+
 async def test_find_stitch_candidate_none_for_different_game(db):
     user = await make_user(db)
     game_a = await make_game(db, "Game A")

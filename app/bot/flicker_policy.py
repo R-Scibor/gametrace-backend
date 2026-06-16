@@ -42,7 +42,7 @@ async def find_stitch_candidate(
             GameSession.source == SessionSource.BOT,
             GameSession.status == SessionStatus.COMPLETED,
             GameSession.deleted_at.is_(None),
-            GameSession.end_time >= window_start,
+            GameSession.end_time > window_start,
         )
         .order_by(GameSession.end_time.desc(), GameSession.id.desc())
         .limit(1)
