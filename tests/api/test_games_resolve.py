@@ -115,6 +115,17 @@ async def test_only_soft_deleted_sessions_does_not_resolve(authed_client, db, us
     assert resp.json() is None
 
 
+async def test_flicker_only_game_does_not_resolve(authed_client, db, user):
+    """A game known only from flicker sessions should not resolve — it's not in the user's real library."""
+    game = await make_game(db, "Flicker Game")
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2), is_flicker=True)
+
+    resp = await authed_client.get("/api/v1/games/resolve", params={"name": "Flicker Game"})
+
+    assert resp.status_code == 200
+    assert resp.json() is None
+
+
 async def test_alias_for_game_user_never_played_does_not_resolve(authed_client, db, user):
     """Alias exists globally but the user has no sessions for that game."""
     game = await make_game(db, "Stranger Game")

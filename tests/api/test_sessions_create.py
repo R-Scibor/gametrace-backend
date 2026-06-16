@@ -166,3 +166,23 @@ async def test_create_session_other_user_overlap_not_blocked(authed_client, db):
     )
 
     assert resp.status_code == 201
+
+
+async def test_create_session_overlap_with_flicker_not_blocked(authed_client, db, user):
+    """Flicker sessions are excluded from overlap validation — they should not block a new session."""
+    game = await make_game(db)
+    await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=1),
+        is_flicker=True,
+    )
+
+    resp = await authed_client.post(
+        "/api/v1/sessions",
+        json={
+            "game_id": game.id,
+            "start_time": dt(hours_ago=2).isoformat(),
+            "end_time": dt(hours_ago=0.5).isoformat(),
+        },
+    )
+
+    assert resp.status_code == 201

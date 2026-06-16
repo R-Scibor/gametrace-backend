@@ -7,9 +7,11 @@ from zoneinfo import ZoneInfo
 from app.services.voice_context import (
     build_candidate_block,
     build_datetime_block,
+    fetch_user_library,
     match_candidates,
     resolve_timezone,
 )
+from tests.factories import dt, make_alias, make_game, make_session
 
 
 # ── resolve_timezone ──────────────────────────────────────────────────────────
@@ -90,3 +92,39 @@ def test_candidate_block_lists_names():
     block = build_candidate_block([("Hades", 80.0), ("Hollow Knight", 70.0)])
     assert "Hades" in block
     assert "Hollow Knight" in block
+
+
+# ── fetch_user_library (DB integration) ──────────────────────────────────────
+
+async def test_fetch_user_library_excludes_flicker_primary_name(db, user):
+    """A game known only from flicker sessions must not appear in the voice library."""
+    game = await make_game(db, "Flicker Title")
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2), is_flicker=True)
+
+    library = await fetch_user_library(db, user.discord_id)
+
+    assert "Flicker Title" not in library
+
+
+async def test_fetch_user_library_excludes_flicker_alias(db, user):
+    """An alias tied only to flicker sessions must not appear in the voice library."""
+    game = await make_game(db, "Flicker Game")
+    await make_alias(db, game.id, "flicker.exe")
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2), is_flicker=True)
+
+    library = await fetch_user_library(db, user.discord_id)
+
+    assert "flicker.exe" not in library
+    assert "Flicker Game" not in library
+
+
+async def test_fetch_user_library_includes_non_flicker(db, user):
+    """Normal (non-flicker) sessions should still appear in the library."""
+    game = await make_game(db, "Real Game")
+    await make_alias(db, game.id, "realgame.exe")
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+
+    library = await fetch_user_library(db, user.discord_id)
+
+    assert "Real Game" in library
+    assert "realgame.exe" in library

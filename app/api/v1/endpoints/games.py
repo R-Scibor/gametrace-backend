@@ -56,6 +56,7 @@ async def list_games(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.deleted_at.is_(None),
+            GameSession.is_flicker.is_(False),
             Game.id.not_in(ignored_sq),
         )
         .distinct()
@@ -101,6 +102,7 @@ async def resolve_game(
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.deleted_at.is_(None),
+            GameSession.is_flicker.is_(False),
         )
         .distinct()
         .scalar_subquery()

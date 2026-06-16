@@ -97,6 +97,18 @@ async def test_game_with_no_sessions_not_returned(authed_client, db, user):
     assert "Orphan Game" not in names
 
 
+async def test_flicker_only_game_absent_from_library(authed_client, db, user):
+    """A game whose only sessions are flicker rows must not appear in GET /games."""
+    game = await make_game(db, "Flicker Ghost")
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2), is_flicker=True)
+
+    resp = await authed_client.get("/api/v1/games")
+
+    assert resp.status_code == 200
+    names = [g["primary_name"] for g in resp.json()]
+    assert "Flicker Ghost" not in names
+
+
 # ── GET /games/{id}/sessions ──────────────────────────────────────────────────
 
 async def test_returns_sessions_for_game(authed_client, db, user):
