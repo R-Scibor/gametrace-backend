@@ -13,9 +13,9 @@ Grouped by code — see endpoint sections below for path-specific detail. Authed
 | `200` | Successful read or update (`GET`, `PATCH`, `PUT`, `POST /auth/login`, `POST /sessions/{id}/restore`). `GET /games/resolve` also returns `200` with body `null` on miss. |
 | `201` | `POST /sessions` — manual session created. |
 | `204` | Successful delete with no body (`POST /auth/logout`, `DELETE /sessions/{id}`, `DELETE /user/preferences/{game_id}`, `DELETE /notifications/register-token`, `POST /games/{id}/merge/{target_id}`). |
-| `400` | Client input rejected — e.g. self-merge (`POST /games/{id}/merge/{target_id}`), unsupported cover extension or invalid Base64 (`PUT /games/{id}/cover`), empty audio upload (`POST /voice/transcribe`). |
+| `400` | Client input rejected — e.g. self-merge (`POST /games/{id}/merge/{target_id}`), empty audio upload (`POST /voice/transcribe`). |
 | `401` | Invalid or expired bearer token (`get_current_user`), or unknown token on `POST /auth/logout`. |
-| `403` | Bot-managed row — `PATCH` or soft `DELETE` on an `ONGOING` session. |
+| `403` | Bot-managed row — `PATCH` or soft `DELETE` on an `ONGOING` session. Also custom cover upload (`PUT /games/{id}/cover`), which is disabled pending admin controls. |
 | `404` | Resource not found or not owned by the caller — user not registered (`POST /auth/login`), session/game missing, game missing on preference upsert. Soft-deleting an already-trashed session also returns `404` (same as not found). |
 | `409` | Session time overlap — `POST /sessions`, `PATCH /sessions/{id}`, `POST /sessions/{id}/restore` (body: `{detail: {detail, conflicting_session}}`). |
 | `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone on `PUT /profile/settings` (Pydantic). |
@@ -66,7 +66,7 @@ Session state machine — see the [README session state machine](../README.md#se
 | `GET` | `/api/v1/games/resolve?name=<string>` | Map a free-text name to `{game_id, name}` from the user's library (games with at least one non-soft-deleted session — `ERROR` counts, ignored games still resolve). Exact case-insensitive match on `primary_name`, then on `game_aliases.discord_process_name`. Returns `200` with body `null` on miss. Voice-flow prefill. |
 | `GET` | `/api/v1/games/{id}/sessions` | Paginated session list for a game. Returns `[]` if the user has marked the game as ignored. |
 | `POST` | `/api/v1/games/{id}/merge/{target_id}` | Transactional merge — reassigns aliases + sessions + preferences from `id` to `target_id`, deletes the source row. `400` on self-merge, `404` if either game is missing. Returns `204`. |
-| `PUT` | `/api/v1/games/{id}/cover` | Upload a custom cover (Base64 + extension). Saves to the `covers` Docker volume, sets `cover_source=CUSTOM`. The Celery enrichment worker will not overwrite a CUSTOM cover. Allowed extensions: `jpg`, `jpeg`, `png`, `webp`. |
+| `PUT` | `/api/v1/games/{id}/cover` | **Disabled** — returns `403`, no upload performed. Custom covers mutated the global `Game` row with no per-user scoping or RBAC, so one user could overwrite shared cover art for everyone. Closed pending admin-only controls; see `docs/roadmap.md` → "Game covers". |
 
 ## Stats
 
@@ -147,4 +147,4 @@ Gemini uses `response_mime_type="application/json"` + `response_schema` — no m
 
 ## Static
 
-`/covers/*` is a static-file mount (not an API endpoint) backed by the `covers` Docker volume. URLs returned by `PUT /games/{id}/cover` resolve to files served from this mount.
+`/covers/*` is a static-file mount (not an API endpoint) backed by the `covers` Docker volume. It served files written by `PUT /games/{id}/cover`; that write path is now disabled (see Games), so no new files are produced. The mount is retained for the future admin-curated cover feature.

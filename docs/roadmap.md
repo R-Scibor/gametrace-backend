@@ -72,6 +72,22 @@ When `game_sessions` crosses ~10 million rows or `/stats/summary` p95 starts cli
 
 When a user edits a `BOT` session (fixes an ERROR or adjusts `end_time` via PATCH), `source` flips to `MANUAL` — the session's times are now user-attested, not bot-observed. Implemented in `patch_session` alongside the `end_time` update. See the `PATCH /sessions/{id}` row in [api.md](api.md).
 
+## Game covers
+
+### Custom cover writes disabled — interim
+
+`PUT /games/{id}/cover` let any authenticated user upload a custom cover, which overwrote `cover_image_url` and set `cover_source=CUSTOM` on the **global** `Game` row — visible to every user, and frozen out of re-enrichment by the worker's `cover_source != CUSTOM` skip-guard.
+
+This produced a data-integrity incident: at least one game (id 40) had its working IGDB cover overwritten by a homelab URL (`http://10.10.0.200/covers/40.png`) that now returns HTTP 400, leaving the record pointing at unrecoverable art with no fallback. Root cause is the combination of (a) global mutation with no ownership/RBAC, and (b) an on-disk store (the `/covers` static mount) whose URLs aren't guaranteed to keep resolving.
+
+**Interim action:** the write endpoint returns `403` and writes nothing; affected `CUSTOM` rows are reset to `EXTERNAL` and re-enriched so they fall back to live IGDB covers (or land in `NEEDS_REVIEW` with no cover — strictly better than a broken URL). The storage machinery — `CoverSource.CUSTOM` enum, the `/covers` static mount, and the enrichment skip-guard — is intentionally retained for the admin feature below; only the open write path is closed.
+
+### Admin-curated global covers
+The legitimate version of the feature above: let an **admin** set a global cover for a game that enrichment can't resolve (un-matched or `NEEDS_REVIEW`), rather than letting any user mutate shared art. Gated on the [Administrative Access (RBAC)](#administrative-access-rbac) work — when `User.is_admin` exists, the cover endpoint re-opens behind that check. Still needs the on-disk durability fixed (the dead-URL incident above): either guarantee the `/covers` mount is served by the same host the URL points at, or store covers somewhere with a stable URL contract. MIME sniffing on this endpoint is already tracked under [MIME sniffing on uploads](#mime-sniffing-on-uploads).
+
+### Per-user cover persistence — deferred (frontend-owned)
+Per the mobile team: user-added cover photos are currently stored **locally** — per device on mobile, per browser on web — and don't sync across devices. Server-side persistence so covers follow the user is intentionally deferred: hosting user-uploaded images turns GameTrace into a UGC platform with content-moderation and legal/liability obligations that are out of scope today. Distinct from admin-curated covers (shared, few, vetted) — this one is per-user and unbounded. Revisit only if cross-device cover persistence becomes a real user need.
+
 ## Stats
 
 ### Click genre → games

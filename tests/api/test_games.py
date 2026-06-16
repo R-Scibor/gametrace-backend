@@ -1,7 +1,5 @@
 import base64
 from datetime import datetime, timezone
-from unittest.mock import mock_open, patch
-
 from sqlalchemy import select
 
 from app.models.game import CoverSource, EnrichmentStatus, UserGamePreference
@@ -219,49 +217,24 @@ async def test_merge_target_not_found(authed_client, db, user):
     assert resp.status_code == 404
 
 
-# ── PUT /games/{id}/cover ─────────────────────────────────────────────────────
+# ── PUT /games/{id}/cover (disabled) ──────────────────────────────────────────
 
-async def test_upload_sets_custom_source(authed_client, db, user):
+async def test_cover_upload_disabled(authed_client, db, user):
     game = await make_game(db)
     img_b64 = base64.b64encode(b"fake_image_data").decode()
 
-    with patch("app.api.v1.endpoints.games.os.makedirs"), \
-         patch("builtins.open", mock_open()):
-        resp = await authed_client.put(
-            f"/api/v1/games/{game.id}/cover",
-            json={"image_base64": img_b64, "extension": "jpg"},
-        )
+    resp = await authed_client.put(
+        f"/api/v1/games/{game.id}/cover",
+        json={"image_base64": img_b64, "extension": "jpg"},
+    )
 
-    assert resp.status_code == 200
-    assert resp.json()["cover_source"] == CoverSource.CUSTOM
+    assert resp.status_code == 403
     await db.refresh(game)
-    assert game.cover_source == CoverSource.CUSTOM
+    assert game.cover_source == CoverSource.EXTERNAL
+    assert game.cover_image_url is None
 
 
-async def test_upload_invalid_extension(authed_client, db, user):
-    game = await make_game(db)
-    img_b64 = base64.b64encode(b"data").decode()
-
-    resp = await authed_client.put(
-        f"/api/v1/games/{game.id}/cover",
-        json={"image_base64": img_b64, "extension": "exe"},
-    )
-
-    assert resp.status_code == 400
-
-
-async def test_upload_invalid_base64(authed_client, db, user):
-    game = await make_game(db)
-
-    resp = await authed_client.put(
-        f"/api/v1/games/{game.id}/cover",
-        json={"image_base64": "!!!not_valid_base64!!!", "extension": "jpg"},
-    )
-
-    assert resp.status_code == 400
-
-
-async def test_cover_upload_game_not_found(authed_client, db, user):
+async def test_cover_upload_disabled_unknown_game(authed_client, db, user):
     img_b64 = base64.b64encode(b"data").decode()
 
     resp = await authed_client.put(
@@ -269,4 +242,4 @@ async def test_cover_upload_game_not_found(authed_client, db, user):
         json={"image_base64": img_b64, "extension": "jpg"},
     )
 
-    assert resp.status_code == 404
+    assert resp.status_code == 403
