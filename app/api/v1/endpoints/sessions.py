@@ -226,6 +226,7 @@ async def patch_session(
             (payload.end_time - session.start_time).total_seconds()
         )
         session.status = SessionStatus.COMPLETED
+        session.source = SessionSource.MANUAL
 
     await db.commit()
     await db.refresh(session)

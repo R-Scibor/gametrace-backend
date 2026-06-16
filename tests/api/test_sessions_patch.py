@@ -83,6 +83,44 @@ async def test_edit_end_time_recalculates_duration(authed_client, db, user):
     assert data["duration_seconds"] == 9000
 
 
+async def test_patch_bot_session_flips_source_to_manual(authed_client, db, user):
+    """Editing end_time on a BOT session marks times as user-attested."""
+    game = await make_game(db)
+    session = await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=3), dt(hours_ago=1),
+        source=SessionSource.BOT,
+    )
+
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": dt(hours_ago=0.5).isoformat()},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["source"] == SessionSource.MANUAL
+
+
+async def test_patch_error_bot_session_flips_source_to_manual(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=3), dt(hours_ago=1),
+        status=SessionStatus.ERROR,
+        source=SessionSource.BOT,
+    )
+
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": dt(hours_ago=1).isoformat()},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == SessionStatus.COMPLETED
+    assert data["source"] == SessionSource.MANUAL
+
+
 # ── ONGOING (bot-managed) ─────────────────────────────────────────────────────
 
 async def test_cannot_edit_ongoing_session(authed_client, db, user):
