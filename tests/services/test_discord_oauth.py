@@ -11,6 +11,7 @@ def _client(handler):
 async def test_exchange_code_returns_access_token():
     def handler(request):
         assert request.url == discord_oauth.TOKEN_URL
+        assert request.headers["authorization"].startswith("Basic ")
         return httpx.Response(200, json={"access_token": "abc123", "token_type": "Bearer"})
 
     async with _client(handler) as c:
