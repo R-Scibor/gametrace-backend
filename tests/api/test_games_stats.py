@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from app.models.session import SessionSource, SessionStatus
+from app.models.session import SessionStatus
 from tests.factories import dt, make_game, make_pref, make_session, make_user
 
 URL = "/api/v1/games/{}/stats"
