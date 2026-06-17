@@ -13,6 +13,7 @@ from app.schemas.stats import (
     CompanyEntry,
     CompanyRole,
     GameStatEntry,
+    GameStatsResponse,
     GenreEntry,
     GenresResponse,
     HeatmapCell,
@@ -512,4 +513,48 @@ async def release_years_for_user(
             )
             for r in rows
         ]
+    )
+
+
+async def game_stats_for_user(
+    db: AsyncSession, user: User, game_id: int
+) -> GameStatsResponse | None:
+    """
+    Lifetime playtime stats for one game in the calling user's library.
+
+    Includes ONGOING sessions (now() - start_time as duration). Excludes
+    soft-deleted, is_flicker, and ERROR sessions. Does NOT apply is_ignored —
+    the caller navigated to this specific game by id, so it sees real numbers.
+
+    Returns None when the user has no visible sessions for the game; the
+    endpoint maps that to 404 (also covers a non-existent game_id).
+    """
+    duration = func.coalesce(
+        GameSession.duration_seconds,
+        func.extract("epoch", func.now() - GameSession.start_time),
+    ).cast(Integer)
+    last_activity = func.coalesce(GameSession.end_time, GameSession.start_time)
+
+    stmt = select(
+        func.coalesce(func.sum(duration), 0).label("total_seconds"),
+        func.count().label("session_count"),
+        func.min(GameSession.start_time).label("first_played"),
+        func.max(last_activity).label("last_played"),
+    ).where(
+        GameSession.user_id == user.discord_id,
+        GameSession.game_id == game_id,
+        GameSession.status != SessionStatus.ERROR,
+        *visible_session(),
+    )
+
+    row = (await db.execute(stmt)).one()
+    if row.session_count == 0:
+        return None
+
+    return GameStatsResponse(
+        game_id=game_id,
+        total_seconds=int(row.total_seconds),
+        session_count=row.session_count,
+        first_played=row.first_played,
+        last_played=row.last_played,
     )

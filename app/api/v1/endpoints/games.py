@@ -12,7 +12,9 @@ from app.models.session import GameSession
 from app.models.user import User
 from app.schemas.game import CoverUpload, GameResolveOut, GameResponse
 from app.schemas.session import SessionResponse
+from app.schemas.stats import GameStatsResponse
 from app.services.session_visibility import visible_session
+from app.services.stats import game_stats_for_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -155,6 +157,27 @@ async def list_game_sessions(
         .limit(limit)
     )
     return result.scalars().all()
+
+
+# ---------------------------------------------------------------------------
+# GET /{game_id}/stats
+# ---------------------------------------------------------------------------
+
+@router.get("/{game_id}/stats", response_model=GameStatsResponse)
+async def get_game_stats(
+    game_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Lifetime playtime stats for a single game in the caller's library:
+    total_seconds (ONGOING counted live), session_count, first/last played.
+    404 when the caller has no visible sessions for the game.
+    """
+    stats = await game_stats_for_user(db, user, game_id)
+    if stats is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return stats
 
 
 # ---------------------------------------------------------------------------
