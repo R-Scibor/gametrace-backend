@@ -26,7 +26,7 @@ docker compose up
 
 API at `http://localhost:8010`. Interactive Swagger docs at `http://localhost:8010/docs`.
 
-**Required secrets:** `DISCORD_BOT_TOKEN`, `IGDB_CLIENT_ID` / `IGDB_CLIENT_SECRET` (Twitch dev console). **Voice pipeline** additionally needs `OPENAI_API_KEY`, `GCP_PROJECT`, and a mounted GCP service-account JSON. **Push notifications** need `credentials/firebase-cred.json`. Features with missing config return `503` (voice) or silently skip (FCM, Sentry).
+**Required secrets:** `DISCORD_BOT_TOKEN`, `IGDB_CLIENT_ID` / `IGDB_CLIENT_SECRET` (Twitch dev console). **Discord OAuth2 login** additionally needs `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_OAUTH_REDIRECT_URIS`, and `DISCORD_GUILD_IDS` — register the same redirect URIs in the Discord Developer Portal → OAuth2 → Redirects. **Voice pipeline** additionally needs `OPENAI_API_KEY`, `GCP_PROJECT`, and a mounted GCP service-account JSON. **Push notifications** need `credentials/firebase-cred.json`. Features with missing config return `503` (voice) or silently skip (FCM, Sentry).
 
 ## Services
 
@@ -43,9 +43,10 @@ flower        Celery monitor (port 5555, internal)
 
 ## User onboarding
 
-1. User runs `/login` on any Discord server where the bot is present.
-2. Bot registers them in the database (captures Discord ID and username automatically).
-3. User opens the mobile app and logs in with their Discord username.
+Two login paths are available:
+
+- **Username login (`POST /auth/login`)** — requires pre-registration via the `/login` slash command on Discord. The bot registers the user in the database; the mobile app then logs in by Discord username.
+- **Discord OAuth2 (`POST /auth/discord`)** — self-provisioning. The mobile app completes the OAuth2 flow (code + PKCE) and the backend creates the user on first login. Requires `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_OAUTH_REDIRECT_URIS`, and `DISCORD_GUILD_IDS` in `.env`. Non-members of the configured bot servers can still log in but receive `needs_server_join: true` — presence tracking will not produce data until they join.
 
 ## API
 
@@ -133,7 +134,7 @@ docker exec -it gametrace_db psql -U gametrace_user -d gametrace_db \
 
 High-level — see [docs/roadmap.md](docs/roadmap.md) for full context.
 
-- **Discord OAuth2 login** — replace username-based auth; Discord owns the auth surface, closes the rate-limit / enumeration gap as a side effect.
+- **RBAC on destructive ops** — merge and cover endpoints need admin/owner controls so one user cannot affect another's data.
 - **Pre-release hardening** — request body size cap (nginx), rate-limit on `/voice/transcribe` (per-user, Redis-backed), MIME sniffing on cover + audio uploads.
 - **Voice pipeline robustness** — regex fallback when Vertex AI is unavailable, bring-your-own-key (user-supplied GCP / OpenAI), self-hosted Whisper option.
 - **Timezone-aware weekly reports** — hourly fan-out so each user gets the digest at their local Monday 09:00, not UTC's.
