@@ -110,3 +110,11 @@ class ReleaseYearEntry(BaseModel):
 
 class ReleaseYearsResponse(BaseModel):
     items: list[ReleaseYearEntry]   # sorted by decade asc
+
+
+class GameStatsResponse(BaseModel):
+    game_id: int
+    total_seconds: int
+    session_count: int
+    first_played: datetime | None
+    last_played: datetime | None
