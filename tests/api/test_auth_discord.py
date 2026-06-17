@@ -45,7 +45,9 @@ async def test_new_user_is_auto_created(client, db, monkeypatch):
     assert "token" in data
 
     from app.models.user import User
-    assert await db.get(User, "555") is not None
+    user = await db.get(User, "555")
+    assert user is not None
+    assert user.username == "newbie"
 
 
 async def test_existing_user_username_synced(client, db, monkeypatch):
@@ -56,6 +58,10 @@ async def test_existing_user_username_synced(client, db, monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json()["username"] == "newname"
+
+    from app.models.user import User
+    refreshed = await db.get(User, "555")
+    assert refreshed.username == "newname"
 
 
 async def test_not_in_guild_sets_needs_server_join(client, db, monkeypatch):
