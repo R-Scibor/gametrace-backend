@@ -4,6 +4,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -95,7 +96,14 @@ async def discord_login(payload: DiscordCallbackRequest, db: AsyncSession = Depe
         user_id=discord_id, token=token_value, expires_at=_token_expiry()
     )
     db.add(token)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Discord username conflicts with an existing account",
+        )
     await db.refresh(user)
 
     return LoginResponse(

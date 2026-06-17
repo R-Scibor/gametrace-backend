@@ -104,3 +104,46 @@ async def test_discord_unreachable_returns_502(client, monkeypatch):
     resp = await client.post("/api/v1/auth/discord", json=_body())
 
     assert resp.status_code == 502
+
+
+async def test_username_collision_returns_409(client, db, monkeypatch):
+    await make_user(db, discord_id="AAA", username="taken")
+    _patch_discord(monkeypatch, identity={"id": "555", "username": "taken"}, guilds={"123"})
+
+    resp = await client.post("/api/v1/auth/discord", json=_body())
+
+    assert resp.status_code == 409
+
+
+async def test_fetch_identity_auth_error_returns_401(client, monkeypatch):
+    async def fake_exchange(client, code, code_verifier, redirect_uri):
+        return "access_tok"
+
+    async def boom(client, access_token):
+        raise discord_oauth.DiscordAuthError("rejected")
+
+    monkeypatch.setattr(discord_oauth, "exchange_code", fake_exchange)
+    monkeypatch.setattr(discord_oauth, "fetch_identity", boom)
+
+    resp = await client.post("/api/v1/auth/discord", json=_body())
+
+    assert resp.status_code == 401
+
+
+async def test_fetch_guilds_upstream_error_returns_502(client, monkeypatch):
+    async def fake_exchange(client, code, code_verifier, redirect_uri):
+        return "access_tok"
+
+    async def fake_identity(client, access_token):
+        return {"id": "555", "username": "newbie"}
+
+    async def boom(client, access_token):
+        raise discord_oauth.DiscordUpstreamError("503 from discord")
+
+    monkeypatch.setattr(discord_oauth, "exchange_code", fake_exchange)
+    monkeypatch.setattr(discord_oauth, "fetch_identity", fake_identity)
+    monkeypatch.setattr(discord_oauth, "fetch_guilds", boom)
+
+    resp = await client.post("/api/v1/auth/discord", json=_body())
+
+    assert resp.status_code == 502

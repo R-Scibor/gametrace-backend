@@ -71,3 +71,12 @@ async def test_fetch_guilds_returns_id_set():
     async with _client(handler) as c:
         guilds = await discord_oauth.fetch_guilds(c, "tok")
     assert guilds == {"123", "456"}
+
+
+async def test_fetch_guilds_5xx_raises_upstream_error():
+    def handler(request):
+        return httpx.Response(503, text="unavailable")
+
+    async with _client(handler) as c:
+        with pytest.raises(discord_oauth.DiscordUpstreamError):
+            await discord_oauth.fetch_guilds(c, "tok")
