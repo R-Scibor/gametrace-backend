@@ -68,6 +68,7 @@ Session state machine — see the [README session state machine](../README.md#se
 | `GET` | `/api/v1/games` | List games the user has at least one session for. Excludes ignored games. Optional `?status=NEEDS_REVIEW` filter for the Unrecognized tab. Paginated. |
 | `GET` | `/api/v1/games/resolve?name=<string>` | Map a free-text name to `{game_id, name}` from the user's library (games with at least one non-soft-deleted session — `ERROR` counts, ignored games still resolve). Exact case-insensitive match on `primary_name`, then on `game_aliases.discord_process_name`. Returns `200` with body `null` on miss. Voice-flow prefill. |
 | `GET` | `/api/v1/games/{id}/sessions` | Paginated session list for a game. Returns `[]` if the user has marked the game as ignored. |
+| `GET` | `/api/v1/games/{id}/stats` | Lifetime playtime stats for a single game — `total_seconds` (ONGOING counted live via `now() - start_time`), `session_count`, `first_played`, `last_played`. `404` when the caller has no visible sessions for the game (also covers a non-existent `game_id`). |
 | `POST` | `/api/v1/games/{id}/merge/{target_id}` | Transactional merge — reassigns aliases + sessions + preferences from `id` to `target_id`, deletes the source row. `400` on self-merge, `404` if either game is missing. Returns `204`. |
 | `PUT` | `/api/v1/games/{id}/cover` | **Disabled** — returns `403`, no upload performed. Custom covers mutated the global `Game` row with no per-user scoping or RBAC, so one user could overwrite shared cover art for everyone. Closed pending admin-only controls; see `docs/roadmap.md` → "Game covers". |
 
@@ -85,7 +86,7 @@ Session state machine — see the [README session state machine](../README.md#se
 | `GET` | `/api/v1/stats/companies` | Top developers or publishers by total seconds played. `?role=developer\|publisher` (required), `?limit=N` (1–50, default 10). Returns `name`, `total_seconds`, `game_count`. Tie-break: name asc. |
 | `GET` | `/api/v1/stats/release-years` | Total seconds bucketed by decade of `games.first_release_date` (e.g. `"2010s"`). Games with NULL release date are excluded. Sorted asc. |
 
-All stats endpoints exclude soft-deleted sessions, `ERROR` sessions, `is_flicker=true` sessions, and `is_ignored` games. `/stats/summary` and `/stats/dashboard` totals count only `COMPLETED` sessions (`duration_seconds`); dashboard also returns the active `ONGOING` session separately. Time-based and tag endpoints (`/heatmap`, `/streak`, `/weekly-trend`, `/genres`, `/themes`, `/companies`, `/release-years`) include `ONGOING` sessions using `now() - start_time` for duration.
+All stats endpoints exclude soft-deleted sessions, `ERROR` sessions, `is_flicker=true` sessions, and `is_ignored` games. `/stats/summary` and `/stats/dashboard` totals count only `COMPLETED` sessions (`duration_seconds`); dashboard also returns the active `ONGOING` session separately. Time-based and tag endpoints (`/heatmap`, `/streak`, `/weekly-trend`, `/genres`, `/themes`, `/companies`, `/release-years`) include `ONGOING` sessions using `now() - start_time` for duration. `GET /games/{id}/stats` follows the same exclusions and ONGOING-live convention, except it does not apply `is_ignored` — the caller navigated to the game by id rather than through a list view, so the real numbers are always returned.
 
 ## Voice
 
