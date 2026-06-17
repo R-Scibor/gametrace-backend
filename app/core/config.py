@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     igdb_client_id: str = ""
     igdb_client_secret: str = ""
 
+    discord_client_id: str = ""
+    discord_client_secret: str = ""
+    discord_oauth_redirect_uris: str = ""  # comma-separated allowlist
+    discord_guild_ids: str = ""  # comma-separated; membership required for presence tracking
+
     firebase_credentials_path: str = ""
 
     sentry_dsn: str = ""
@@ -37,6 +42,14 @@ class Settings(BaseSettings):
     app_version: str = "dev"
     git_sha: str = "dev"
     build_time: str = "unknown"
+
+    @property
+    def discord_redirect_uri_allowlist(self) -> set[str]:
+        return {u.strip() for u in self.discord_oauth_redirect_uris.split(",") if u.strip()}
+
+    @property
+    def discord_guild_id_set(self) -> set[str]:
+        return {g.strip() for g in self.discord_guild_ids.split(",") if g.strip()}
 
     @model_validator(mode="after")
     def _gc_margin_exceeds_stitch_window(self) -> "Settings":
