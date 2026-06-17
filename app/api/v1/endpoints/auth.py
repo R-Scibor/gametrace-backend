@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
@@ -8,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User, UserAuthToken
-from app.schemas.auth import LoginRequest, LoginResponse
+from app.schemas.auth import DiscordCallbackRequest, LoginRequest, LoginResponse
+from app.services import discord_oauth
 
 router = APIRouter()
 bearer_scheme = HTTPBearer()
@@ -49,6 +51,59 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
         discord_id=user.discord_id,
         username=user.username,
         timezone=user.timezone,
+    )
+
+
+@router.post("/discord", response_model=LoginResponse, status_code=status.HTTP_200_OK)
+async def discord_login(payload: DiscordCallbackRequest, db: AsyncSession = Depends(get_db)):
+    if payload.redirect_uri not in settings.discord_redirect_uri_allowlist:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="redirect_uri not allowed"
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            access_token = await discord_oauth.exchange_code(
+                client, payload.code, payload.code_verifier, payload.redirect_uri
+            )
+            identity = await discord_oauth.fetch_identity(client, access_token)
+            guilds = await discord_oauth.fetch_guilds(client, access_token)
+    except discord_oauth.DiscordAuthError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Discord authorization failed"
+        )
+    except discord_oauth.DiscordUpstreamError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="Discord unavailable"
+        )
+
+    discord_id = identity["id"]
+    username = identity["username"]
+
+    user = await db.get(User, discord_id)
+    if user is None:
+        user = User(discord_id=discord_id, username=username)
+        db.add(user)
+    else:
+        user.username = username  # sync in case the Discord username changed
+
+    guild_ids = settings.discord_guild_id_set
+    needs_server_join = bool(guild_ids) and not (guild_ids & guilds)
+
+    token_value = UserAuthToken.generate_token()
+    token = UserAuthToken(
+        user_id=discord_id, token=token_value, expires_at=_token_expiry()
+    )
+    db.add(token)
+    await db.commit()
+    await db.refresh(user)
+
+    return LoginResponse(
+        token=token_value,
+        discord_id=user.discord_id,
+        username=user.username,
+        timezone=user.timezone,
+        needs_server_join=needs_server_join,
     )
 
 
