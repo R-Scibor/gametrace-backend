@@ -26,8 +26,10 @@ async def test_returns_user_games(authed_client, db, user):
     resp = await authed_client.get("/api/v1/games")
 
     assert resp.status_code == 200
-    names = {g["primary_name"] for g in resp.json()}
+    body = resp.json()
+    names = {g["primary_name"] for g in body["items"]}
     assert names == {"Alpha", "Beta"}
+    assert body["total"] == 2
 
 
 async def test_excludes_other_users_games(authed_client, db, user):
@@ -40,7 +42,7 @@ async def test_excludes_other_users_games(authed_client, db, user):
     resp = await authed_client.get("/api/v1/games")
 
     assert resp.status_code == 200
-    names = [g["primary_name"] for g in resp.json()]
+    names = [g["primary_name"] for g in resp.json()["items"]]
     assert "Mine" in names
     assert "Theirs" not in names
 
@@ -55,7 +57,7 @@ async def test_excludes_ignored_games(authed_client, db, user):
     resp = await authed_client.get("/api/v1/games")
 
     assert resp.status_code == 200
-    names = [g["primary_name"] for g in resp.json()]
+    names = [g["primary_name"] for g in resp.json()["items"]]
     assert "Visible" in names
     assert "Hidden" not in names
 
@@ -69,9 +71,9 @@ async def test_status_filter_needs_review(authed_client, db, user):
     resp = await authed_client.get("/api/v1/games?status=NEEDS_REVIEW")
 
     assert resp.status_code == 200
-    results = resp.json()
-    assert len(results) == 1
-    assert results[0]["primary_name"] == "Review Game"
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["primary_name"] == "Review Game"
 
 
 async def test_pagination(authed_client, db, user):
@@ -82,7 +84,9 @@ async def test_pagination(authed_client, db, user):
     resp = await authed_client.get("/api/v1/games?skip=20&limit=10")
 
     assert resp.status_code == 200
-    assert len(resp.json()) == 5
+    body = resp.json()
+    assert len(body["items"]) == 5
+    assert body["total"] == 25
 
 
 async def test_game_with_no_sessions_not_returned(authed_client, db, user):
@@ -91,7 +95,7 @@ async def test_game_with_no_sessions_not_returned(authed_client, db, user):
     resp = await authed_client.get("/api/v1/games")
 
     assert resp.status_code == 200
-    names = [g["primary_name"] for g in resp.json()]
+    names = [g["primary_name"] for g in resp.json()["items"]]
     assert "Orphan Game" not in names
 
 
@@ -103,8 +107,57 @@ async def test_flicker_only_game_absent_from_library(authed_client, db, user):
     resp = await authed_client.get("/api/v1/games")
 
     assert resp.status_code == 200
-    names = [g["primary_name"] for g in resp.json()]
+    names = [g["primary_name"] for g in resp.json()["items"]]
     assert "Flicker Ghost" not in names
+
+
+async def test_search_q_filters_by_name(authed_client, db, user):
+    game_a = await make_game(db, "Dark Souls III")
+    game_b = await make_game(db, "Elden Ring")
+    await make_session(db, user.discord_id, game_a.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_session(db, user.discord_id, game_b.id, dt(hours_ago=5), dt(hours_ago=4))
+
+    resp = await authed_client.get("/api/v1/games?q=dark")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["primary_name"] == "Dark Souls III"
+
+
+async def test_search_q_case_insensitive(authed_client, db, user):
+    game = await make_game(db, "Hollow Knight")
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+
+    resp = await authed_client.get("/api/v1/games?q=HOLLOW")
+
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 1
+
+
+async def test_search_q_no_match_returns_empty(authed_client, db, user):
+    game = await make_game(db, "Celeste")
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+
+    resp = await authed_client.get("/api/v1/games?q=zzznomatch")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 0
+    assert body["items"] == []
+
+
+async def test_total_reflects_full_count_not_page(authed_client, db, user):
+    for i in range(5):
+        game = await make_game(db, f"Title {i:02d}")
+        await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+
+    resp = await authed_client.get("/api/v1/games?limit=2")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["items"]) == 2
+    assert body["total"] == 5
 
 
 # ── GET /games/{id}/sessions ──────────────────────────────────────────────────

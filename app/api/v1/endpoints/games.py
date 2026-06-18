@@ -10,7 +10,7 @@ from app.core.database import get_db
 from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession
 from app.models.user import User
-from app.schemas.game import CoverUpload, GameResolveOut, GameResponse
+from app.schemas.game import CoverUpload, GameListResponse, GameResolveOut, GameResponse
 from app.schemas.session import SessionResponse
 from app.schemas.stats import GameStatsResponse
 from app.services.session_visibility import visible_session
@@ -24,11 +24,12 @@ logger = logging.getLogger(__name__)
 # GET /games
 # ---------------------------------------------------------------------------
 
-@router.get("", response_model=list[GameResponse])
+@router.get("", response_model=GameListResponse)
 async def list_games(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
     status: EnrichmentStatus | None = Query(default=None),
+    q: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -36,8 +37,8 @@ async def list_games(
     Return games that the current user has at least one session for.
     Excludes games the user has marked as ignored.
     Optional ?status= filter (e.g. NEEDS_REVIEW for the Unrecognized tab).
+    Optional ?q= for server-side name search (case-insensitive substring match).
     """
-    # Sub-query: game IDs the user has ignored
     ignored_sq = (
         select(UserGamePreference.game_id)
         .where(
@@ -47,25 +48,35 @@ async def list_games(
         .scalar_subquery()
     )
 
-    query = (
+    base_filters = [
+        GameSession.user_id == user.discord_id,
+        *visible_session(),
+        Game.id.not_in(ignored_sq),
+    ]
+    if status is not None:
+        base_filters.append(Game.enrichment_status == status)
+    if q:
+        base_filters.append(Game.primary_name.ilike(f"%{q}%"))
+
+    count_q = (
+        select(func.count(func.distinct(Game.id)))
+        .join(GameSession, GameSession.game_id == Game.id)
+        .where(*base_filters)
+    )
+    total = (await db.execute(count_q)).scalar_one()
+
+    items_q = (
         select(Game)
         .join(GameSession, GameSession.game_id == Game.id)
-        .where(
-            GameSession.user_id == user.discord_id,
-            *visible_session(),
-            Game.id.not_in(ignored_sq),
-        )
+        .where(*base_filters)
         .distinct()
         .order_by(Game.primary_name)
         .offset(skip)
         .limit(limit)
     )
+    items = (await db.execute(items_q)).scalars().all()
 
-    if status is not None:
-        query = query.where(Game.enrichment_status == status)
-
-    result = await db.execute(query)
-    return result.scalars().all()
+    return GameListResponse(total=total, items=items)
 
 
 # ---------------------------------------------------------------------------

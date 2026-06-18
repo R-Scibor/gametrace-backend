@@ -15,6 +15,11 @@ class GameResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class GameListResponse(BaseModel):
+    total: int
+    items: list[GameResponse]
+
+
 class CoverUpload(BaseModel):
     image_base64: str
     extension: str = "jpg"

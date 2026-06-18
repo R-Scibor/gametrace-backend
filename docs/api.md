@@ -65,12 +65,40 @@ Session state machine — see the [README session state machine](../README.md#se
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/v1/games` | List games the user has at least one session for. Excludes ignored games. Optional `?status=NEEDS_REVIEW` filter for the Unrecognized tab. Paginated. |
+| `GET` | `/api/v1/games` | List games the user has at least one session for. Excludes ignored games. Optional `?status=NEEDS_REVIEW` filter for the Unrecognized tab. Optional `?q=<string>` for server-side case-insensitive substring search on `primary_name`. Paginated (`?skip=`/`?limit=`, max 100). Response: `{"total": <int>, "items": [...]}` — `total` reflects the full filtered count across all pages. |
 | `GET` | `/api/v1/games/resolve?name=<string>` | Map a free-text name to `{game_id, name}` from the user's library (games with at least one non-soft-deleted session — `ERROR` counts, ignored games still resolve). Exact case-insensitive match on `primary_name`, then on `game_aliases.discord_process_name`. Returns `200` with body `null` on miss. Voice-flow prefill. |
 | `GET` | `/api/v1/games/{id}/sessions` | Paginated session list for a game. Returns `[]` if the user has marked the game as ignored. |
 | `GET` | `/api/v1/games/{id}/stats` | Lifetime playtime stats for a single game — `total_seconds` (ONGOING counted live via `now() - start_time`), `session_count`, `first_played`, `last_played`. `404` when the caller has no visible sessions for the game (also covers a non-existent `game_id`). |
 | `POST` | `/api/v1/games/{id}/merge/{target_id}` | Transactional merge — reassigns aliases + sessions + preferences from `id` to `target_id`, deletes the source row. `400` on self-merge, `404` if either game is missing. Returns `204`. |
 | `PUT` | `/api/v1/games/{id}/cover` | **Disabled** — returns `403`, no upload performed. Custom covers mutated the global `Game` row with no per-user scoping or RBAC, so one user could overwrite shared cover art for everyone. Closed pending admin-only controls; see `docs/roadmap.md` → "Game covers". |
+
+### `GET /games` — library list
+
+Paginated library for the current user. Only games with at least one visible session (`ERROR` counts; flicker and soft-deleted sessions do not). Ignored games (`user_game_preferences.is_ignored`) are excluded. Ordered by `primary_name` ascending.
+
+**Query parameters**
+
+| Param | Default | Description |
+|---|---|---|
+| `skip` | `0` | Pagination offset (≥ 0) |
+| `limit` | `20` | Page size (1–100) |
+| `status` | *(none)* | Filter by `enrichment_status` — e.g. `NEEDS_REVIEW` for the Unrecognized tab, `ENRICHED` for enriched-only |
+| `q` | *(none)* | Case-insensitive substring search on `primary_name`. Applied server-side before pagination. |
+
+`status` and `q` combine (AND). Reset `skip` to `0` when either changes.
+
+**Response — `GameListResponse`**
+
+```json
+{ "total": <int>, "items": [<GameResponse>, …] }
+```
+
+- `total` — count of games matching the current filters across all pages (use for the Library header, not `items.length`).
+- `items` — current page; each row is `GameResponse` (`id`, `primary_name`, `cover_image_url`, `cover_source`, `enrichment_status`).
+
+**Breaking change:** Previously returned a bare `GameResponse[]`. Mobile clients must read `items` and `total`.
+
+Returns `401` without a valid bearer token.
 
 ## Stats
 
