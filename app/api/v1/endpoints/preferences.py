@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.auth import get_current_user
 from app.core.database import get_db
-from app.models.game import Game, UserGamePreference
+from app.models.game import EnrichmentStatus, Game, UserGamePreference
 from app.models.user import User
 from app.schemas.preferences import PreferenceResponse, PreferenceUpdate
 
@@ -23,29 +23,55 @@ async def upsert_preference(
     if game is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Game not found")
 
+    if (
+        "is_accepted" in payload.model_fields_set
+        and payload.is_accepted is not None
+        and game.enrichment_status != EnrichmentStatus.NEEDS_REVIEW
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="is_accepted only applies to NEEDS_REVIEW games",
+        )
+
+    insert_values: dict = {
+        "user_id": user.discord_id,
+        "game_id": game_id,
+        "is_ignored": payload.is_ignored,
+        "custom_tag": payload.custom_tag,
+    }
+    update_values: dict = {
+        "is_ignored": payload.is_ignored,
+        "custom_tag": payload.custom_tag,
+    }
+    if "is_accepted" in payload.model_fields_set:
+        insert_values["is_accepted"] = payload.is_accepted
+        update_values["is_accepted"] = payload.is_accepted
+
     stmt = (
         pg_insert(UserGamePreference)
-        .values(
-            user_id=user.discord_id,
-            game_id=game_id,
-            is_ignored=payload.is_ignored,
-            custom_tag=payload.custom_tag,
-        )
+        .values(**insert_values)
         .on_conflict_do_update(
             index_elements=["user_id", "game_id"],
-            set_={
-                "is_ignored": payload.is_ignored,
-                "custom_tag": payload.custom_tag,
-            },
+            set_=update_values,
         )
     )
     await db.execute(stmt)
     await db.commit()
 
+    pref = (
+        await db.execute(
+            select(UserGamePreference).where(
+                UserGamePreference.user_id == user.discord_id,
+                UserGamePreference.game_id == game_id,
+            )
+        )
+    ).scalar_one()
+
     return PreferenceResponse(
         game_id=game_id,
-        is_ignored=payload.is_ignored,
-        custom_tag=payload.custom_tag,
+        is_ignored=pref.is_ignored,
+        is_accepted=pref.is_accepted,
+        custom_tag=pref.custom_tag,
     )
 
 

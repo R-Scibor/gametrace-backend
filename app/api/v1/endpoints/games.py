@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -13,11 +13,24 @@ from app.models.user import User
 from app.schemas.game import CoverUpload, GameListResponse, GameResolveOut, GameResponse
 from app.schemas.session import SessionResponse
 from app.schemas.stats import GameStatsResponse
+from app.services.library_visibility import library_visible_filter, review_inbox_filter
 from app.services.session_visibility import visible_session
 from app.services.stats import game_stats_for_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _game_response(game: Game, pref: UserGamePreference | None) -> GameResponse:
+    return GameResponse(
+        id=game.id,
+        primary_name=game.primary_name,
+        cover_image_url=game.cover_image_url,
+        cover_source=game.cover_source,
+        enrichment_status=game.enrichment_status,
+        is_ignored=pref.is_ignored if pref else False,
+        is_accepted=pref.is_accepted if pref else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -35,48 +48,66 @@ async def list_games(
 ):
     """
     Return games that the current user has at least one session for.
-    Excludes games the user has marked as ignored.
-    Optional ?status= filter (e.g. NEEDS_REVIEW for the Unrecognized tab).
+    Main library excludes ignored games and unaccepted NEEDS_REVIEW stubs.
+    Optional ?status=NEEDS_REVIEW for the Unrecognized inbox tab.
     Optional ?q= for server-side name search (case-insensitive substring match).
     """
-    ignored_sq = (
-        select(UserGamePreference.game_id)
-        .where(
-            UserGamePreference.user_id == user.discord_id,
-            UserGamePreference.is_ignored.is_(True),
-        )
-        .scalar_subquery()
+    pref_join = and_(
+        UserGamePreference.game_id == Game.id,
+        UserGamePreference.user_id == user.discord_id,
     )
 
     base_filters = [
         GameSession.user_id == user.discord_id,
         *visible_session(),
-        Game.id.not_in(ignored_sq),
     ]
-    if status is not None:
-        base_filters.append(Game.enrichment_status == status)
     if q:
         base_filters.append(Game.primary_name.ilike(f"%{q}%"))
+
+    if status == EnrichmentStatus.NEEDS_REVIEW:
+        base_filters.append(Game.enrichment_status == EnrichmentStatus.NEEDS_REVIEW)
+        visibility_filter = review_inbox_filter()
+    else:
+        if status is not None:
+            base_filters.append(Game.enrichment_status == status)
+        visibility_filter = library_visible_filter()
 
     count_q = (
         select(func.count(func.distinct(Game.id)))
         .join(GameSession, GameSession.game_id == Game.id)
-        .where(*base_filters)
+        .outerjoin(UserGamePreference, pref_join)
+        .where(*base_filters, visibility_filter)
     )
     total = (await db.execute(count_q)).scalar_one()
 
     items_q = (
         select(Game)
         .join(GameSession, GameSession.game_id == Game.id)
-        .where(*base_filters)
+        .outerjoin(UserGamePreference, pref_join)
+        .where(*base_filters, visibility_filter)
         .distinct()
         .order_by(Game.primary_name)
         .offset(skip)
         .limit(limit)
     )
-    items = (await db.execute(items_q)).scalars().all()
+    games = (await db.execute(items_q)).scalars().all()
 
-    return GameListResponse(total=total, items=items)
+    pref_map: dict[int, UserGamePreference] = {}
+    if games:
+        prefs = (
+            await db.execute(
+                select(UserGamePreference).where(
+                    UserGamePreference.user_id == user.discord_id,
+                    UserGamePreference.game_id.in_([g.id for g in games]),
+                )
+            )
+        ).scalars().all()
+        pref_map = {p.game_id: p for p in prefs}
+
+    return GameListResponse(
+        total=total,
+        items=[_game_response(g, pref_map.get(g.id)) for g in games],
+    )
 
 
 # ---------------------------------------------------------------------------

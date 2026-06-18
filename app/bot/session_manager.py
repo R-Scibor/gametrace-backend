@@ -9,7 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.flicker_policy import find_stitch_candidate, is_short_flicker
-from app.models.game import Game, GameAlias
+from app.models.game import EnrichmentStatus, Game, GameAlias
+from app.services.game_review import ensure_inbox_for_user
 from app.models.session import GameSession, SessionSource, SessionStatus
 from app.models.user import User
 
@@ -65,6 +66,7 @@ async def get_ongoing_session(db: AsyncSession, user_id: str) -> GameSession | N
 
 async def start_session(db: AsyncSession, user_id: str, game_id: int) -> GameSession:
     """Create a new ONGOING BOT session."""
+    game = await db.get(Game, game_id)
     session = GameSession(
         user_id=user_id,
         game_id=game_id,
@@ -73,6 +75,8 @@ async def start_session(db: AsyncSession, user_id: str, game_id: int) -> GameSes
         source=SessionSource.BOT,
     )
     db.add(session)
+    if game is not None and game.enrichment_status == EnrichmentStatus.NEEDS_REVIEW:
+        await ensure_inbox_for_user(db, game_id, user_id)
     await db.commit()
     await db.refresh(session)
     logger.info("Session STARTED user=%s game_id=%d session_id=%d", user_id, game_id, session.id)

@@ -1,6 +1,6 @@
 from sqlalchemy import select
 
-from app.models.game import UserGamePreference
+from app.models.game import EnrichmentStatus, UserGamePreference
 from tests.factories import make_game, make_pref
 
 
@@ -14,7 +14,12 @@ async def test_upsert_creates_preference(authed_client, db, user):
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body == {"game_id": game.id, "is_ignored": True, "custom_tag": "Retro"}
+    assert body == {
+        "game_id": game.id,
+        "is_ignored": True,
+        "is_accepted": None,
+        "custom_tag": "Retro",
+    }
 
     row = (
         await db.execute(
@@ -84,6 +89,30 @@ async def test_put_nonexistent_game_returns_404(authed_client):
     )
 
     assert resp.status_code == 404
+
+
+async def test_accept_needs_review_game(authed_client, db, user):
+    game = await make_game(db, "Mystery Game", EnrichmentStatus.NEEDS_REVIEW)
+    await make_pref(db, user.discord_id, game.id, is_accepted=False)
+
+    resp = await authed_client.put(
+        f"/api/v1/user/preferences/{game.id}",
+        json={"is_ignored": False, "is_accepted": True},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["is_accepted"] is True
+
+
+async def test_is_accepted_rejected_for_enriched_game(authed_client, db, user):
+    game = await make_game(db, "Cyberpunk", EnrichmentStatus.ENRICHED)
+
+    resp = await authed_client.put(
+        f"/api/v1/user/preferences/{game.id}",
+        json={"is_ignored": False, "is_accepted": True},
+    )
+
+    assert resp.status_code == 422
 
 
 async def test_put_requires_auth(client, db):

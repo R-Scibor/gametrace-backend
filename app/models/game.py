@@ -68,6 +68,7 @@ class UserGamePreference(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.discord_id", ondelete="CASCADE"))
     game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"))
     is_ignored: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    is_accepted: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
     custom_tag: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     game: Mapped["Game"] = relationship(back_populates="user_preferences")

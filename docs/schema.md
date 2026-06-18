@@ -132,7 +132,8 @@ Per-user metadata layered on top of the global `games` catalog. Not all users ha
 | `id` | `INTEGER` | Primary key |
 | `user_id` | `VARCHAR(32)` | FK → `users.discord_id`, `ON DELETE CASCADE` |
 | `game_id` | `INTEGER` | FK → `games.id`, `ON DELETE CASCADE` |
-| `is_ignored` | `BOOLEAN` | Default `false`. Ignored games are filtered out at the SELECT layer in `/stats/*` and `/games`. Sessions are preserved — set back to `false` and the history reappears. |
+| `is_ignored` | `BOOLEAN` | Default `false`. User-initiated hide — filtered out at the SELECT layer in `/stats/*` and the main `/games` list. Sessions are preserved. |
+| `is_accepted` | `BOOLEAN` | Nullable. Only meaningful for `NEEDS_REVIEW` games: `false` = Unrecognized inbox (hidden from main library/stats), `true` = user accepted the stub. `NULL` when not applicable (`ENRICHED`/`PENDING`). Auto-set to `false` when enrichment lands on `NEEDS_REVIEW`; cleared to `NULL` when the game later becomes `ENRICHED`. |
 | `custom_tag` | `VARCHAR(64)` | Optional user-supplied label. |
 
 Unique constraint on `(user_id, game_id)`. The merge endpoint (`POST /games/{id}/merge/{target_id}`) reassigns these rows transactionally, dropping conflicts where the target already has a preference for the same user.

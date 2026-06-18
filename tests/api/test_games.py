@@ -62,6 +62,29 @@ async def test_excludes_ignored_games(authed_client, db, user):
     assert "Hidden" not in names
 
 
+async def test_needs_review_hidden_from_main_library_until_accepted(authed_client, db, user):
+    game = await make_game(db, "Unknown Launcher", EnrichmentStatus.NEEDS_REVIEW)
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+
+    resp = await authed_client.get("/api/v1/games")
+
+    assert resp.status_code == 200
+    names = [g["primary_name"] for g in resp.json()["items"]]
+    assert "Unknown Launcher" not in names
+
+
+async def test_accepted_needs_review_appears_in_main_library(authed_client, db, user):
+    game = await make_game(db, "Indie Stub", EnrichmentStatus.NEEDS_REVIEW)
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_pref(db, user.discord_id, game.id, is_accepted=True)
+
+    resp = await authed_client.get("/api/v1/games")
+
+    assert resp.status_code == 200
+    names = [g["primary_name"] for g in resp.json()["items"]]
+    assert "Indie Stub" in names
+
+
 async def test_status_filter_needs_review(authed_client, db, user):
     game_pending = await make_game(db, "Pending Game", EnrichmentStatus.PENDING)
     game_review = await make_game(db, "Review Game", EnrichmentStatus.NEEDS_REVIEW)

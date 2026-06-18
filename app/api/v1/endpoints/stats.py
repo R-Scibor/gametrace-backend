@@ -24,6 +24,7 @@ from app.schemas.stats import (
     ThemesResponse,
     WeeklyTrendResponse,
 )
+from app.services.library_visibility import library_visible_filter
 from app.services.session_visibility import visible_session
 from app.services.stats import (
     companies_for_user,
@@ -164,6 +165,7 @@ async def get_dashboard(
             GameSession.start_time.label("window_start"),
             func.coalesce(GameSession.duration_seconds, 0).label("total_seconds"),
         )
+        .join(Game, GameSession.game_id == Game.id)
         .outerjoin(
             UserGamePreference,
             and_(
@@ -176,10 +178,7 @@ async def get_dashboard(
             GameSession.status == SessionStatus.COMPLETED,
             *visible_session(),
             GameSession.start_time >= window_30d,
-            or_(
-                UserGamePreference.is_ignored.is_(None),
-                UserGamePreference.is_ignored == False,  # noqa: E712
-            ),
+            library_visible_filter(),
         )
     )
     totals_result = await db.execute(totals_stmt)

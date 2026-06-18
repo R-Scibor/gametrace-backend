@@ -28,6 +28,7 @@ TEST_DB_URL = settings.database_url.replace("/gametrace_db", "/gametrace_test")
 async def _create_tables() -> None:
     engine = create_async_engine(TEST_DB_URL, poolclass=NullPool)
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     await engine.dispose()
 

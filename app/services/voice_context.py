@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.game import Game, GameAlias, UserGamePreference
 from app.models.session import GameSession, SessionStatus
+from app.services.library_visibility import library_visible_filter
 from app.services.session_visibility import visible_session
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ def build_datetime_block(tz_name: str | None, now: datetime | None = None) -> st
 async def fetch_user_library(db: AsyncSession, user_id: str) -> list[str]:
     """
     Distinct game names + aliases the user has session history for,
-    excluding soft-deleted sessions and ignored games.
+    excluding soft-deleted sessions, ignored games, and unaccepted NEEDS_REVIEW stubs.
     """
     name_q = (
         select(Game.primary_name)
@@ -70,8 +71,7 @@ async def fetch_user_library(db: AsyncSession, user_id: str) -> list[str]:
             GameSession.user_id == user_id,
             *visible_session(),
             GameSession.status != SessionStatus.ERROR,
-            (UserGamePreference.is_ignored.is_(None))
-            | (UserGamePreference.is_ignored.is_(False)),
+            library_visible_filter(),
         )
         .distinct()
     )
@@ -88,8 +88,7 @@ async def fetch_user_library(db: AsyncSession, user_id: str) -> list[str]:
             GameSession.user_id == user_id,
             *visible_session(),
             GameSession.status != SessionStatus.ERROR,
-            (UserGamePreference.is_ignored.is_(None))
-            | (UserGamePreference.is_ignored.is_(False)),
+            library_visible_filter(),
         )
         .distinct()
     )

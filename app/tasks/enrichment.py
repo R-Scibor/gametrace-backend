@@ -118,6 +118,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.celery_app import celery_app
+from app.services.game_review import sync_review_preferences
 from app.core.config import settings
 from app.models.game import CoverSource, EnrichmentStatus, Game
 from app.tasks.igdb_auth import get_igdb_token, invalidate_igdb_token
@@ -415,6 +416,7 @@ async def _apply(
     game = await db.get(Game, game_id)
     if game is None:
         return
+    previous_status = game.enrichment_status
     game.enrichment_status = status
     if external_api_id is not None:
         game.external_api_id = external_api_id
@@ -427,6 +429,12 @@ async def _apply(
             game.developers = metadata.developers
             game.publishers = metadata.publishers
             game.first_release_date = metadata.first_release_date
+    await sync_review_preferences(
+        db,
+        game_id,
+        previous_status=previous_status,
+        new_status=status,
+    )
     await db.commit()
 
 

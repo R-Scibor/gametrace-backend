@@ -16,7 +16,7 @@ from app.bot.session_manager import (
     get_user_if_tracked,
     start_session,
 )
-from app.models.game import Game, GameAlias
+from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import SessionSource, SessionStatus
 from tests.factories import dt, make_alias, make_game, make_session, make_user
 
@@ -78,6 +78,23 @@ async def test_start_session_creates_ongoing(db):
     assert session.status == SessionStatus.ONGOING
     assert session.source == SessionSource.BOT
     assert session.end_time is None
+
+
+async def test_start_session_on_needs_review_game_creates_inbox_pref(db):
+    user = await make_user(db)
+    game = await make_game(db, "launcher.exe", EnrichmentStatus.NEEDS_REVIEW)
+
+    await start_session(db, user.discord_id, game.id)
+
+    pref = (
+        await db.execute(
+            select(UserGamePreference).where(
+                UserGamePreference.user_id == user.discord_id,
+                UserGamePreference.game_id == game.id,
+            )
+        )
+    ).scalar_one()
+    assert pref.is_accepted is False
 
 
 # ── complete_session ──────────────────────────────────────────────────────────

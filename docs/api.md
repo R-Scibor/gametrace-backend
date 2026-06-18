@@ -65,7 +65,7 @@ Session state machine — see the [README session state machine](../README.md#se
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/v1/games` | List games the user has at least one session for. Excludes ignored games. Optional `?status=NEEDS_REVIEW` filter for the Unrecognized tab. Optional `?q=<string>` for server-side case-insensitive substring search on `primary_name`. Paginated (`?skip=`/`?limit=`, max 100). Response: `{"total": <int>, "items": [...]}` — `total` reflects the full filtered count across all pages. |
+| `GET` | `/api/v1/games` | List games the user has at least one session for. Main library excludes `is_ignored` games and unaccepted `NEEDS_REVIEW` stubs. `?status=NEEDS_REVIEW` returns the Unrecognized inbox (`is_accepted` not true). Optional `?q=<string>` for server-side case-insensitive substring search on `primary_name`. Paginated (`?skip=`/`?limit=`, max 100). Response: `{"total": <int>, "items": [...]}` — each item includes `is_ignored` and `is_accepted`. |
 | `GET` | `/api/v1/games/resolve?name=<string>` | Map a free-text name to `{game_id, name}` from the user's library (games with at least one non-soft-deleted session — `ERROR` counts, ignored games still resolve). Exact case-insensitive match on `primary_name`, then on `game_aliases.discord_process_name`. Returns `200` with body `null` on miss. Voice-flow prefill. |
 | `GET` | `/api/v1/games/{id}/sessions` | Paginated session list for a game. Returns `[]` if the user has marked the game as ignored. |
 | `GET` | `/api/v1/games/{id}/stats` | Lifetime playtime stats for a single game — `total_seconds` (ONGOING counted live via `now() - start_time`), `session_count`, `first_played`, `last_played`. `404` when the caller has no visible sessions for the game (also covers a non-existent `game_id`). |
@@ -74,7 +74,7 @@ Session state machine — see the [README session state machine](../README.md#se
 
 ### `GET /games` — library list
 
-Paginated library for the current user. Only games with at least one visible session (`ERROR` counts; flicker and soft-deleted sessions do not). Ignored games (`user_game_preferences.is_ignored`) are excluded. Ordered by `primary_name` ascending.
+Paginated library for the current user. Only games with at least one visible session (`ERROR` counts; flicker and soft-deleted sessions do not). Main list excludes `is_ignored` games and `NEEDS_REVIEW` stubs the user has not accepted (`is_accepted` not `true`). `?status=NEEDS_REVIEW` returns the Unrecognized inbox only. Ordered by `primary_name` ascending.
 
 **Query parameters**
 
@@ -94,7 +94,7 @@ Paginated library for the current user. Only games with at least one visible ses
 ```
 
 - `total` — count of games matching the current filters across all pages (use for the Library header, not `items.length`).
-- `items` — current page; each row is `GameResponse` (`id`, `primary_name`, `cover_image_url`, `cover_source`, `enrichment_status`).
+- `items` — current page; each row is `GameResponse` (`id`, `primary_name`, `cover_image_url`, `cover_source`, `enrichment_status`, `is_ignored`, `is_accepted`).
 
 **Breaking change:** Previously returned a bare `GameResponse[]`. Mobile clients must read `items` and `total`.
 
@@ -141,7 +141,7 @@ Gemini uses `response_mime_type="application/json"` + `response_schema` — no m
 
 | Method | Path | Description |
 |---|---|---|
-| `PUT` | `/api/v1/user/preferences/{game_id}` | Upsert a per-user preference for a game (`is_ignored`, `custom_tag`). Ignored games disappear from `/stats/*` and `/games`, but the underlying sessions are preserved. |
+| `PUT` | `/api/v1/user/preferences/{game_id}` | Upsert a per-user preference (`is_ignored`, optional `is_accepted`, `custom_tag`). `is_accepted` only valid on `NEEDS_REVIEW` games — set `true` to accept an unrecognized stub into the main library. Ignored games disappear from `/stats/*` and the main `/games` list; sessions are preserved. |
 | `DELETE` | `/api/v1/user/preferences/{game_id}` | Remove the preference row entirely (game returns to default visibility). |
 
 ## Notifications

@@ -24,6 +24,15 @@ from app.tasks.enrichment import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _mock_sync_review_preferences():
+    with patch(
+        "app.tasks.enrichment.sync_review_preferences",
+        new_callable=AsyncMock,
+    ):
+        yield
+
+
 def _igdb_result(
     cover_url: str | None = None,
     confidence: float = 0.0,

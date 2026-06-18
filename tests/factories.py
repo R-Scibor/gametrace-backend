@@ -91,8 +91,14 @@ async def make_pref(
     user_id: str,
     game_id: int,
     is_ignored: bool = False,
+    is_accepted: bool | None = None,
 ) -> UserGamePreference:
-    pref = UserGamePreference(user_id=user_id, game_id=game_id, is_ignored=is_ignored)
+    pref = UserGamePreference(
+        user_id=user_id,
+        game_id=game_id,
+        is_ignored=is_ignored,
+        is_accepted=is_accepted,
+    )
     db.add(pref)
     await db.flush()
     return pref

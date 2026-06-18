@@ -5,6 +5,7 @@ from sqlalchemy import Date, Integer, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.game import Game, UserGamePreference
+from app.services.library_visibility import library_visible_filter
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
 from app.services.session_visibility import visible_session
@@ -38,7 +39,7 @@ async def summary_for_user(
 
     Shared by GET /stats/summary and the weekly-report Celery task so the
     push notification content never drifts from what the Dashboard shows.
-    Excludes: soft-deleted sessions, ERROR sessions, is_ignored games.
+    Excludes: soft-deleted sessions, ERROR sessions, ignored/unaccepted games.
     """
     now = datetime.now(timezone.utc)
     window_start = now - timedelta(days=days)
@@ -63,10 +64,7 @@ async def summary_for_user(
             GameSession.status == SessionStatus.COMPLETED,
             *visible_session(),
             GameSession.start_time >= window_start,
-            or_(
-                UserGamePreference.is_ignored.is_(None),
-                UserGamePreference.is_ignored == False,  # noqa: E712
-            ),
+            library_visible_filter(),
         )
         .group_by(GameSession.game_id, Game.primary_name, Game.cover_image_url)
         .order_by(func.sum(func.coalesce(GameSession.duration_seconds, 0)).desc())
@@ -151,6 +149,8 @@ async def heatmap_for_user(
             hour_col,
             func.sum(duration).label("total_seconds"),
         )
+        .select_from(GameSession)
+        .join(Game, GameSession.game_id == Game.id)
         .outerjoin(
             UserGamePreference,
             and_(
@@ -163,10 +163,7 @@ async def heatmap_for_user(
             GameSession.status != SessionStatus.ERROR,
             *visible_session(),
             GameSession.start_time >= window_start,
-            or_(
-                UserGamePreference.is_ignored.is_(None),
-                UserGamePreference.is_ignored == False,  # noqa: E712
-            ),
+            library_visible_filter(),
         )
         .group_by(pg_dow, hour_col)
     )
@@ -244,6 +241,8 @@ async def streak_for_user(db: AsyncSession, user: User) -> StreakResponse:
 
     stmt = (
         select(local_date.label("d"))
+        .select_from(GameSession)
+        .join(Game, GameSession.game_id == Game.id)
         .outerjoin(
             UserGamePreference,
             and_(
@@ -255,10 +254,7 @@ async def streak_for_user(db: AsyncSession, user: User) -> StreakResponse:
             GameSession.user_id == user.discord_id,
             GameSession.status != SessionStatus.ERROR,
             *visible_session(),
-            or_(
-                UserGamePreference.is_ignored.is_(None),
-                UserGamePreference.is_ignored == False,  # noqa: E712
-            ),
+            library_visible_filter(),
         )
         .distinct()
     )
@@ -306,6 +302,8 @@ async def weekly_trend_for_user(
             week_start_col,
             func.sum(duration).label("total_seconds"),
         )
+        .select_from(GameSession)
+        .join(Game, GameSession.game_id == Game.id)
         .outerjoin(
             UserGamePreference,
             and_(
@@ -318,10 +316,7 @@ async def weekly_trend_for_user(
             GameSession.status != SessionStatus.ERROR,
             *visible_session(),
             GameSession.start_time >= oldest_monday_utc,
-            or_(
-                UserGamePreference.is_ignored.is_(None),
-                UserGamePreference.is_ignored == False,  # noqa: E712
-            ),
+            library_visible_filter(),
         )
         .group_by(week_start_col)
     )
@@ -374,10 +369,7 @@ async def _jsonb_breakdown(
             GameSession.user_id == user.discord_id,
             GameSession.status != SessionStatus.ERROR,
             *visible_session(),
-            or_(
-                UserGamePreference.is_ignored.is_(None),
-                UserGamePreference.is_ignored == False,  # noqa: E712
-            ),
+            library_visible_filter(),
         )
         .group_by(tag_col)
         .order_by(total_col.desc())
@@ -437,10 +429,7 @@ async def companies_for_user(
             GameSession.user_id == user.discord_id,
             GameSession.status != SessionStatus.ERROR,
             *visible_session(),
-            or_(
-                UserGamePreference.is_ignored.is_(None),
-                UserGamePreference.is_ignored == False,  # noqa: E712
-            ),
+            library_visible_filter(),
         )
         .group_by(name_col)
         .order_by(total_col.desc(), name_col.asc())
@@ -495,10 +484,7 @@ async def release_years_for_user(
             GameSession.status != SessionStatus.ERROR,
             *visible_session(),
             Game.first_release_date.is_not(None),
-            or_(
-                UserGamePreference.is_ignored.is_(None),
-                UserGamePreference.is_ignored == False,  # noqa: E712
-            ),
+            library_visible_filter(),
         )
         .group_by(decade_int)
         .order_by(decade_int.asc())

@@ -11,6 +11,8 @@ class GameResponse(BaseModel):
     cover_image_url: Optional[str] = None
     cover_source: CoverSource
     enrichment_status: EnrichmentStatus
+    is_ignored: bool = False
+    is_accepted: Optional[bool] = None
 
     model_config = {"from_attributes": True}
 
