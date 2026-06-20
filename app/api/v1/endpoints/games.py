@@ -13,7 +13,11 @@ from app.models.user import User
 from app.schemas.game import CoverUpload, GameListResponse, GameResolveOut, GameResponse
 from app.schemas.session import SessionResponse
 from app.schemas.stats import GameStatsResponse
-from app.services.library_visibility import library_visible_filter, review_inbox_filter
+from app.services.library_visibility import (
+    ignored_only_filter,
+    library_visible_filter,
+    review_inbox_filter,
+)
 from app.services.session_visibility import visible_session
 from app.services.stats import game_stats_for_user
 
@@ -42,6 +46,7 @@ async def list_games(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
     status: EnrichmentStatus | None = Query(default=None),
+    is_ignored: bool | None = Query(default=None),
     q: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -50,6 +55,7 @@ async def list_games(
     Return games that the current user has at least one session for.
     Main library excludes ignored games and unaccepted NEEDS_REVIEW stubs.
     Optional ?status=NEEDS_REVIEW for the Unrecognized inbox tab.
+    Optional ?is_ignored=true for the hidden-games tab.
     Optional ?q= for server-side name search (case-insensitive substring match).
     """
     pref_join = and_(
@@ -64,7 +70,11 @@ async def list_games(
     if q:
         base_filters.append(Game.primary_name.ilike(f"%{q}%"))
 
-    if status == EnrichmentStatus.NEEDS_REVIEW:
+    if is_ignored is True:
+        visibility_filter = ignored_only_filter()
+        if status is not None:
+            base_filters.append(Game.enrichment_status == status)
+    elif status == EnrichmentStatus.NEEDS_REVIEW:
         base_filters.append(Game.enrichment_status == EnrichmentStatus.NEEDS_REVIEW)
         visibility_filter = review_inbox_filter()
     else:

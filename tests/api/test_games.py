@@ -62,6 +62,65 @@ async def test_excludes_ignored_games(authed_client, db, user):
     assert "Hidden" not in names
 
 
+async def test_is_ignored_filter_returns_hidden_games_only(authed_client, db, user):
+    game_ok = await make_game(db, "Visible")
+    game_hidden = await make_game(db, "Hidden")
+    await make_session(db, user.discord_id, game_ok.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_session(db, user.discord_id, game_hidden.id, dt(hours_ago=5), dt(hours_ago=4))
+    await make_pref(db, user.discord_id, game_hidden.id, is_ignored=True)
+
+    resp = await authed_client.get("/api/v1/games?is_ignored=true")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["primary_name"] == "Hidden"
+    assert body["items"][0]["is_ignored"] is True
+
+
+async def test_is_ignored_filter_includes_needs_review_stubs(authed_client, db, user):
+    game = await make_game(db, "Ignored Stub", EnrichmentStatus.NEEDS_REVIEW)
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_pref(db, user.discord_id, game.id, is_ignored=True)
+
+    resp = await authed_client.get("/api/v1/games?is_ignored=true")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["primary_name"] == "Ignored Stub"
+
+
+async def test_is_ignored_filter_pagination(authed_client, db, user):
+    for i in range(5):
+        game = await make_game(db, f"Hidden {i:02d}")
+        await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+        await make_pref(db, user.discord_id, game.id, is_ignored=True)
+
+    resp = await authed_client.get("/api/v1/games?is_ignored=true&skip=2&limit=2")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["items"]) == 2
+    assert body["total"] == 5
+
+
+async def test_is_ignored_filter_search_q(authed_client, db, user):
+    game_a = await make_game(db, "Dark Souls III")
+    game_b = await make_game(db, "Elden Ring")
+    await make_session(db, user.discord_id, game_a.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_session(db, user.discord_id, game_b.id, dt(hours_ago=5), dt(hours_ago=4))
+    await make_pref(db, user.discord_id, game_a.id, is_ignored=True)
+    await make_pref(db, user.discord_id, game_b.id, is_ignored=True)
+
+    resp = await authed_client.get("/api/v1/games?is_ignored=true&q=dark")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["primary_name"] == "Dark Souls III"
+
+
 async def test_needs_review_hidden_from_main_library_until_accepted(authed_client, db, user):
     game = await make_game(db, "Unknown Launcher", EnrichmentStatus.NEEDS_REVIEW)
     await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))

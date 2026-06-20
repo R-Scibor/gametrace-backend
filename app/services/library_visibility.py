@@ -29,3 +29,8 @@ def review_inbox_filter():
             UserGamePreference.is_accepted.is_(False),
         ),
     )
+
+
+def ignored_only_filter():
+    """Hidden library tab: games the user has marked ignored."""
+    return UserGamePreference.is_ignored.is_(True)
