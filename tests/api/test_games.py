@@ -121,6 +121,73 @@ async def test_is_ignored_filter_search_q(authed_client, db, user):
     assert body["items"][0]["primary_name"] == "Dark Souls III"
 
 
+async def test_in_library_false_returns_out_of_library_union(authed_client, db, user):
+    game_visible = await make_game(db, "Visible")
+    game_hidden = await make_game(db, "Hidden")
+    game_review = await make_game(db, "Review Stub", EnrichmentStatus.NEEDS_REVIEW)
+    game_both = await make_game(db, "Ignored Review", EnrichmentStatus.NEEDS_REVIEW)
+    for game in (game_visible, game_hidden, game_review, game_both):
+        await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_pref(db, user.discord_id, game_hidden.id, is_ignored=True)
+    await make_pref(db, user.discord_id, game_both.id, is_ignored=True)
+
+    resp = await authed_client.get("/api/v1/games?in_library=false")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    names = {g["primary_name"] for g in body["items"]}
+    assert body["total"] == 3
+    assert names == {"Hidden", "Review Stub", "Ignored Review"}
+    assert "Visible" not in names
+
+
+async def test_in_library_false_pagination(authed_client, db, user):
+    for i in range(4):
+        game = await make_game(db, f"Hidden {i:02d}")
+        await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+        await make_pref(db, user.discord_id, game.id, is_ignored=True)
+
+    resp = await authed_client.get("/api/v1/games?in_library=false&skip=1&limit=2")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["items"]) == 2
+    assert body["total"] == 4
+
+
+async def test_in_library_false_search_q(authed_client, db, user):
+    game_hidden = await make_game(db, "Dark Souls III")
+    game_review = await make_game(db, "Elden Ring", EnrichmentStatus.NEEDS_REVIEW)
+    await make_session(db, user.discord_id, game_hidden.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_session(db, user.discord_id, game_review.id, dt(hours_ago=5), dt(hours_ago=4))
+    await make_pref(db, user.discord_id, game_hidden.id, is_ignored=True)
+
+    resp = await authed_client.get("/api/v1/games?in_library=false&q=dark")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["primary_name"] == "Dark Souls III"
+
+
+async def test_in_library_false_with_status_needs_review(authed_client, db, user):
+    game_hidden = await make_game(db, "Hidden Enriched")
+    game_review = await make_game(db, "Review Stub", EnrichmentStatus.NEEDS_REVIEW)
+    game_ignored_review = await make_game(db, "Ignored Review", EnrichmentStatus.NEEDS_REVIEW)
+    for game in (game_hidden, game_review, game_ignored_review):
+        await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_pref(db, user.discord_id, game_hidden.id, is_ignored=True)
+    await make_pref(db, user.discord_id, game_ignored_review.id, is_ignored=True)
+
+    resp = await authed_client.get("/api/v1/games?in_library=false&status=NEEDS_REVIEW")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    names = {g["primary_name"] for g in body["items"]}
+    assert body["total"] == 2
+    assert names == {"Review Stub", "Ignored Review"}
+
+
 async def test_needs_review_hidden_from_main_library_until_accepted(authed_client, db, user):
     game = await make_game(db, "Unknown Launcher", EnrichmentStatus.NEEDS_REVIEW)
     await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
@@ -257,15 +324,17 @@ async def test_returns_sessions_for_game(authed_client, db, user):
     assert ids == [s3.id, s2.id, s1.id]  # newest first
 
 
-async def test_ignored_game_returns_empty_list(authed_client, db, user):
+async def test_ignored_game_still_returns_sessions(authed_client, db, user):
     game = await make_game(db)
-    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+    session = await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
     await make_pref(db, user.discord_id, game.id, is_ignored=True)
 
     resp = await authed_client.get(f"/api/v1/games/{game.id}/sessions")
 
     assert resp.status_code == 200
-    assert resp.json() == []
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["id"] == session.id
 
 
 async def test_excludes_soft_deleted_sessions(authed_client, db, user):

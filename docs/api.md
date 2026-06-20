@@ -65,16 +65,16 @@ Session state machine — see the [README session state machine](../README.md#se
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/v1/games` | List games the user has at least one session for. Main library excludes `is_ignored` games and unaccepted `NEEDS_REVIEW` stubs. `?status=NEEDS_REVIEW` returns the Unrecognized inbox (`is_accepted` not true). `?is_ignored=true` returns the hidden-games tab (ignored only). Optional `?q=<string>` for server-side case-insensitive substring search on `primary_name`. Paginated (`?skip=`/`?limit=`, max 100). Response: `{"total": <int>, "items": [...]}` — each item includes `is_ignored` and `is_accepted`. |
+| `GET` | `/api/v1/games` | List games the user has at least one session for. Main library excludes `is_ignored` games and unaccepted `NEEDS_REVIEW` stubs. `?in_library=false` returns the out-of-library tab (ignored ∪ unaccepted `NEEDS_REVIEW`). `?status=NEEDS_REVIEW` returns the Unrecognized inbox (`is_accepted` not true). `?is_ignored=true` returns hidden games only. Optional `?q=<string>` for server-side case-insensitive substring search on `primary_name`. Paginated (`?skip=`/`?limit=`, max 100). Response: `{"total": <int>, "items": [...]}` — each item includes `is_ignored` and `is_accepted`. |
 | `GET` | `/api/v1/games/resolve?name=<string>` | Map a free-text name to `{game_id, name}` from the user's library (games with at least one non-soft-deleted session — `ERROR` counts, ignored games still resolve). Exact case-insensitive match on `primary_name`, then on `game_aliases.discord_process_name`. Returns `200` with body `null` on miss. Voice-flow prefill. |
-| `GET` | `/api/v1/games/{id}/sessions` | Paginated session list for a game. Returns `[]` if the user has marked the game as ignored. |
+| `GET` | `/api/v1/games/{id}/sessions` | Paginated session list for a game. `is_ignored` does not apply — same visibility rules as other session reads (soft-deleted and flicker rows excluded). |
 | `GET` | `/api/v1/games/{id}/stats` | Lifetime playtime stats for a single game — `total_seconds` (ONGOING counted live via `now() - start_time`), `session_count`, `first_played`, `last_played`. `404` when the caller has no visible sessions for the game (also covers a non-existent `game_id`). |
 | `POST` | `/api/v1/games/{id}/merge/{target_id}` | Transactional merge — reassigns aliases + sessions + preferences from `id` to `target_id`, deletes the source row. `400` on self-merge, `404` if either game is missing. Returns `204`. |
 | `PUT` | `/api/v1/games/{id}/cover` | **Disabled** — returns `403`, no upload performed. Custom covers mutated the global `Game` row with no per-user scoping or RBAC, so one user could overwrite shared cover art for everyone. Closed pending admin-only controls; see `docs/roadmap.md` → "Game covers". |
 
 ### `GET /games` — library list
 
-Paginated library for the current user. Only games with at least one visible session (`ERROR` counts; flicker and soft-deleted sessions do not). Main list excludes `is_ignored` games and `NEEDS_REVIEW` stubs the user has not accepted (`is_accepted` not `true`). `?status=NEEDS_REVIEW` returns the Unrecognized inbox only. `?is_ignored=true` returns games the user has hidden (includes ignored `NEEDS_REVIEW` stubs). Ordered by `primary_name` ascending.
+Paginated library for the current user. Only games with at least one visible session (`ERROR` counts; flicker and soft-deleted sessions do not). Main list excludes `is_ignored` games and `NEEDS_REVIEW` stubs the user has not accepted (`is_accepted` not `true`). `?in_library=false` returns the out-of-library union (ignored games + unaccepted `NEEDS_REVIEW` stubs, deduped). `?status=NEEDS_REVIEW` returns the Unrecognized inbox only. `?is_ignored=true` returns hidden games only. Ordered by `primary_name` ascending.
 
 **Query parameters**
 
@@ -83,10 +83,11 @@ Paginated library for the current user. Only games with at least one visible ses
 | `skip` | `0` | Pagination offset (≥ 0) |
 | `limit` | `20` | Page size (1–100) |
 | `status` | *(none)* | Filter by `enrichment_status` — e.g. `NEEDS_REVIEW` for the Unrecognized tab, `ENRICHED` for enriched-only |
-| `is_ignored` | *(none)* | `true` — hidden-games tab only. Omit or `false` — main library behaviour (ignored games excluded). |
+| `in_library` | *(none)* | `false` — out-of-library tab (ignored ∪ unaccepted `NEEDS_REVIEW`). Omit or `true` — main library behaviour. |
+| `is_ignored` | *(none)* | `true` — hidden games only. Takes precedence over `in_library`. Omit or `false` — no extra ignore filter. |
 | `q` | *(none)* | Case-insensitive substring search on `primary_name`. Applied server-side before pagination. |
 
-`status`, `is_ignored`, and `q` combine (AND). Reset `skip` to `0` when any filter changes.
+`status`, `in_library`, `is_ignored`, and `q` combine (AND). Reset `skip` to `0` when any filter changes.
 
 **Response — `GameListResponse`**
 

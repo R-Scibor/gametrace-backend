@@ -34,3 +34,17 @@ def review_inbox_filter():
 def ignored_only_filter():
     """Hidden library tab: games the user has marked ignored."""
     return UserGamePreference.is_ignored.is_(True)
+
+
+def library_excluded_filter():
+    """Out-of-library tab: ignored games and unaccepted NEEDS_REVIEW stubs."""
+    return or_(
+        UserGamePreference.is_ignored.is_(True),
+        and_(
+            Game.enrichment_status == EnrichmentStatus.NEEDS_REVIEW,
+            or_(
+                UserGamePreference.is_accepted.is_(None),
+                UserGamePreference.is_accepted.is_(False),
+            ),
+        ),
+    )

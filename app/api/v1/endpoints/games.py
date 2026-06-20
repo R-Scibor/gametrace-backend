@@ -15,6 +15,7 @@ from app.schemas.session import SessionResponse
 from app.schemas.stats import GameStatsResponse
 from app.services.library_visibility import (
     ignored_only_filter,
+    library_excluded_filter,
     library_visible_filter,
     review_inbox_filter,
 )
@@ -47,6 +48,7 @@ async def list_games(
     limit: int = Query(default=20, ge=1, le=100),
     status: EnrichmentStatus | None = Query(default=None),
     is_ignored: bool | None = Query(default=None),
+    in_library: bool | None = Query(default=None),
     q: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -56,6 +58,7 @@ async def list_games(
     Main library excludes ignored games and unaccepted NEEDS_REVIEW stubs.
     Optional ?status=NEEDS_REVIEW for the Unrecognized inbox tab.
     Optional ?is_ignored=true for the hidden-games tab.
+    Optional ?in_library=false for the out-of-library tab (ignored + unaccepted NEEDS_REVIEW).
     Optional ?q= for server-side name search (case-insensitive substring match).
     """
     pref_join = and_(
@@ -72,6 +75,10 @@ async def list_games(
 
     if is_ignored is True:
         visibility_filter = ignored_only_filter()
+        if status is not None:
+            base_filters.append(Game.enrichment_status == status)
+    elif in_library is False:
+        visibility_filter = library_excluded_filter()
         if status is not None:
             base_filters.append(Game.enrichment_status == status)
     elif status == EnrichmentStatus.NEEDS_REVIEW:
@@ -186,16 +193,6 @@ async def list_game_sessions(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    pref_result = await db.execute(
-        select(UserGamePreference).where(
-            UserGamePreference.user_id == user.discord_id,
-            UserGamePreference.game_id == game_id,
-        )
-    )
-    pref = pref_result.scalar_one_or_none()
-    if pref is not None and pref.is_ignored:
-        return []
-
     result = await db.execute(
         select(GameSession)
         .options(selectinload(GameSession.game))
