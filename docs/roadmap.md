@@ -2,15 +2,27 @@
 
 Things on the horizon for GameTrace. Nothing here is committed to a date — this is the "we know we want this, here's what it looks like" list. Items are roughly ordered by when they become relevant, not by priority.
 
+For detailed incident write-ups and deferred fixes with evidence, see [tech-debt.md](tech-debt.md).
+
 ## Auth
 
 ### Discord OAuth2 login
-Replaces the current username-based login. Today, `POST /auth/login` accepts a Discord username and (if the user was pre-registered via the `/login` slash command) issues a 30-day sliding token. This is intentional minimal-friction auth for a homelab build, but the username is effectively a credential — anyone who knows it and has network access to the API can log in.
+Today, `POST /auth/login` accepts a Discord username and (if the user was pre-registered via the `/login` slash command) issues a 30-day sliding token. This is intentional minimal-friction auth for a homelab build, but the username is effectively a credential — anyone who knows it and has network access to the API can log in.
 
 **Update (Audit 2026-05-14):** This is categorized as a P0 security risk (Identity Impersonation). Transitioning to OAuth2 or an OTP-based handshake is the primary priority for the next development cycle.
 
+**Shipped (partial):** `POST /auth/discord` adds Discord OAuth2 (authorization code + PKCE, confidential client) as a *parallel* login path — it verifies the caller controls the Discord account, auto-provisions the user, and warns (`needs_server_join`) when they're not in the bot's server. The end goal is two user-selectable paths (OAuth and a secure `/login`-based handshake). The P0 remains technically open: the insecure username `POST /auth/login` is intentionally retained until the OTP handshake below replaces it.
+
+### OTP login handshake — closes the username P0
+The secure version of the `/login` path and the second user-selectable login option. Plan: the Discord `/login` slash command (or a bot DM) issues a short-lived one-time code; the user enters it in the app to receive a session token. Proves Discord identity without OAuth's redirect/deep-link plumbing. Once this lands, remove the username-credential `POST /auth/login` — which is what finally closes the P0 Identity Impersonation risk.
+
+### Drop `users.username` uniqueness
+`users.username` is `unique=True`, a holdover from when login matched on username. Now that identity is verified and keyed on `discord_id` (OAuth reads it from `/users/@me`), the unique constraint is a liability: Discord usernames aren't globally stable, so a collision or rename can fail the OAuth user upsert. The endpoint currently guards this with a `409` (see `app/api/v1/endpoints/auth.py`), but the proper fix is a migration dropping the constraint so usernames become non-identifying display data.
+
 ### Administrative Access (RBAC)
 **New (Audit 2026-05-14):** Destructive endpoints like `POST /games/{id}/merge/{target_id}` are currently open to all authenticated users. We need to introduce a `is_admin` flag on the `User` model and implement Role-Based Access Control (RBAC) to protect global game data.
+
+**Update (2026-06-21):** RBAC is the gate for the [Admin panel](#admin-panel) — catalog ops (merge, cover, enrich), cross-user error visibility, and bug-report triage all require `require_admin` on `/api/v1/admin/*`. Seed `is_admin=true` for the homelab operator; no role hierarchy in v1.
 
 ### Secure Token Storage
 **New (Audit 2026-05-14):** Current authentication tokens are stored in plain text. We should transition to storing SHA-256 hashes of the tokens to protect active sessions in the event of a database compromise.
@@ -66,6 +78,10 @@ Current Celery Beat fires the weekly digest on Monday 09:00 UTC for everyone. Us
 
 When `game_sessions` crosses ~10 million rows or `/stats/summary` p95 starts climbing past 100 ms despite the existing indexes, the next move is range-partitioning by month using native Postgres partitioning. No data loss, no rollups, partition pruning makes time-windowed queries trivial. Not relevant at homelab scale.
 
+## Manual game tracking (mobile)
+
+**Vision only — not scheduled.** Mobile users cannot log playtime for a game that never appeared via Discord presence: `POST /sessions` requires a `game_id`, and the API has no path to create or discover games from a typed name. The intended fix is a wizard — library suggest → IGDB disambiguation (user picks) → optional "Unrecognized" stub → `POST /sessions` — not a global catalog search and not a dump of the library into the voice model. See [manual-game-tracking.md](manual-game-tracking.md).
+
 ## Session data quality
 
 ### Source flip on user edit — shipped
@@ -83,10 +99,71 @@ This produced a data-integrity incident: at least one game (id 40) had its worki
 **Interim action:** the write endpoint returns `403` and writes nothing; affected `CUSTOM` rows are reset to `EXTERNAL` and re-enriched so they fall back to live IGDB covers (or land in `NEEDS_REVIEW` with no cover — strictly better than a broken URL). The storage machinery — `CoverSource.CUSTOM` enum, the `/covers` static mount, and the enrichment skip-guard — is intentionally retained for the admin feature below; only the open write path is closed.
 
 ### Admin-curated global covers
-The legitimate version of the feature above: let an **admin** set a global cover for a game that enrichment can't resolve (un-matched or `NEEDS_REVIEW`), rather than letting any user mutate shared art. Gated on the [Administrative Access (RBAC)](#administrative-access-rbac) work — when `User.is_admin` exists, the cover endpoint re-opens behind that check. Still needs the on-disk durability fixed (the dead-URL incident above): either guarantee the `/covers` mount is served by the same host the URL points at, or store covers somewhere with a stable URL contract. MIME sniffing on this endpoint is already tracked under [MIME sniffing on uploads](#mime-sniffing-on-uploads).
+The legitimate version of the feature above: let an **admin** set a global cover for a game that enrichment can't resolve (un-matched or `NEEDS_REVIEW`), rather than letting any user mutate shared art. Ships as part of the [Admin panel](#admin-panel) catalog ops slice — `PUT /admin/games/{id}/cover` behind `require_admin`, not a public route. Still needs the on-disk durability fixed (the dead-URL incident above): either guarantee the `/covers` mount is served by the same host the URL points at, or store covers somewhere with a stable URL contract. MIME sniffing on this endpoint is already tracked under [MIME sniffing on uploads](#mime-sniffing-on-uploads).
 
 ### Per-user cover persistence — deferred (frontend-owned)
 Per the mobile team: user-added cover photos are currently stored **locally** — per device on mobile, per browser on web — and don't sync across devices. Server-side persistence so covers follow the user is intentionally deferred: hosting user-uploaded images turns GameTrace into a UGC platform with content-moderation and legal/liability obligations that are out of scope today. Distinct from admin-curated covers (shared, few, vetted) — this one is per-user and unbounded. Revisit only if cross-device cover persistence becomes a real user need.
+
+## Admin panel
+
+**Not scheduled — design captured 2026-06-21.** Homelab ops today (manual SQL merges, `enrich_game` dispatch, `NEEDS_REVIEW` triage) justify a thin admin surface before public release. Three slices share one RBAC gate; don't build a monolithic console on day one.
+
+**Frontend:** separate route on `gametrace-web` (`/admin`) — not inside the React Native app. Login via existing auth; API checks `is_admin`.
+
+### P0 — RBAC + `/api/v1/admin/*` router
+
+- Migration: `users.is_admin BOOLEAN NOT NULL DEFAULT false`
+- `require_admin` dependency (403 for non-admins)
+- Move destructive global mutations behind admin:
+  - `POST /admin/games/{id}/merge/{target_id}` (remove or proxy public merge)
+  - `PUT /admin/games/{id}/cover` (re-open cover writes; see [Admin-curated global covers](#admin-curated-global-covers))
+- Audit log table or structured log line on every admin write: `{ admin_id, action, resource, before/after }`
+
+### P1 — Catalog ops (highest value)
+
+Replaces manual `psql` / Celery one-offs documented in [tech-debt.md](tech-debt.md) (Kingdom Hearts, Skyrim dupes, Heroes III `NEEDS_REVIEW`).
+
+| Endpoint (sketch) | Purpose |
+|---|---|
+| `GET /admin/games?status=NEEDS_REVIEW&q=` | Global catalog queue — not per-user Unrecognized inbox |
+| `POST /admin/games/{id}/enrich` | Re-queue `enrich_game` Celery task |
+| `POST /admin/games/match` + `POST /admin/games/{id}/igdb-link` | Sync IGDB search; admin picks candidate → set metadata + `ENRICHED` |
+| `POST /admin/games/{id}/aliases` | Add exact `discord_process_name` (Discord format variants) |
+| `POST /admin/games/{id}/merge/{target_id}` | Transactional merge (existing logic) |
+
+UI v1 can be minimal — table + action buttons. Overlaps planned mobile [manual game tracking](manual-game-tracking.md) confirm step, but admin is **global** and does not require the caller to have sessions on the game.
+
+### P2 — Observability + user feedback
+
+**Server errors — use Sentry, don't rebuild it.** `init_sentry()` is wired ([Ops / quality](#verify-sentry--flower-end-to-end)); verify DSN end-to-end first. Admin panel links or embeds Sentry issues — not a custom `error_events` table fed from every 4xx (409 overlap, 404, 403 ONGOING are normal user flow).
+
+Optional thin feed: log **5xx + selected upstream failures** (502 voice, 502 Discord OAuth) with `request_id`, route, `user_id` — append-only table or Redis stream for a simple admin "Recent failures" tab. Complements Sentry; does not replace it.
+
+**In-app bug reports (new):**
+
+```
+POST /api/v1/reports   # any authed user
+  { category, message, screen?, app_version, device_info, client_logs[]? }
+
+GET  /admin/reports    # require_admin — list, status: open | triaged | closed
+PATCH /admin/reports/{id}  # triage notes
+```
+
+Subjective user feedback ("stats look wrong") stays separate from objective server stack traces. Optional: correlate report → Sentry issues by `user_id` + timestamp in admin UI.
+
+**Wider logs:** defer live log tail in admin. [Centralized Logging](#centralized-logging) → stdout → `docker compose logs` at homelab scale; add Loki/Grafana only if volume warrants. Link to Flower (`:5555`) for Celery — don't reimplement inside admin.
+
+### P3 — Polish
+
+- LLM adjudication review UI (see [tech-debt.md → Enrichment v2](tech-debt.md#enrichment-v2--token-subset--llm-adjudicator-design-sketch)) — inspect borderline auto-links before commit
+- Periodic `NEEDS_REVIEW` sweep trigger from admin
+- Sentry Performance sampling enabled — prerequisite for stats cache triggers
+
+### Explicitly out of scope (v1)
+
+- Per-user session replay or full remote client log streaming
+- Re-opening public `PUT /games/{id}/cover` or merge for non-admins
+- Per-user server-side cover hosting ([Per-user cover persistence](#per-user-cover-persistence--deferred-frontend-owned))
 
 ## Stats
 
