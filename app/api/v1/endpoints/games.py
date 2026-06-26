@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.v1.endpoints.auth import get_current_user
 from app.core.database import get_db
-from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
+from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession
 from app.models.user import User
 from app.schemas.game import (
@@ -28,7 +28,6 @@ from app.services.game_matching import (
     _igdb_search_candidates,
     _RateLimited,
 )
-from app.models.game import CoverSource
 from app.schemas.session import SessionResponse
 from app.schemas.stats import GameStatsResponse
 from app.services.library_visibility import (
