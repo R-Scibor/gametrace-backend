@@ -96,6 +96,169 @@ def _empty_igdb_result() -> IGDBResult:
     )
 
 
+def _normalize_cover_url(url: str | None) -> str | None:
+    """Normalize IGDB cover URL: protocol-relative → https, t_thumb → t_cover_big."""
+    if not url:
+        return None
+    if url.startswith("//"):
+        url = "https:" + url
+    return url.replace("/t_thumb/", "/t_cover_big/")
+
+
+class IGDBCandidate(NamedTuple):
+    igdb_id: int
+    name: str
+    year: int | None
+    cover_url: str | None
+    score: float
+
+
+def _igdb_search_candidates(name: str) -> list[IGDBCandidate]:
+    """Return all IGDB candidates for *name* ranked by confidence score descending.
+
+    Runs the same ``search "...";`` query as ``_igdb_search`` but exposes every
+    row as an :class:`IGDBCandidate` so API endpoints can present a pick-list.
+
+    Raises :class:`_RateLimited` on HTTP 401 or 429.
+    """
+    if not settings.igdb_client_id or not settings.igdb_client_secret:
+        logger.warning("IGDB credentials not set — skipping candidate search")
+        return []
+
+    token = get_igdb_token()
+    clean_name = _sanitize(name)
+    safe_name = clean_name.replace('"', '\\"')
+
+    with httpx.Client(timeout=10) as client:
+        resp = client.post(
+            "https://api.igdb.com/v4/games",
+            headers={
+                "Client-ID": settings.igdb_client_id,
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "text/plain",
+            },
+            content=(
+                f'search "{safe_name}"; '
+                'fields name,cover.url,cover.image_id,alternative_names.name,'
+                'genres.name,themes.name,'
+                'involved_companies.company.name,involved_companies.developer,'
+                'involved_companies.publisher,first_release_date; '
+                'limit 5;'
+            ),
+        )
+
+    if resp.status_code == 401:
+        invalidate_igdb_token()
+        raise _RateLimited("IGDB-auth")
+
+    if resp.status_code == 429:
+        raise _RateLimited("IGDB")
+
+    resp.raise_for_status()
+
+    candidates: list[IGDBCandidate] = []
+    for game in resp.json():
+        candidate_names = [game.get("name", "")]
+        for alt in game.get("alternative_names", []):
+            if alt.get("name"):
+                candidate_names.append(alt["name"])
+        score = max((_confidence(name, n) for n in candidate_names if n), default=0.0)
+
+        cover = game.get("cover")
+        cover_url = _normalize_cover_url(cover.get("url") if cover else None)
+
+        ts = game.get("first_release_date")
+        year = date.fromtimestamp(ts).year if ts else None
+
+        candidates.append(IGDBCandidate(
+            igdb_id=game["id"],
+            name=game.get("name", ""),
+            year=year,
+            cover_url=cover_url,
+            score=score,
+        ))
+
+    candidates.sort(key=lambda c: c.score, reverse=True)
+    return candidates
+
+
+def _igdb_fetch_by_id(igdb_id: int) -> tuple[str, IGDBResult] | None:
+    """Fetch a single IGDB game row by its numeric id.
+
+    Returns ``(canonical_name, IGDBResult)`` with ``confidence=1.0`` (exact
+    lookup — no fuzzy scoring needed), or ``None`` when the id yields no row.
+
+    Raises :class:`_RateLimited` on HTTP 401 or 429.
+    """
+    if not settings.igdb_client_id or not settings.igdb_client_secret:
+        logger.warning("IGDB credentials not set — skipping fetch-by-id")
+        return None
+
+    token = get_igdb_token()
+
+    with httpx.Client(timeout=10) as client:
+        resp = client.post(
+            "https://api.igdb.com/v4/games",
+            headers={
+                "Client-ID": settings.igdb_client_id,
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "text/plain",
+            },
+            content=(
+                f'where id = {igdb_id}; '
+                'fields name,cover.url,cover.image_id,alternative_names.name,'
+                'genres.name,themes.name,'
+                'involved_companies.company.name,involved_companies.developer,'
+                'involved_companies.publisher,first_release_date; '
+                'limit 1;'
+            ),
+        )
+
+    if resp.status_code == 401:
+        invalidate_igdb_token()
+        raise _RateLimited("IGDB-auth")
+
+    if resp.status_code == 429:
+        raise _RateLimited("IGDB")
+
+    resp.raise_for_status()
+
+    rows = resp.json()
+    if not rows:
+        return None
+
+    game = rows[0]
+    canonical_name = game.get("name", "")
+
+    cover = game.get("cover")
+    cover_url = _normalize_cover_url(cover.get("url") if cover else None)
+
+    genres = [g["name"] for g in game.get("genres", []) if g.get("name")]
+    themes = [t["name"] for t in game.get("themes", []) if t.get("name")]
+    developers = [
+        ic["company"]["name"]
+        for ic in game.get("involved_companies", [])
+        if ic.get("developer") and ic.get("company", {}).get("name")
+    ]
+    publishers = [
+        ic["company"]["name"]
+        for ic in game.get("involved_companies", [])
+        if ic.get("publisher") and ic.get("company", {}).get("name")
+    ]
+    ts = game.get("first_release_date")
+    release_date = date.fromtimestamp(ts) if ts else None
+
+    return canonical_name, IGDBResult(
+        cover_url=cover_url,
+        confidence=1.0,
+        genres=genres,
+        themes=themes,
+        developers=developers,
+        publishers=publishers,
+        first_release_date=release_date,
+    )
+
+
 def _igdb_search(name: str) -> IGDBResult:
     """Returns IGDBResult with cover, confidence, and metadata for the best candidate.
 
