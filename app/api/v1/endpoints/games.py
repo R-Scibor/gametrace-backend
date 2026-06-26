@@ -10,7 +10,15 @@ from app.core.database import get_db
 from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession
 from app.models.user import User
-from app.schemas.game import CoverUpload, GameListResponse, GameResolveOut, GameResponse
+from app.schemas.game import (
+    CoverUpload,
+    GameListResponse,
+    GameResolveOut,
+    GameResponse,
+    GameSuggestItem,
+    GameSuggestResponse,
+)
+from app.services.game_matching import _confidence
 from app.schemas.session import SessionResponse
 from app.schemas.stats import GameStatsResponse
 from app.services.library_visibility import (
@@ -179,6 +187,85 @@ async def resolve_game(
     if row is None:
         return None
     return GameResolveOut(game_id=row.id, name=row.primary_name)
+
+
+# ---------------------------------------------------------------------------
+# GET /suggest
+# ---------------------------------------------------------------------------
+
+@router.get("/suggest", response_model=GameSuggestResponse)
+async def suggest_games(
+    q: str = Query(..., min_length=1),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Fuzzy-search the global games catalog by name.
+
+    Scope: ALL games (not restricted to the caller's library).
+    Prefilters with ILIKE-any-token over primary_name and aliases, then
+    scores each candidate with _confidence() (max over primary_name + all
+    aliases for that game). Drops score < 0.3, sorts descending, paginates.
+    """
+    tokens = q.split()
+
+    # Build ILIKE prefilter: any token matches primary_name or any alias
+    ilike_conditions = []
+    for token in tokens:
+        ilike_conditions.append(Game.primary_name.ilike(f"%{token}%"))
+        ilike_conditions.append(GameAlias.discord_process_name.ilike(f"%{token}%"))
+
+    # Step 1: get distinct game IDs that survive the prefilter
+    id_query = (
+        select(Game.id)
+        .outerjoin(GameAlias, GameAlias.game_id == Game.id)
+        .where(or_(*ilike_conditions))
+        .distinct()
+    )
+    matched_ids = (await db.execute(id_query)).scalars().all()
+
+    if not matched_ids:
+        return GameSuggestResponse(total=0, items=[])
+
+    # Step 2: load full rows + aliases for matched games
+    games_query = (
+        select(Game)
+        .where(Game.id.in_(matched_ids))
+        .options(selectinload(Game.aliases))
+    )
+    games = (await db.execute(games_query)).scalars().all()
+
+    # Step 3: score, apply noise floor, sort
+    scored: list[tuple[Game, float]] = []
+    for game in games:
+        alias_names = [a.discord_process_name for a in game.aliases]
+        score = max(
+            [_confidence(q, game.primary_name)]
+            + [_confidence(q, alias) for alias in alias_names]
+        )
+        if score >= 0.3:
+            scored.append((game, score))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    total = len(scored)
+    page = scored[skip : skip + limit]
+
+    return GameSuggestResponse(
+        total=total,
+        items=[
+            GameSuggestItem(
+                game_id=g.id,
+                primary_name=g.primary_name,
+                cover_image_url=g.cover_image_url,
+                enrichment_status=g.enrichment_status,
+                score=score,
+            )
+            for g, score in page
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------

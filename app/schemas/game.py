@@ -30,3 +30,16 @@ class CoverUpload(BaseModel):
 class GameResolveOut(BaseModel):
     game_id: int
     name: str
+
+
+class GameSuggestItem(BaseModel):
+    game_id: int
+    primary_name: str
+    cover_image_url: Optional[str] = None
+    enrichment_status: EnrichmentStatus
+    score: float
+
+
+class GameSuggestResponse(BaseModel):
+    total: int
+    items: list[GameSuggestItem]
