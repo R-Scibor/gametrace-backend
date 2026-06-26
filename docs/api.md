@@ -10,8 +10,8 @@ Grouped by code — see endpoint sections below for path-specific detail. Authed
 
 | Code | When |
 |---|---|
-| `200` | Successful read or update (`GET`, `PATCH`, `PUT`, `POST /auth/login`, `POST /sessions/{id}/restore`). `GET /games/resolve` also returns `200` with body `null` on miss. |
-| `201` | `POST /sessions` — manual session created. |
+| `200` | Successful read or update (`GET`, `PATCH`, `PUT`, `POST /auth/login`, `POST /sessions/{id}/restore`). `GET /games/resolve` also returns `200` with body `null` on miss. `POST /games` returns `200` when the game already exists (deduplication by `igdb_id`). |
+| `201` | `POST /sessions` — manual session created. `POST /games` — new game row created (either mode). |
 | `204` | Successful delete with no body (`POST /auth/logout`, `DELETE /sessions/{id}`, `DELETE /user/preferences/{game_id}`, `DELETE /notifications/register-token`, `POST /games/{id}/merge/{target_id}`). |
 | `400` | Client input rejected — e.g. self-merge (`POST /games/{id}/merge/{target_id}`), empty audio upload (`POST /voice/transcribe`), `redirect_uri` not allowlisted (`POST /auth/discord`). |
 | `401` | Invalid or expired bearer token (`get_current_user`), or unknown token on `POST /auth/logout`, or bad/expired Discord code (`POST /auth/discord`). |
@@ -20,8 +20,8 @@ Grouped by code — see endpoint sections below for path-specific detail. Authed
 | `409` | Session time overlap — `POST /sessions`, `PATCH /sessions/{id}`, `POST /sessions/{id}/restore` (body: `{detail: {detail, conflicting_session}}`). |
 | `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone on `PUT /profile/settings` (Pydantic). |
 | `500` | Unhandled server error (global handler in `app/main.py`). |
-| `502` | Upstream voice failure — OpenAI Whisper or Vertex Gemini error (`POST /voice/transcribe`). Discord OAuth upstream failure (`POST /auth/discord`). |
-| `503` | Voice pipeline not configured — `OPENAI_API_KEY` or `GCP_PROJECT` unset (`POST /voice/transcribe`). |
+| `502` | Upstream voice failure — OpenAI Whisper or Vertex Gemini error (`POST /voice/transcribe`). Discord OAuth upstream failure (`POST /auth/discord`). IGDB upstream error — non-rate-limit failure (`POST /games/match`). |
+| `503` | Voice pipeline not configured — `OPENAI_API_KEY` or `GCP_PROJECT` unset (`POST /voice/transcribe`). IGDB rate-limited or auth expired (`POST /games/match`, `POST /games` with `igdb_id`). |
 
 `GET /health` and `GET /api/v1/health` always return `200`; bot offline or Redis loss is reflected in the JSON payload (`bot.status`: `offline` / `unknown`), not the HTTP status.
 
@@ -66,7 +66,10 @@ Session state machine — see the [README session state machine](../README.md#se
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/v1/games` | List games the user has at least one session for. Main library excludes `is_ignored` games and unaccepted `NEEDS_REVIEW` stubs. `?in_library=false` returns the out-of-library tab (ignored ∪ unaccepted `NEEDS_REVIEW`). `?status=NEEDS_REVIEW` returns the Unrecognized inbox (`is_accepted` not true). `?is_ignored=true` returns hidden games only. Optional `?q=<string>` for server-side case-insensitive substring search on `primary_name`. Paginated (`?skip=`/`?limit=`, max 100). Response: `{"total": <int>, "items": [...]}` — each item includes `is_ignored` and `is_accepted`. |
+| `POST` | `/api/v1/games` | Create a new global `Game` row or link to an existing one. Two modes (exactly one): **igdb_id mode** — dedupes by `external_api_id` (returns `200` if already known with no IGDB call, else fetches IGDB metadata and creates an `ENRICHED` row → `201`; IGDB miss → `404`; rate-limited → `503`). **Unrecognized mode** (`unrecognized: true` + non-blank `name`) — inserts a `NEEDS_REVIEW` stub → `201`. Optional `query` stored as a `GameAlias` for future `/resolve` lookups. Both/neither mode active → `422`. |
 | `GET` | `/api/v1/games/resolve?name=<string>` | Map a free-text name to `{game_id, name}` from the user's library (games with at least one non-soft-deleted session — `ERROR` counts, ignored games still resolve). Exact case-insensitive match on `primary_name`, then on `game_aliases.discord_process_name`. Returns `200` with body `null` on miss. Voice-flow prefill. |
+| `GET` | `/api/v1/games/suggest?q=<string>` | Fuzzy-search the **global** games catalog (all users' games, not restricted to the caller's library). Pre-filters with ILIKE-any-token on `primary_name` and aliases, scores each candidate with `_confidence()` (max across name + aliases), drops score < 0.3, sorts descending, paginates. Returns `{"total": <int>, "items": [<GameSuggestItem>]}` — each item includes `game_id`, `primary_name`, `cover_image_url`, `enrichment_status`, `score`. `422` if `q` is blank or whitespace. |
+| `POST` | `/api/v1/games/match` | Synchronous IGDB candidate search — no DB write. Body: `{"query": "<string>"}`. Returns `list[IGDBCandidateOut]` (`igdb_id`, `name`, `year\|null`, `cover_url\|null`, `score`). Use when suggest has no usable match; pass the chosen `igdb_id` to `POST /games`. `503` rate-limited; `502` other IGDB error. |
 | `GET` | `/api/v1/games/{id}/sessions` | Paginated session list for a game. `is_ignored` does not apply — same visibility rules as other session reads (soft-deleted and flicker rows excluded). |
 | `GET` | `/api/v1/games/{id}/stats` | Lifetime playtime stats for a single game — `total_seconds` (ONGOING counted live via `now() - start_time`), `session_count`, `first_played`, `last_played`. `404` when the caller has no visible sessions for the game (also covers a non-existent `game_id`). |
 | `POST` | `/api/v1/games/{id}/merge/{target_id}` | Transactional merge — reassigns aliases + sessions + preferences from `id` to `target_id`, deletes the source row. `400` on self-merge, `404` if either game is missing. Returns `204`. |
@@ -101,6 +104,100 @@ Paginated library for the current user. Only games with at least one visible ses
 **Breaking change:** Previously returned a bare `GameResponse[]`. Mobile clients must read `items` and `total`.
 
 Returns `401` without a valid bearer token.
+
+### `POST /games` — create or link game
+
+Create a new global `Game` row or link to an existing one. Exactly one mode must be active.
+
+**Mode 1 — igdb_id mode** (`igdb_id` set):
+1. Deduplication check by `external_api_id` — if a `Game` row with this IGDB id already exists, returns it immediately with `200` (no IGDB call made).
+2. Fetches game metadata from IGDB by id.
+3. Inserts an `ENRICHED` row with `cover_source=EXTERNAL`, genres, themes, developers, publishers, and `first_release_date` → `201`.
+
+**Mode 2 — unrecognized mode** (`unrecognized: true` + non-blank `name`):
+Inserts a `NEEDS_REVIEW` stub using the provided name and creates an alias from `name`. No IGDB call → `201`. Use when the user confirms no IGDB match is correct (obscure indie, non-game activity, etc.).
+
+In both modes, optional `query` is stored as a `GameAlias` for future `/resolve` lookups.
+
+**Request body**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `igdb_id` | `int\|null` | Mode 1 | IGDB game identifier |
+| `name` | `string\|null` | Mode 2 | Game name for the `NEEDS_REVIEW` stub |
+| `unrecognized` | `bool` | Mode 2 | Must be `true` when supplying `name` |
+| `query` | `string\|null` | Optional | Alias for future `/resolve` lookups (any mode) |
+
+**Response — `GameResponse`**
+
+Fields: `id`, `primary_name`, `cover_image_url`, `cover_source`, `enrichment_status`, `is_ignored`, `is_accepted`.
+
+`is_ignored` and `is_accepted` are always `false` / `null` for a freshly created or linked row (no user preference yet).
+
+**Status codes**
+
+| Code | Condition |
+|---|---|
+| `200` | igdb_id mode — game already exists (deduplication) |
+| `201` | New game row created (either mode) |
+| `404` | IGDB has no record for the provided `igdb_id` |
+| `422` | Both modes active, neither mode active, or `name` is blank with `unrecognized: true` |
+| `503` | IGDB rate-limited or auth expired (igdb_id mode only) |
+
+### `GET /games/suggest` — global catalog fuzzy search
+
+Fuzzy-search the global games catalog by name. Scope is **all games** in the DB, not restricted to the caller's library. Intended as the first step in the manual game discovery wizard — before escalating to a live IGDB query.
+
+Pre-filters candidates with ILIKE-any-token (each whitespace-split token must match `primary_name` or at least one alias). Scores each candidate with `_confidence()` (max over `primary_name` and all `game_aliases`). Drops score < 0.3. Sorts descending by score. Paginates.
+
+**Query parameters**
+
+| Param | Default | Description |
+|---|---|---|
+| `q` | *(required)* | Search string — blank or whitespace-only → `422` |
+| `skip` | `0` | Pagination offset (≥ 0) |
+| `limit` | `20` | Page size (1–100) |
+
+**Response — `GameSuggestResponse`**
+
+```json
+{ "total": <int>, "items": [<GameSuggestItem>, …] }
+```
+
+- `total` — number of candidates surviving the 0.3 score floor across all pages.
+- `items` — current page; each row is `GameSuggestItem`:
+
+| Field | Type | Description |
+|---|---|---|
+| `game_id` | `int` | Internal game identifier |
+| `primary_name` | `string` | Canonical game title |
+| `cover_image_url` | `string\|null` | Cover art URL (IGDB-sourced or null) |
+| `enrichment_status` | `string` | `ENRICHED`, `NEEDS_REVIEW`, `PENDING`, or `ERROR` |
+| `score` | `float` | Relevance score (0.3–1.0) |
+
+Returns `401` without a valid bearer token. Returns `422` if `q` is blank or whitespace.
+
+### `POST /games/match` — IGDB candidate search
+
+Search IGDB synchronously and return ranked candidates for `query`. No DB write — callers display the pick-list and submit the chosen `igdb_id` to `POST /games`. Intended for the manual discovery wizard's "search online" step when the local catalog suggest has no usable match.
+
+**Request body**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `query` | `string` | Yes (min length 1) | Free-text game name to search IGDB |
+
+**Response — `list[IGDBCandidateOut]`**
+
+| Field | Type | Description |
+|---|---|---|
+| `igdb_id` | `int` | IGDB game identifier |
+| `name` | `string` | Canonical IGDB game title |
+| `year` | `int\|null` | First release year (null if unknown) |
+| `cover_url` | `string\|null` | IGDB cover art URL |
+| `score` | `float` | Ranking confidence score |
+
+Returns `401` without a valid bearer token. Returns `503` when IGDB is rate-limited or the Twitch auth token has expired. Returns `502` on any other IGDB failure (logged server-side).
 
 ## Stats
 
