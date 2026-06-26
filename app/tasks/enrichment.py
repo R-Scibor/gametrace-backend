@@ -107,192 +107,22 @@ fresh engine created inside it, sync HTTP calls via asyncio.to_thread().
 """
 import asyncio
 import logging
-import re
-from datetime import date
-from typing import NamedTuple
 
 import httpx
-from rapidfuzz import fuzz
 from celery.exceptions import MaxRetriesExceededError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.celery_app import celery_app
+from app.services.game_matching import (
+    _RateLimited, _confidence, _sanitize, _igdb_search,
+    IGDBResult, _empty_igdb_result, CONFIDENCE_THRESHOLD,
+)
 from app.services.game_review import sync_review_preferences
 from app.core.config import settings
 from app.models.game import CoverSource, EnrichmentStatus, Game
-from app.tasks.igdb_auth import get_igdb_token, invalidate_igdb_token
 
 logger = logging.getLogger(__name__)
-
-CONFIDENCE_THRESHOLD = 0.85
-# Score ceiling applied when sanitized digit sets differ (sequel guard).
-# Must stay below CONFIDENCE_THRESHOLD so mismatched-number pairs never enrich.
-_NUMBER_MISMATCH_CAP = 0.75
-
-_ROMAN_MAP = {
-    "i": "1", "ii": "2", "iii": "3", "iv": "4", "v": "5",
-    "vi": "6", "vii": "7", "viii": "8", "ix": "9", "x": "10",
-    "xi": "11", "xii": "12", "xiii": "13", "xiv": "14", "xv": "15",
-}
-
-
-# ---------------------------------------------------------------------------
-# Custom exception to signal 429 back to the sync Celery task for retry
-# ---------------------------------------------------------------------------
-
-class _RateLimited(Exception):
-    pass
-
-
-# ---------------------------------------------------------------------------
-# Sync HTTP helpers — called via asyncio.to_thread()
-# ---------------------------------------------------------------------------
-
-def _sanitize(s: str) -> str:
-    s = s.lower()
-    s = re.sub(r'\.\w{2,5}$', '', s)              # strip file extension (.exe, .app)
-    s = re.sub(r'[\[\(][^\]\)]*[\]\)]', '', s)    # remove [tags] and (tags)
-    s = s.replace('&', 'and')                      # & → and
-    s = re.sub(r'[:\-_]', ' ', s)                 # structural separators → space
-    s = re.sub(r'[^a-z0-9\s]', '', s)             # strip remaining non-alphanumeric
-    tokens = [_ROMAN_MAP.get(t, t) for t in s.split()]
-    # Words stay space-separated. The space-collapse trick (for substring
-    # alignment of exe-style names) lives inside _confidence — gluing here
-    # would break IGDB / Steam search recall on multi-word titles.
-    return ' '.join(tokens)
-
-
-def _confidence(a: str, b: str) -> float:
-    # Strip whitespace from sanitized forms so partial_ratio finds exe-style
-    # names (e.g. "witcher3") as substrings of canonical titles
-    # ("thewitcher3wildhunt"). Applied symmetrically; scoring-only.
-    sa = _sanitize(a).replace(' ', '')
-    sb = _sanitize(b).replace(' ', '')
-    score = fuzz.WRatio(sa, sb) / 100.0
-
-    nums_a = set(re.findall(r'\d+', sa))
-    nums_b = set(re.findall(r'\d+', sb))
-    if (nums_a or nums_b) and nums_a != nums_b:
-        score = min(score, _NUMBER_MISMATCH_CAP)
-
-    return score
-
-
-class IGDBResult(NamedTuple):
-    cover_url: str | None
-    confidence: float
-    genres: list[str]
-    themes: list[str]
-    developers: list[str]
-    publishers: list[str]
-    first_release_date: date | None
-
-
-def _empty_igdb_result() -> IGDBResult:
-    return IGDBResult(
-        cover_url=None,
-        confidence=0.0,
-        genres=[],
-        themes=[],
-        developers=[],
-        publishers=[],
-        first_release_date=None,
-    )
-
-
-def _igdb_search(name: str) -> IGDBResult:
-    """Returns IGDBResult with cover, confidence, and metadata for the best candidate.
-
-    Raises _RateLimited on HTTP 429 or 401.
-    """
-    if not settings.igdb_client_id or not settings.igdb_client_secret:
-        logger.warning("IGDB credentials not set — skipping IGDB search")
-        return _empty_igdb_result()
-
-    token = get_igdb_token()
-    clean_name = _sanitize(name)
-    safe_name = clean_name.replace('"', '\\"')
-
-    with httpx.Client(timeout=10) as client:
-        resp = client.post(
-            "https://api.igdb.com/v4/games",
-            headers={
-                "Client-ID": settings.igdb_client_id,
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "text/plain",
-            },
-            content=(
-                f'search "{safe_name}"; '
-                'fields name,cover.url,cover.image_id,alternative_names.name,'
-                'genres.name,themes.name,'
-                'involved_companies.company.name,involved_companies.developer,'
-                'involved_companies.publisher,first_release_date; '
-                'limit 5;'
-            ),
-        )
-
-    if resp.status_code == 401:
-        invalidate_igdb_token()
-        raise _RateLimited("IGDB-auth")  # triggers Celery backoff retry
-
-    if resp.status_code == 429:
-        raise _RateLimited("IGDB")
-
-    resp.raise_for_status()
-
-    best_score = 0.0
-    best_cover: str | None = None
-    best_genres: list[str] = []
-    best_themes: list[str] = []
-    best_developers: list[str] = []
-    best_publishers: list[str] = []
-    best_release: date | None = None
-
-    for game in resp.json():
-        candidate_names = [game.get("name", "")]
-        for alt in game.get("alternative_names", []):
-            if alt.get("name"):
-                candidate_names.append(alt["name"])
-        score = max(_confidence(name, n) for n in candidate_names if n)
-
-        if score > best_score:
-            best_score = score
-
-            cover = game.get("cover")
-            if cover and cover.get("url"):
-                url = cover["url"]
-                if url.startswith("//"):
-                    url = "https:" + url
-                url = url.replace("/t_thumb/", "/t_cover_big/")
-                best_cover = url
-            else:
-                best_cover = None
-
-            best_genres = [g["name"] for g in game.get("genres", []) if g.get("name")]
-            best_themes = [t["name"] for t in game.get("themes", []) if t.get("name")]
-            best_developers = [
-                ic["company"]["name"]
-                for ic in game.get("involved_companies", [])
-                if ic.get("developer") and ic.get("company", {}).get("name")
-            ]
-            best_publishers = [
-                ic["company"]["name"]
-                for ic in game.get("involved_companies", [])
-                if ic.get("publisher") and ic.get("company", {}).get("name")
-            ]
-            ts = game.get("first_release_date")
-            best_release = date.fromtimestamp(ts) if ts else None
-
-    return IGDBResult(
-        cover_url=best_cover,
-        confidence=best_score,
-        genres=best_genres,
-        themes=best_themes,
-        developers=best_developers,
-        publishers=best_publishers,
-        first_release_date=best_release,
-    )
 
 
 def _steam_search(name: str) -> tuple[str | None, str | None]:

@@ -4,6 +4,14 @@ Detailed accounts of known gaps, incidents, and deferred fixes. For scheduled fe
 
 ---
 
+## Manual game tracking — deferred polish (2026-06-25)
+
+Minor items left open when the manual-tracking endpoints (`GET /games/suggest`, `POST /games/match`, `POST /games`) landed. None block use at homelab scale; see [manual-game-tracking.md](manual-game-tracking.md) and [api.md](api.md).
+
+- **Alias-insert TOCTOU** — `_add_alias_if_absent` in `app/api/v1/endpoints/games.py` checks for an existing `game_aliases.discord_process_name` and then inserts in a separate step. Two concurrent identical `POST /games` calls could both pass the check; the second `commit` then raises `IntegrityError` → unhandled 500. Near-zero risk on a single-user homelab. Proper fix: an `INSERT ... ON CONFLICT (discord_process_name) DO NOTHING` upsert.
+- **Un-stripped name/alias storage** — `POST /games` stores `primary_name` and the alias from `body.name`/`body.query` without trimming surrounding whitespace, so `"  Foo  "` and `"Foo"` become distinct catalog rows/aliases. Low-impact data hygiene; strip at the boundary when next touched.
+- **Legacy cover-normalization duplication** — `_igdb_search` in `app/services/game_matching.py` keeps an inline cover-URL normalization that duplicates `_normalize_cover_url` (used by the newer `_igdb_search_candidates`/`_igdb_fetch_by_id`). Retire the inline copy when [Enrichment v2](#enrichment-v2--token-subset--llm-adjudicator-design-sketch) touches that path.
+
 ## Kingdom Hearts HD 1.5 + 2.5 ReMIX — resolve miss and duplicate games (2026-06-21)
 
 ### Summary

@@ -1,16 +1,33 @@
+import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.v1.endpoints.auth import get_current_user
 from app.core.database import get_db
-from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
+from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession
 from app.models.user import User
-from app.schemas.game import CoverUpload, GameListResponse, GameResolveOut, GameResponse
+from app.schemas.game import (
+    CoverUpload,
+    GameCreateRequest,
+    GameListResponse,
+    GameMatchRequest,
+    GameResolveOut,
+    GameResponse,
+    GameSuggestItem,
+    GameSuggestResponse,
+    IGDBCandidateOut,
+)
+from app.services.game_matching import (
+    _confidence,
+    _igdb_fetch_by_id,
+    _igdb_search_candidates,
+    _RateLimited,
+)
 from app.schemas.session import SessionResponse
 from app.schemas.stats import GameStatsResponse
 from app.services.library_visibility import (
@@ -128,6 +145,103 @@ async def list_games(
 
 
 # ---------------------------------------------------------------------------
+# POST /games  (create or link)
+# ---------------------------------------------------------------------------
+
+@router.post("", response_model=GameResponse, status_code=201)
+async def create_or_link_game(
+    body: GameCreateRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Create a new global Game row or link to an existing one.
+
+    Two modes (exactly one):
+    - igdb_id mode: look up IGDB by id, dedupe first (returns 200 if already
+      known), else insert an ENRICHED row (returns 201).
+    - unrecognized mode: insert a NEEDS_REVIEW stub (returns 201).
+
+    Optional *query* is stored as a GameAlias so future voice/resolve calls
+    can map the typed string to the game.
+    """
+    if body.igdb_id is not None:
+        # ── igdb_id mode ────────────────────────────────────────────────────
+        # 1. Dedupe BEFORE any IGDB call
+        existing = (
+            await db.execute(
+                select(Game).where(Game.external_api_id == str(body.igdb_id))
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            response.status_code = 200
+            return _game_response(existing, None)
+
+        # 2. Fetch from IGDB
+        try:
+            fetched = await asyncio.to_thread(_igdb_fetch_by_id, body.igdb_id)
+        except _RateLimited:
+            raise HTTPException(
+                status_code=503,
+                detail="Game database temporarily unavailable",
+            )
+
+        if fetched is None:
+            raise HTTPException(status_code=404, detail="IGDB game not found")
+
+        canonical_name, meta = fetched
+
+        # 3. Insert enriched game row
+        game = Game(
+            primary_name=canonical_name,
+            external_api_id=str(body.igdb_id),
+            cover_image_url=meta.cover_url,
+            cover_source=CoverSource.EXTERNAL,
+            enrichment_status=EnrichmentStatus.ENRICHED,
+            genres=meta.genres,
+            themes=meta.themes,
+            developers=meta.developers,
+            publishers=meta.publishers,
+            first_release_date=meta.first_release_date,
+        )
+        db.add(game)
+        await db.flush()
+
+        # 4. Optional query alias
+        if body.query and body.query.strip():
+            await _add_alias_if_absent(db, game.id, body.query)
+
+    else:
+        # ── unrecognized mode ────────────────────────────────────────────────
+        # 1. Insert NEEDS_REVIEW stub
+        game = Game(
+            primary_name=body.name,  # type: ignore[arg-type]
+            enrichment_status=EnrichmentStatus.NEEDS_REVIEW,
+        )
+        db.add(game)
+        await db.flush()
+
+        # 2. Alias using the name itself
+        await _add_alias_if_absent(db, game.id, body.name)  # type: ignore[arg-type]
+
+    await db.commit()
+    return _game_response(game, None)
+
+
+async def _add_alias_if_absent(db: AsyncSession, game_id: int, value: str) -> None:
+    """Insert a GameAlias only if no row with that discord_process_name exists."""
+    existing = (
+        await db.execute(
+            select(GameAlias).where(GameAlias.discord_process_name == value)
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        db.add(GameAlias(game_id=game_id, discord_process_name=value))
+        await db.flush()
+
+
+# ---------------------------------------------------------------------------
 # GET /resolve
 # ---------------------------------------------------------------------------
 
@@ -179,6 +293,135 @@ async def resolve_game(
     if row is None:
         return None
     return GameResolveOut(game_id=row.id, name=row.primary_name)
+
+
+# ---------------------------------------------------------------------------
+# GET /suggest
+# ---------------------------------------------------------------------------
+
+@router.get("/suggest", response_model=GameSuggestResponse)
+async def suggest_games(
+    q: str = Query(..., min_length=1),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Fuzzy-search the global games catalog by name.
+
+    Scope: ALL games (not restricted to the caller's library).
+    Prefilters with ILIKE-any-token over primary_name and aliases, then
+    scores each candidate with _confidence() (max over primary_name + all
+    aliases for that game). Drops score < 0.3, sorts descending, paginates.
+    """
+    q = q.strip()
+    if not q:
+        raise HTTPException(status_code=422, detail="q must not be blank")
+
+    tokens = q.split()
+
+    # Build ILIKE prefilter: any token matches primary_name or any alias
+    ilike_conditions = []
+    for token in tokens:
+        ilike_conditions.append(Game.primary_name.ilike(f"%{token}%"))
+        ilike_conditions.append(GameAlias.discord_process_name.ilike(f"%{token}%"))
+
+    # Step 1: get distinct game IDs that survive the prefilter
+    id_query = (
+        select(Game.id)
+        .outerjoin(GameAlias, GameAlias.game_id == Game.id)
+        .where(or_(*ilike_conditions))
+        .distinct()
+    )
+    matched_ids = (await db.execute(id_query)).scalars().all()
+
+    if not matched_ids:
+        return GameSuggestResponse(total=0, items=[])
+
+    # Step 2: load full rows + aliases for matched games
+    games_query = (
+        select(Game)
+        .where(Game.id.in_(matched_ids))
+        .options(selectinload(Game.aliases))
+    )
+    games = (await db.execute(games_query)).scalars().all()
+
+    # Step 3: score, apply noise floor, sort
+    scored: list[tuple[Game, float]] = []
+    for game in games:
+        alias_names = [a.discord_process_name for a in game.aliases]
+        score = max(
+            [_confidence(q, game.primary_name)]
+            + [_confidence(q, alias) for alias in alias_names]
+        )
+        if score >= 0.3:
+            scored.append((game, score))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    total = len(scored)
+    page = scored[skip : skip + limit]
+
+    return GameSuggestResponse(
+        total=total,
+        items=[
+            GameSuggestItem(
+                game_id=g.id,
+                primary_name=g.primary_name,
+                cover_image_url=g.cover_image_url,
+                enrichment_status=g.enrichment_status,
+                score=score,
+            )
+            for g, score in page
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /match
+# ---------------------------------------------------------------------------
+
+@router.post("/match", response_model=list[IGDBCandidateOut])
+async def match_game(
+    body: GameMatchRequest,
+    user: User = Depends(get_current_user),
+):
+    """
+    Search IGDB synchronously and return ranked candidates for *body.query*.
+
+    Intended for the wizard's "search online" step when library suggest is empty.
+    No DB write — callers receive a pick-list and submit the chosen IGDB id to
+    POST /sessions or another endpoint.
+
+    Errors:
+      503 — IGDB rate-limited or auth expired (_RateLimited)
+      502 — any other IGDB failure
+    """
+    try:
+        candidates = await asyncio.to_thread(_igdb_search_candidates, body.query)
+    except _RateLimited:
+        raise HTTPException(
+            status_code=503,
+            detail="Game database temporarily unavailable",
+        )
+    except Exception:
+        logger.exception("match_game: IGDB error for query=%r", body.query)
+        raise HTTPException(
+            status_code=502,
+            detail="Upstream game database error",
+        )
+
+    return [
+        IGDBCandidateOut(
+            igdb_id=c.igdb_id,
+            name=c.name,
+            year=c.year,
+            cover_url=c.cover_url,
+            score=c.score,
+        )
+        for c in candidates
+    ]
 
 
 # ---------------------------------------------------------------------------

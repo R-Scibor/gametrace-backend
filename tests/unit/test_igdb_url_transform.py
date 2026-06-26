@@ -27,9 +27,9 @@ def _make_igdb_mock_client(items: list) -> MagicMock:
 
 def _call_igdb(items: list) -> tuple:
     mock_client = _make_igdb_mock_client(items)
-    with patch("app.tasks.enrichment.settings") as s, \
-         patch("app.tasks.enrichment.get_igdb_token", return_value="tok"), \
-         patch("app.tasks.enrichment.httpx.Client", return_value=mock_client):
+    with patch("app.services.game_matching.settings") as s, \
+         patch("app.services.game_matching.get_igdb_token", return_value="tok"), \
+         patch("app.services.game_matching.httpx.Client", return_value=mock_client):
         s.igdb_client_id = "test-id"
         s.igdb_client_secret = "test-secret"
         return _igdb_search("Test Game")
@@ -62,9 +62,9 @@ def test_alt_name_raises_score():
         "cover": {"url": "https://images.igdb.com/t_thumb/abc.jpg"},
         "alternative_names": [{"name": "The Witcher 3: Wild Hunt"}],
     }])
-    with patch("app.tasks.enrichment.settings") as s, \
-         patch("app.tasks.enrichment.get_igdb_token", return_value="tok"), \
-         patch("app.tasks.enrichment.httpx.Client", return_value=mock_client):
+    with patch("app.services.game_matching.settings") as s, \
+         patch("app.services.game_matching.get_igdb_token", return_value="tok"), \
+         patch("app.services.game_matching.httpx.Client", return_value=mock_client):
         s.igdb_client_id = "test-id"
         s.igdb_client_secret = "test-secret"
         result = _igdb_search("The Witcher 3")
