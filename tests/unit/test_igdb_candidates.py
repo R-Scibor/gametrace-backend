@@ -6,6 +6,7 @@ TDD for Task 2: ranked IGDB candidate search + fetch-by-id.
 _igdb_search_candidates(name) → list[IGDBCandidate] sorted by score desc
 _igdb_fetch_by_id(igdb_id)   → tuple[str, IGDBResult] | None
 """
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -35,13 +36,20 @@ def _make_mock_client(payload: list, status: int = 200) -> MagicMock:
     return mock_client
 
 
+@contextmanager
 def _patch_igdb(mock_client: MagicMock):
-    """Return a context-manager stack that patches IGDB deps in game_matching."""
-    return (
-        patch("app.services.game_matching.settings") ,
-        patch("app.services.game_matching.get_igdb_token", return_value="tok"),
-        patch("app.services.game_matching.httpx.Client", return_value=mock_client),
-    )
+    """Patch every IGDB dependency in game_matching for the duration of the block.
+
+    Mocks settings, the token fetch, the token invalidation (so the 401 path
+    never touches real Redis), and httpx.Client. Yields the mock settings.
+    """
+    with patch("app.services.game_matching.settings") as s, \
+         patch("app.services.game_matching.get_igdb_token", return_value="tok"), \
+         patch("app.services.game_matching.invalidate_igdb_token"), \
+         patch("app.services.game_matching.httpx.Client", return_value=mock_client):
+        s.igdb_client_id = "test-id"
+        s.igdb_client_secret = "test-secret"
+        yield s
 
 
 # Three-game payload for "witcher 3" search
@@ -89,10 +97,7 @@ _THREE_GAMES = [
 class TestIgdbSearchCandidates:
     def _call(self, name: str, payload: list) -> list:
         mock_client = _make_mock_client(payload)
-        p1, p2, p3 = _patch_igdb(mock_client)
-        with p1 as s, p2, p3:
-            s.igdb_client_id = "test-id"
-            s.igdb_client_secret = "test-secret"
+        with _patch_igdb(mock_client):
             return _igdb_search_candidates(name)
 
     def test_returns_list_of_igdb_candidates(self):
@@ -152,20 +157,14 @@ class TestIgdbSearchCandidates:
     def test_rate_limited_401_raises(self):
         from app.services.game_matching import _RateLimited
         mock_client = _make_mock_client([], status=401)
-        p1, p2, p3 = _patch_igdb(mock_client)
-        with p1 as s, p2, p3:
-            s.igdb_client_id = "test-id"
-            s.igdb_client_secret = "test-secret"
+        with _patch_igdb(mock_client):
             with pytest.raises(_RateLimited):
                 _igdb_search_candidates("anything")
 
     def test_rate_limited_429_raises(self):
         from app.services.game_matching import _RateLimited
         mock_client = _make_mock_client([], status=429)
-        p1, p2, p3 = _patch_igdb(mock_client)
-        with p1 as s, p2, p3:
-            s.igdb_client_id = "test-id"
-            s.igdb_client_secret = "test-secret"
+        with _patch_igdb(mock_client):
             with pytest.raises(_RateLimited):
                 _igdb_search_candidates("anything")
 
@@ -193,10 +192,7 @@ _FETCH_PAYLOAD = [
 class TestIgdbFetchById:
     def _call(self, igdb_id: int, payload: list):
         mock_client = _make_mock_client(payload)
-        p1, p2, p3 = _patch_igdb(mock_client)
-        with p1 as s, p2, p3:
-            s.igdb_client_id = "test-id"
-            s.igdb_client_secret = "test-secret"
+        with _patch_igdb(mock_client):
             return _igdb_fetch_by_id(igdb_id)
 
     def test_returns_tuple_on_match(self):
@@ -251,3 +247,17 @@ class TestIgdbFetchById:
     def test_returns_none_on_empty_payload(self):
         result = self._call(9999, [])
         assert result is None
+
+    def test_rate_limited_401_raises(self):
+        from app.services.game_matching import _RateLimited
+        mock_client = _make_mock_client([], status=401)
+        with _patch_igdb(mock_client):
+            with pytest.raises(_RateLimited):
+                _igdb_fetch_by_id(1942)
+
+    def test_rate_limited_429_raises(self):
+        from app.services.game_matching import _RateLimited
+        mock_client = _make_mock_client([], status=429)
+        with _patch_igdb(mock_client):
+            with pytest.raises(_RateLimited):
+                _igdb_fetch_by_id(1942)

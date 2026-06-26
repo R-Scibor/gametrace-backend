@@ -206,7 +206,7 @@ def _igdb_fetch_by_id(igdb_id: int) -> tuple[str, IGDBResult] | None:
             },
             content=(
                 f'where id = {igdb_id}; '
-                'fields name,cover.url,cover.image_id,alternative_names.name,'
+                'fields name,cover.url,'
                 'genres.name,themes.name,'
                 'involved_companies.company.name,involved_companies.developer,'
                 'involved_companies.publisher,first_release_date; '
