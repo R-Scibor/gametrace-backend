@@ -209,6 +209,10 @@ async def suggest_games(
     scores each candidate with _confidence() (max over primary_name + all
     aliases for that game). Drops score < 0.3, sorts descending, paginates.
     """
+    q = q.strip()
+    if not q:
+        raise HTTPException(status_code=422, detail="q must not be blank")
+
     tokens = q.split()
 
     # Build ILIKE prefilter: any token matches primary_name or any alias
