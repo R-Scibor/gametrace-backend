@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.game import CoverSource, EnrichmentStatus
 
@@ -43,3 +43,15 @@ class GameSuggestItem(BaseModel):
 class GameSuggestResponse(BaseModel):
     total: int
     items: list[GameSuggestItem]
+
+
+class GameMatchRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+
+
+class IGDBCandidateOut(BaseModel):
+    igdb_id: int
+    name: str
+    year: Optional[int] = None
+    cover_url: Optional[str] = None
+    score: float

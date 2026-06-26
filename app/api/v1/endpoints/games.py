@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,12 +14,14 @@ from app.models.user import User
 from app.schemas.game import (
     CoverUpload,
     GameListResponse,
+    GameMatchRequest,
     GameResolveOut,
     GameResponse,
     GameSuggestItem,
     GameSuggestResponse,
+    IGDBCandidateOut,
 )
-from app.services.game_matching import _confidence
+from app.services.game_matching import _confidence, _igdb_search_candidates, _RateLimited
 from app.schemas.session import SessionResponse
 from app.schemas.stats import GameStatsResponse
 from app.services.library_visibility import (
@@ -270,6 +273,52 @@ async def suggest_games(
             for g, score in page
         ],
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /match
+# ---------------------------------------------------------------------------
+
+@router.post("/match", response_model=list[IGDBCandidateOut])
+async def match_game(
+    body: GameMatchRequest,
+    user: User = Depends(get_current_user),
+):
+    """
+    Search IGDB synchronously and return ranked candidates for *body.query*.
+
+    Intended for the wizard's "search online" step when library suggest is empty.
+    No DB write — callers receive a pick-list and submit the chosen IGDB id to
+    POST /sessions or another endpoint.
+
+    Errors:
+      503 — IGDB rate-limited or auth expired (_RateLimited)
+      502 — any other IGDB failure
+    """
+    try:
+        candidates = await asyncio.to_thread(_igdb_search_candidates, body.query)
+    except _RateLimited:
+        raise HTTPException(
+            status_code=503,
+            detail="Game database temporarily unavailable",
+        )
+    except Exception:
+        logger.exception("match_game: IGDB error for query=%r", body.query)
+        raise HTTPException(
+            status_code=502,
+            detail="Upstream game database error",
+        )
+
+    return [
+        IGDBCandidateOut(
+            igdb_id=c.igdb_id,
+            name=c.name,
+            year=c.year,
+            cover_url=c.cover_url,
+            score=c.score,
+        )
+        for c in candidates
+    ]
 
 
 # ---------------------------------------------------------------------------
