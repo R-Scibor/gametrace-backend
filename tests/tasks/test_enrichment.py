@@ -318,8 +318,8 @@ def test_igdb_search_parses_metadata_response():
     fake_client.__exit__ = MagicMock(return_value=None)
     fake_client.post.return_value = fake_resp
 
-    with patch("app.tasks.enrichment.httpx.Client", return_value=fake_client), \
-         patch("app.tasks.enrichment.get_igdb_token", return_value="token"), \
+    with patch("app.services.game_matching.httpx.Client", return_value=fake_client), \
+         patch("app.services.game_matching.get_igdb_token", return_value="token"), \
          patch.object(enr.settings, "igdb_client_id", "cid"), \
          patch.object(enr.settings, "igdb_client_secret", "secret"):
 
