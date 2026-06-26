@@ -66,7 +66,7 @@ Session state machine — see the [README session state machine](../README.md#se
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/v1/games` | List games the user has at least one session for. Main library excludes `is_ignored` games and unaccepted `NEEDS_REVIEW` stubs. `?in_library=false` returns the out-of-library tab (ignored ∪ unaccepted `NEEDS_REVIEW`). `?status=NEEDS_REVIEW` returns the Unrecognized inbox (`is_accepted` not true). `?is_ignored=true` returns hidden games only. Optional `?q=<string>` for server-side case-insensitive substring search on `primary_name`. Paginated (`?skip=`/`?limit=`, max 100). Response: `{"total": <int>, "items": [...]}` — each item includes `is_ignored` and `is_accepted`. |
-| `POST` | `/api/v1/games` | Create a new global `Game` row or link to an existing one. Two modes (exactly one): **igdb_id mode** — dedupes by `external_api_id` (returns `200` if already known with no IGDB call, else fetches IGDB metadata and creates an `ENRICHED` row → `201`; IGDB miss → `404`; rate-limited → `503`). **Unrecognized mode** (`unrecognized: true` + non-blank `name`) — inserts a `NEEDS_REVIEW` stub → `201`. Optional `query` stored as a `GameAlias` for future `/resolve` lookups. Both/neither mode active → `422`. |
+| `POST` | `/api/v1/games` | Create a new global `Game` row or link to an existing one. Two modes (exactly one): **igdb_id mode** — dedupes by `external_api_id` (returns `200` if already known with no IGDB call, else fetches IGDB metadata and creates an `ENRICHED` row → `201`; IGDB miss → `404`; rate-limited → `503`). **Unrecognized mode** (`unrecognized: true` + non-blank `name`) — inserts a `NEEDS_REVIEW` stub with `name` itself stored as a `GameAlias` → `201`. In igdb_id mode, optional `query` is stored as a `GameAlias` for future `/resolve` lookups (ignored in unrecognized mode). Both/neither mode active → `422`. |
 | `GET` | `/api/v1/games/resolve?name=<string>` | Map a free-text name to `{game_id, name}` from the user's library (games with at least one non-soft-deleted session — `ERROR` counts, ignored games still resolve). Exact case-insensitive match on `primary_name`, then on `game_aliases.discord_process_name`. Returns `200` with body `null` on miss. Voice-flow prefill. |
 | `GET` | `/api/v1/games/suggest?q=<string>` | Fuzzy-search the **global** games catalog (all users' games, not restricted to the caller's library). Pre-filters with ILIKE-any-token on `primary_name` and aliases, scores each candidate with `_confidence()` (max across name + aliases), drops score < 0.3, sorts descending, paginates. Returns `{"total": <int>, "items": [<GameSuggestItem>]}` — each item includes `game_id`, `primary_name`, `cover_image_url`, `enrichment_status`, `score`. `422` if `q` is blank or whitespace. |
 | `POST` | `/api/v1/games/match` | Synchronous IGDB candidate search — no DB write. Body: `{"query": "<string>"}`. Returns `list[IGDBCandidateOut]` (`igdb_id`, `name`, `year\|null`, `cover_url\|null`, `score`). Use when suggest has no usable match; pass the chosen `igdb_id` to `POST /games`. `503` rate-limited; `502` other IGDB error. |
@@ -117,7 +117,7 @@ Create a new global `Game` row or link to an existing one. Exactly one mode must
 **Mode 2 — unrecognized mode** (`unrecognized: true` + non-blank `name`):
 Inserts a `NEEDS_REVIEW` stub using the provided name and creates an alias from `name`. No IGDB call → `201`. Use when the user confirms no IGDB match is correct (obscure indie, non-game activity, etc.).
 
-In both modes, optional `query` is stored as a `GameAlias` for future `/resolve` lookups.
+In igdb_id mode, optional `query` is stored as a `GameAlias` for future `/resolve` lookups. In unrecognized mode `query` is ignored — the `name` itself is stored as the alias.
 
 **Request body**
 
@@ -126,13 +126,13 @@ In both modes, optional `query` is stored as a `GameAlias` for future `/resolve`
 | `igdb_id` | `int\|null` | Mode 1 | IGDB game identifier |
 | `name` | `string\|null` | Mode 2 | Game name for the `NEEDS_REVIEW` stub |
 | `unrecognized` | `bool` | Mode 2 | Must be `true` when supplying `name` |
-| `query` | `string\|null` | Optional | Alias for future `/resolve` lookups (any mode) |
+| `query` | `string\|null` | Optional | Alias stored for future `/resolve` lookups (igdb_id mode only; ignored in unrecognized mode) |
 
 **Response — `GameResponse`**
 
 Fields: `id`, `primary_name`, `cover_image_url`, `cover_source`, `enrichment_status`, `is_ignored`, `is_accepted`.
 
-`is_ignored` and `is_accepted` are always `false` / `null` for a freshly created or linked row (no user preference yet).
+`is_ignored` and `is_accepted` reflect the caller's preference for this game, but `POST /games` always returns them as `false` / `null` — use `GET /games` to read the real preference state.
 
 **Status codes**
 
@@ -148,7 +148,7 @@ Fields: `id`, `primary_name`, `cover_image_url`, `cover_source`, `enrichment_sta
 
 Fuzzy-search the global games catalog by name. Scope is **all games** in the DB, not restricted to the caller's library. Intended as the first step in the manual game discovery wizard — before escalating to a live IGDB query.
 
-Pre-filters candidates with ILIKE-any-token (each whitespace-split token must match `primary_name` or at least one alias). Scores each candidate with `_confidence()` (max over `primary_name` and all `game_aliases`). Drops score < 0.3. Sorts descending by score. Paginates.
+Pre-filters candidates with ILIKE-any-token (a game is included if any whitespace-split token matches `primary_name` or at least one alias). Scores each candidate with `_confidence()` (max over `primary_name` and all `game_aliases`). Drops score < 0.3. Sorts descending by score. Paginates.
 
 **Query parameters**
 
