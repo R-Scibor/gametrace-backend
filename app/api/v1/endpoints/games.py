@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -13,6 +13,7 @@ from app.models.session import GameSession
 from app.models.user import User
 from app.schemas.game import (
     CoverUpload,
+    GameCreateRequest,
     GameListResponse,
     GameMatchRequest,
     GameResolveOut,
@@ -21,7 +22,13 @@ from app.schemas.game import (
     GameSuggestResponse,
     IGDBCandidateOut,
 )
-from app.services.game_matching import _confidence, _igdb_search_candidates, _RateLimited
+from app.services.game_matching import (
+    _confidence,
+    _igdb_fetch_by_id,
+    _igdb_search_candidates,
+    _RateLimited,
+)
+from app.models.game import CoverSource
 from app.schemas.session import SessionResponse
 from app.schemas.stats import GameStatsResponse
 from app.services.library_visibility import (
@@ -136,6 +143,103 @@ async def list_games(
         total=total,
         items=[_game_response(g, pref_map.get(g.id)) for g in games],
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /games  (create or link)
+# ---------------------------------------------------------------------------
+
+@router.post("", response_model=GameResponse, status_code=201)
+async def create_or_link_game(
+    body: GameCreateRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Create a new global Game row or link to an existing one.
+
+    Two modes (exactly one):
+    - igdb_id mode: look up IGDB by id, dedupe first (returns 200 if already
+      known), else insert an ENRICHED row (returns 201).
+    - unrecognized mode: insert a NEEDS_REVIEW stub (returns 201).
+
+    Optional *query* is stored as a GameAlias so future voice/resolve calls
+    can map the typed string to the game.
+    """
+    if body.igdb_id is not None:
+        # ── igdb_id mode ────────────────────────────────────────────────────
+        # 1. Dedupe BEFORE any IGDB call
+        existing = (
+            await db.execute(
+                select(Game).where(Game.external_api_id == str(body.igdb_id))
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            response.status_code = 200
+            return _game_response(existing, None)
+
+        # 2. Fetch from IGDB
+        try:
+            fetched = await asyncio.to_thread(_igdb_fetch_by_id, body.igdb_id)
+        except _RateLimited:
+            raise HTTPException(
+                status_code=503,
+                detail="Game database temporarily unavailable",
+            )
+
+        if fetched is None:
+            raise HTTPException(status_code=404, detail="IGDB game not found")
+
+        canonical_name, meta = fetched
+
+        # 3. Insert enriched game row
+        game = Game(
+            primary_name=canonical_name,
+            external_api_id=str(body.igdb_id),
+            cover_image_url=meta.cover_url,
+            cover_source=CoverSource.EXTERNAL,
+            enrichment_status=EnrichmentStatus.ENRICHED,
+            genres=meta.genres,
+            themes=meta.themes,
+            developers=meta.developers,
+            publishers=meta.publishers,
+            first_release_date=meta.first_release_date,
+        )
+        db.add(game)
+        await db.flush()
+
+        # 4. Optional query alias
+        if body.query and body.query.strip():
+            await _add_alias_if_absent(db, game.id, body.query)
+
+    else:
+        # ── unrecognized mode ────────────────────────────────────────────────
+        # 1. Insert NEEDS_REVIEW stub
+        game = Game(
+            primary_name=body.name,  # type: ignore[arg-type]
+            enrichment_status=EnrichmentStatus.NEEDS_REVIEW,
+        )
+        db.add(game)
+        await db.flush()
+
+        # 2. Alias using the name itself
+        await _add_alias_if_absent(db, game.id, body.name)  # type: ignore[arg-type]
+
+    await db.commit()
+    return _game_response(game, None)
+
+
+async def _add_alias_if_absent(db: AsyncSession, game_id: int, value: str) -> None:
+    """Insert a GameAlias only if no row with that discord_process_name exists."""
+    existing = (
+        await db.execute(
+            select(GameAlias).where(GameAlias.discord_process_name == value)
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        db.add(GameAlias(game_id=game_id, discord_process_name=value))
+        await db.flush()
 
 
 # ---------------------------------------------------------------------------
