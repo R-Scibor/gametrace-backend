@@ -334,6 +334,66 @@ def test_igdb_search_parses_metadata_response():
     assert result.first_release_date == date.fromtimestamp(1577836800)
 
 
+def test_igdb_search_parses_parent_rollup():
+    """Unit-level: _igdb_search rolls publishers up to parent and aliases Cognosphere → HoYoverse."""
+    from app.tasks import enrichment as enr
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.return_value = [
+        {
+            "name": "Honkai: Star Rail",
+            "cover": {"url": "//images.igdb.com/t_thumb/hsr.jpg"},
+            "alternative_names": [],
+            "genres": [{"name": "RPG"}],
+            "themes": [{"name": "Sci-Fi"}],
+            "involved_companies": [
+                # Developer with a parent — parent NOT applied to developers
+                {
+                    "company": {"name": "Child Dev Studio", "parent": {"name": "Parent Group"}},
+                    "developer": True,
+                    "publisher": False,
+                },
+                # Publisher with a parent — should roll up to parent name
+                {
+                    "company": {"name": "Sub Label", "parent": {"name": "Parent Group"}},
+                    "developer": False,
+                    "publisher": True,
+                },
+                # Cognosphere as publisher (no parent) — alias fires → HoYoverse
+                {
+                    "company": {"name": "Cognosphere", "parent": None},
+                    "developer": False,
+                    "publisher": True,
+                },
+                # HoYoverse directly — would duplicate aliased Cognosphere if not deduped
+                {
+                    "company": {"name": "HoYoverse", "parent": None},
+                    "developer": False,
+                    "publisher": True,
+                },
+            ],
+            "first_release_date": 1682899200,  # 2023-05-01 UTC
+        }
+    ]
+    fake_client = MagicMock()
+    fake_client.__enter__ = MagicMock(return_value=fake_client)
+    fake_client.__exit__ = MagicMock(return_value=None)
+    fake_client.post.return_value = fake_resp
+
+    with patch("app.services.game_matching.httpx.Client", return_value=fake_client), \
+         patch("app.services.game_matching.get_igdb_token", return_value="token"), \
+         patch.object(enr.settings, "igdb_client_id", "cid"), \
+         patch.object(enr.settings, "igdb_client_secret", "secret"):
+
+        result = enr._igdb_search("Honkai Star Rail")
+
+    # Developers stay raw — no parent rollup applied
+    assert result.developers == ["Child Dev Studio"]
+    # Publishers: Sub Label → Parent Group; Cognosphere → HoYoverse (alias); HoYoverse deduped
+    assert result.publishers == ["Parent Group", "HoYoverse"]
+
+
 async def test_game_not_found_raises():
     """LookupError is raised (and logged by Celery task) when game_id not in DB."""
     game = None
