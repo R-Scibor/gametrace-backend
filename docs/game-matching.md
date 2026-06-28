@@ -126,6 +126,36 @@ Cover URLs are normalized: `//…` → `https://…`, `/t_thumb/` → `/t_cover_
 
 If IGDB confidence is below 0.85, the Steam Store Search API is queried with the **sanitized** name (same `_sanitize()` as IGDB). Each returned result is scored with `_confidence()`; the best candidate must reach `CONFIDENCE_THRESHOLD` (0.85). On a hit: `ENRICHED` with `external_api_id = Steam AppID` and cover `library_600x900.jpg`.
 
+## Company canonicalization
+
+IGDB's `involved_companies` list often contains both a subsidiary and its parent publisher (e.g. Cognosphere and HoYoverse for the same game). Without normalization, company-playtime stats would double-count the same publisher under two names. The enrichment worker canonicalizes publishers at write time so the stored list is already clean.
+
+### Publisher rollup
+
+Each publisher entry is resolved to a canonical name in three steps:
+
+1. **Parent-or-self:** if the company has a `parent` link in IGDB, use the parent's name; otherwise use the company's own name. Only one hop is followed — grandparent chains are not traversed.
+2. **Alias map:** the resolved name is looked up in `PUBLISHER_ALIASES` (keyed by casefolded name). This catches subsidiaries that IGDB does not yet link to a parent.
+3. **Dedupe:** the resulting list is deduplicated with order-preserving, case-insensitive comparison; first occurrence wins.
+
+Example: Cognosphere and HoYoverse both listed → step 1 resolves Cognosphere to its IGDB parent HoYoverse, step 3 deduplicates → stored as `["HoYoverse"]`.
+
+The alias map lives in `app/services/company_resolution.py` as a code-maintained dict (seeded with `cognosphere → HoYoverse`). It fires for subsidiaries that IGDB has no parent link for. Adding a mapping requires a code change — there is no runtime configuration.
+
+### Why developers are not rolled up
+
+Developer entries go through dedupe only — no parent rollup. Multiple studios credited on a single game represent genuine co-development; rolling a studio up to its owning publisher would destroy studio-level attribution. For example, collapsing every first-party studio into its parent publisher would make it impossible to distinguish their individual output in library stats.
+
+### Correcting historical rows
+
+Games enriched before this pipeline was added retain their original (possibly double-counted) publisher lists. To re-process them, run the full backfill manually via the worker:
+
+```bash
+docker compose exec worker celery -A app.core.celery_app call tasks.backfill_metadata --kwargs '{"full": true}'
+```
+
+Without `full=true`, `backfill_metadata` only re-queues ENRICHED games that have an empty genres list. Passing `full=true` re-queues every ENRICHED game regardless of existing metadata. The existing IGDB rate-limit backoff and Redis dedup key (`enrich_game_{game_id}`) prevent duplicate queuing.
+
 ## Threshold and constants
 
 | Constant | Value | Purpose |

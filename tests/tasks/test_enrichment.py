@@ -334,6 +334,66 @@ def test_igdb_search_parses_metadata_response():
     assert result.first_release_date == date.fromtimestamp(1577836800)
 
 
+def test_igdb_search_parses_parent_rollup():
+    """Unit-level: _igdb_search rolls publishers up to parent and aliases Cognosphere → HoYoverse."""
+    from app.tasks import enrichment as enr
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.return_value = [
+        {
+            "name": "Honkai: Star Rail",
+            "cover": {"url": "//images.igdb.com/t_thumb/hsr.jpg"},
+            "alternative_names": [],
+            "genres": [{"name": "RPG"}],
+            "themes": [{"name": "Sci-Fi"}],
+            "involved_companies": [
+                # Developer with a parent — parent NOT applied to developers
+                {
+                    "company": {"name": "Child Dev Studio", "parent": {"name": "Parent Group"}},
+                    "developer": True,
+                    "publisher": False,
+                },
+                # Publisher with a parent — should roll up to parent name
+                {
+                    "company": {"name": "Sub Label", "parent": {"name": "Parent Group"}},
+                    "developer": False,
+                    "publisher": True,
+                },
+                # Cognosphere as publisher (no parent) — alias fires → HoYoverse
+                {
+                    "company": {"name": "Cognosphere", "parent": None},
+                    "developer": False,
+                    "publisher": True,
+                },
+                # HoYoverse directly — would duplicate aliased Cognosphere if not deduped
+                {
+                    "company": {"name": "HoYoverse", "parent": None},
+                    "developer": False,
+                    "publisher": True,
+                },
+            ],
+            "first_release_date": 1682899200,  # 2023-05-01 UTC
+        }
+    ]
+    fake_client = MagicMock()
+    fake_client.__enter__ = MagicMock(return_value=fake_client)
+    fake_client.__exit__ = MagicMock(return_value=None)
+    fake_client.post.return_value = fake_resp
+
+    with patch("app.services.game_matching.httpx.Client", return_value=fake_client), \
+         patch("app.services.game_matching.get_igdb_token", return_value="token"), \
+         patch.object(enr.settings, "igdb_client_id", "cid"), \
+         patch.object(enr.settings, "igdb_client_secret", "secret"):
+
+        result = enr._igdb_search("Honkai Star Rail")
+
+    # Developers stay raw — no parent rollup applied
+    assert result.developers == ["Child Dev Studio"]
+    # Publishers: Sub Label → Parent Group; Cognosphere → HoYoverse (alias); HoYoverse deduped
+    assert result.publishers == ["Parent Group", "HoYoverse"]
+
+
 async def test_game_not_found_raises():
     """LookupError is raised (and logged by Celery task) when game_id not in DB."""
     game = None
@@ -449,3 +509,31 @@ async def test_backfill_chunks_correctly():
     assert queued == 3
     assert session.execute.call_count == 2
     assert mock_apply.call_count == 3
+
+
+async def test_backfill_full_omits_genre_predicate():
+    """full=True must omit the jsonb_array_length predicate from the SELECT."""
+    factory, session = _backfill_session_mock([[]])
+    p_engine, p_sm = _backfill_engine_patches(factory)
+
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment.enrich_game.apply_async"):
+
+        await _run_backfill(batch_size=500, full=True)
+
+    stmt = session.execute.call_args_list[0].args[0]
+    assert "jsonb_array_length" not in str(stmt)
+
+
+async def test_backfill_default_keeps_genre_predicate():
+    """Default (full=False) must keep the jsonb_array_length predicate."""
+    factory, session = _backfill_session_mock([[]])
+    p_engine, p_sm = _backfill_engine_patches(factory)
+
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment.enrich_game.apply_async"):
+
+        await _run_backfill(batch_size=500)
+
+    stmt = session.execute.call_args_list[0].args[0]
+    assert "jsonb_array_length" in str(stmt)

@@ -16,6 +16,7 @@ import httpx
 from rapidfuzz import fuzz
 
 from app.core.config import settings
+from app.services.company_resolution import resolve_companies
 from app.tasks.igdb_auth import get_igdb_token, invalidate_igdb_token
 
 logger = logging.getLogger(__name__)
@@ -208,7 +209,8 @@ def _igdb_fetch_by_id(igdb_id: int) -> tuple[str, IGDBResult] | None:
                 f'where id = {igdb_id}; '
                 'fields name,cover.url,'
                 'genres.name,themes.name,'
-                'involved_companies.company.name,involved_companies.developer,'
+                'involved_companies.company.name,involved_companies.company.parent.name,'
+                'involved_companies.developer,'
                 'involved_companies.publisher,first_release_date; '
                 'limit 1;'
             ),
@@ -235,16 +237,7 @@ def _igdb_fetch_by_id(igdb_id: int) -> tuple[str, IGDBResult] | None:
 
     genres = [g["name"] for g in game.get("genres", []) if g.get("name")]
     themes = [t["name"] for t in game.get("themes", []) if t.get("name")]
-    developers = [
-        ic["company"]["name"]
-        for ic in game.get("involved_companies", [])
-        if ic.get("developer") and ic.get("company", {}).get("name")
-    ]
-    publishers = [
-        ic["company"]["name"]
-        for ic in game.get("involved_companies", [])
-        if ic.get("publisher") and ic.get("company", {}).get("name")
-    ]
+    developers, publishers = resolve_companies(game.get("involved_companies", []))
     ts = game.get("first_release_date")
     release_date = date.fromtimestamp(ts) if ts else None
 
@@ -284,7 +277,8 @@ def _igdb_search(name: str) -> IGDBResult:
                 f'search "{safe_name}"; '
                 'fields name,cover.url,cover.image_id,alternative_names.name,'
                 'genres.name,themes.name,'
-                'involved_companies.company.name,involved_companies.developer,'
+                'involved_companies.company.name,involved_companies.company.parent.name,'
+                'involved_companies.developer,'
                 'involved_companies.publisher,first_release_date; '
                 'limit 5;'
             ),
@@ -329,16 +323,7 @@ def _igdb_search(name: str) -> IGDBResult:
 
             best_genres = [g["name"] for g in game.get("genres", []) if g.get("name")]
             best_themes = [t["name"] for t in game.get("themes", []) if t.get("name")]
-            best_developers = [
-                ic["company"]["name"]
-                for ic in game.get("involved_companies", [])
-                if ic.get("developer") and ic.get("company", {}).get("name")
-            ]
-            best_publishers = [
-                ic["company"]["name"]
-                for ic in game.get("involved_companies", [])
-                if ic.get("publisher") and ic.get("company", {}).get("name")
-            ]
+            best_developers, best_publishers = resolve_companies(game.get("involved_companies", []))
             ts = game.get("first_release_date")
             best_release = date.fromtimestamp(ts) if ts else None
 
