@@ -138,9 +138,55 @@ Each publisher entry is resolved to a canonical name in three steps:
 2. **Alias map:** the resolved name is looked up in `PUBLISHER_ALIASES` (keyed by casefolded name). This catches subsidiaries that IGDB does not yet link to a parent.
 3. **Dedupe:** the resulting list is deduplicated with order-preserving, case-insensitive comparison; first occurrence wins.
 
-Example: IGDB lists miHoYo, HoYoverse, and Cognosphere as publishers of the same game, with HoYoverse and Cognosphere both pointing to the parent `miHoYo`. Step 1 resolves all three to `miHoYo`, step 3 deduplicates → stored as `["miHoYo"]`.
+### The alias map
 
-The alias map lives in `app/services/company_resolution.py` as a code-maintained dict (seeded with `cognosphere → miHoYo` and `hoyoverse → miHoYo`). It fires for subsidiaries that IGDB has no parent link for. An alias value must match the IGDB parent-chain root for the same entity — otherwise a game where IGDB has the parent link and one where it is missing would resolve to different names and split into two buckets. Adding a mapping requires a code change — there is no runtime configuration.
+The alias map lives in `app/services/company_resolution.py` as a code-maintained dict, keyed by **casefolded** company name. It is the fallback for subsidiaries (or equivalent regional partners) that IGDB has no `parent` link for. There is no runtime configuration — adding an entry is a code change plus a backfill.
+
+Current entries:
+
+| Alias key (casefolded) | Resolves to | Why |
+|---|---|---|
+| `cognosphere` | `miHoYo` | Global publishing arm; IGDB roots it at miHoYo |
+| `hoyoverse` | `miHoYo` | Brand label; IGDB roots it at miHoYo |
+| `iwplay` | `Perfect World Games` | Taiwan/SEA regional operator |
+| `iwplay world` | `Perfect World Games` | Same operator, longer form |
+| `iwplay world interactive entertainment` | `Perfect World Games` | Same operator, full legal name |
+
+**The binding rule:** an alias value must equal the IGDB parent-chain **root** for that entity (the name parent-rollup would produce when IGDB *does* have the link). If it doesn't, a game where IGDB carries the parent link resolves one way and a game where IGDB omits it resolves another — and the same publisher splits into two stats buckets, which is exactly the double-count this feature removes. Because IGDB roots both Cognosphere and HoYoverse at `miHoYo`, the aliases do too; because Iwplay has no IGDB parent at all, its value is chosen to match how `Perfect World Games` (its real corporate operator) already resolves.
+
+### Worked example: Zenless Zone Zero
+
+IGDB returns three publisher entries for this game (verified via a live `involved_companies` query):
+
+| IGDB publisher | IGDB `parent` | Resolves via | → |
+|---|---|---|---|
+| `miHoYo` | *(none)* | parent-or-self | `miHoYo` |
+| `HoYoverse` | `miHoYo` | **parent rollup** | `miHoYo` |
+| `Cognosphere` | `miHoYo` | **parent rollup** | `miHoYo` |
+
+All three collapse via step 1 (parent rollup), step 3 dedupes → stored as `["miHoYo"]`. The alias map never fires here — the `parent` links are present, so resolution finishes before the alias lookup matters. The aliases exist only for the *gap* case: a game where IGDB lists `Cognosphere` or `HoYoverse` with no parent link, where the alias backstops to the same `miHoYo` bucket.
+
+Contrast *Neverness to Everness*, where IGDB lists `Iwplay World Interactive Entertainment` (no parent) alongside `Perfect World Games`. With no IGDB link between them, only the alias collapses Iwplay into `Perfect World Games`; without it the two would count separately.
+
+### Adding a new alias
+
+1. **Find the IGDB root.** Query the game's companies and follow the `parent` chain:
+   ```bash
+   docker compose exec -T worker python -c "
+   import httpx, json
+   from app.core.config import settings
+   from app.tasks.igdb_auth import get_igdb_token
+   tok = get_igdb_token()
+   r = httpx.post('https://api.igdb.com/v4/games',
+     headers={'Client-ID': settings.igdb_client_id, 'Authorization': f'Bearer {tok}', 'Content-Type': 'text/plain'},
+     content='search \"GAME NAME\"; fields name,involved_companies.company.name,involved_companies.company.parent.name,involved_companies.developer,involved_companies.publisher; limit 2;')
+   print(json.dumps(r.json(), indent=2, ensure_ascii=False))
+   "
+   ```
+   If IGDB already gives the subsidiary a `parent`, you usually need **no** alias — rollup handles it. Add an alias only when the `parent` is missing.
+2. **Add the entry** to `PUBLISHER_ALIASES` in `app/services/company_resolution.py`: a casefolded key → the canonical root name. The value must match what parent-rollup produces for the same entity (see the binding rule above).
+3. **Add a test** in `tests/unit/test_company_resolution.py` mirroring the existing alias tests.
+4. **Re-process history** so existing rows pick up the new mapping — the alias is applied at enrichment write time, not at query time. Run the full backfill described in [Correcting historical rows](#correcting-historical-rows).
 
 ### Why developers are not rolled up
 

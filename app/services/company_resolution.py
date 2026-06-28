@@ -16,11 +16,17 @@ from __future__ import annotations
 # Applied after the parent-or-self choice so a subsidiary alias still fires
 # when IGDB has no parent link. Values must match the IGDB parent-chain root
 # for the same entity, otherwise a game whose parent link IGDB happens to have
-# and one where it's missing would land in two different buckets. IGDB roots
-# both Cognosphere and HoYoverse at miHoYo, so the aliases do too.
+# and one where it's missing would land in two different buckets.
+#
+# Examples:
+# - Cognosphere / HoYoverse (no parent) → miHoYo (IGDB root)
+# - Iwplay variants (regional operator, no parent link) → Perfect World Games
 PUBLISHER_ALIASES: dict[str, str] = {
     "cognosphere": "miHoYo",
     "hoyoverse": "miHoYo",
+    "iwplay": "Perfect World Games",
+    "iwplay world": "Perfect World Games",
+    "iwplay world interactive entertainment": "Perfect World Games",
 }
 
 

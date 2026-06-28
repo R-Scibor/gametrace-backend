@@ -12,6 +12,18 @@ Minor items left open when the manual-tracking endpoints (`GET /games/suggest`, 
 - **Un-stripped name/alias storage** — `POST /games` stores `primary_name` and the alias from `body.name`/`body.query` without trimming surrounding whitespace, so `"  Foo  "` and `"Foo"` become distinct catalog rows/aliases. Low-impact data hygiene; strip at the boundary when next touched.
 - **Legacy cover-normalization duplication** — `_igdb_search` in `app/services/game_matching.py` keeps an inline cover-URL normalization that duplicates `_normalize_cover_url` (used by the newer `_igdb_search_candidates`/`_igdb_fetch_by_id`). Retire the inline copy when [Enrichment v2](#enrichment-v2--token-subset--llm-adjudicator-design-sketch) touches that path.
 
+## Publisher alias map — hardcoded dict, move to DB table (2026-06-28)
+
+`PUBLISHER_ALIASES` in `app/services/company_resolution.py` is a hardcoded Python dict (casefolded company name → canonical root) used as the fallback when IGDB has no `parent` link for a subsidiary/regional operator. See [game-matching.md](game-matching.md#the-alias-map) for the current behavior and the binding "value must equal the IGDB parent-chain root" rule.
+
+**Why it's debt:** the dict conflates data with code. Every new correction needs a code change + redeploy + a full `backfill_metadata(full=true)` to rewrite stored rows. It's keyed by exact casefolded string, so one entity can need several rows (e.g. Iwplay took three: `iwplay`, `iwplay world`, `iwplay world interactive entertainment`) — the map bloats faster than the number of entities it actually fixes, and corporate-relationship claims sit in source with no provenance.
+
+**Why deferred:** acceptable at homelab scale with a handful of entries. Parent rollup (data-driven from IGDB) is the primary mechanism; aliases are exceptions for upstream data gaps only.
+
+**Trigger to fix:** the map growing beyond a handful of entities, or wanting to edit mappings without a deploy.
+
+**Proper fix:** move to a DB table (e.g. `company_aliases(alias_key, canonical_name)`), loaded by `company_resolution`. Gains runtime edits (no redeploy) at the cost of a small CRUD surface; still requires a backfill to rewrite historical rows after any change. Consider key normalization (strip corporate suffixes like "Interactive Entertainment", "Ltd", "Co.") so one entity needs one row instead of N name variants. If a richer matcher lands, fold this into the [Enrichment v2](#enrichment-v2--token-subset--llm-adjudicator-design-sketch) shared `game_matching` module rather than a standalone table.
+
 ## Kingdom Hearts HD 1.5 + 2.5 ReMIX — resolve miss and duplicate games (2026-06-21)
 
 ### Summary

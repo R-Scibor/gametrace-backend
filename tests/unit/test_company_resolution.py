@@ -26,6 +26,13 @@ def test_publisher_aliases_align_to_igdb_root():
     assert PUBLISHER_ALIASES.get("hoyoverse") == "miHoYo"
 
 
+def test_publisher_aliases_iwplay_to_perfect_world():
+    """Iwplay (Taiwan/SEA regional operator) aliases to Perfect World Games."""
+    assert PUBLISHER_ALIASES.get("iwplay") == "Perfect World Games"
+    assert PUBLISHER_ALIASES.get("iwplay world") == "Perfect World Games"
+    assert PUBLISHER_ALIASES.get("iwplay world interactive entertainment") == "Perfect World Games"
+
+
 # ── extract_companies ────────────────────────────────────────────────────────
 
 def test_extract_companies_splits_devs_pubs_and_both():
@@ -81,6 +88,16 @@ def test_canonicalize_alias_no_parent_cognosphere():
     pairs = [("Cognosphere", None)]
     result = canonicalize_publishers(pairs)
     assert result == ["miHoYo"]
+
+
+def test_canonicalize_alias_iwplay_to_perfect_world_games():
+    """Iwplay (no parent) aliases to Perfect World Games (regional operator case)."""
+    pairs = [("Iwplay World Interactive Entertainment", None)]
+    result = canonicalize_publishers(pairs)
+    assert result == ["Perfect World Games"]
+
+    # Also handles common shorthand
+    assert canonicalize_publishers([("IWPlay", None)]) == ["Perfect World Games"]
 
 
 def test_canonicalize_no_alias_no_parent_keeps_name():
@@ -151,3 +168,15 @@ def test_resolve_companies_end_to_end():
     devs, pubs = resolve_companies(involved)
     assert devs == ["miHoYo", "Both Inc", "Dup Dev"]
     assert pubs == ["miHoYo", "Parent Corp"]
+
+
+def test_resolve_companies_iwplay_regional_operator():
+    """Neverness-like case: Iwplay (regional) + Perfect World Games should collapse to one."""
+    involved = [
+        {"company": {"name": "Hotta Studio"}, "developer": True, "publisher": False},
+        {"company": {"name": "Iwplay World Interactive Entertainment"}, "developer": False, "publisher": True},
+        {"company": {"name": "Perfect World Games"}, "developer": False, "publisher": True},
+    ]
+    devs, pubs = resolve_companies(involved)
+    assert devs == ["Hotta Studio"]
+    assert pubs == ["Perfect World Games"]
