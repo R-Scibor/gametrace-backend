@@ -19,8 +19,11 @@ from app.services.company_resolution import (
 
 # ── PUBLISHER_ALIASES sanity ─────────────────────────────────────────────────
 
-def test_publisher_aliases_has_cognosphere():
-    assert PUBLISHER_ALIASES.get("cognosphere") == "HoYoverse"
+def test_publisher_aliases_align_to_igdb_root():
+    # Both alias to miHoYo — the IGDB parent-chain root for this family — so the
+    # fallback matches what parent rollup produces when IGDB has the link.
+    assert PUBLISHER_ALIASES.get("cognosphere") == "miHoYo"
+    assert PUBLISHER_ALIASES.get("hoyoverse") == "miHoYo"
 
 
 # ── extract_companies ────────────────────────────────────────────────────────
@@ -74,10 +77,10 @@ def test_canonicalize_parent_used_when_present():
 
 
 def test_canonicalize_alias_no_parent_cognosphere():
-    """Cognosphere has no parent → alias map resolves it to HoYoverse."""
+    """Cognosphere has no parent → alias map resolves it to the IGDB root miHoYo."""
     pairs = [("Cognosphere", None)]
     result = canonicalize_publishers(pairs)
-    assert result == ["HoYoverse"]
+    assert result == ["miHoYo"]
 
 
 def test_canonicalize_no_alias_no_parent_keeps_name():
@@ -88,10 +91,10 @@ def test_canonicalize_no_alias_no_parent_keeps_name():
 
 
 def test_canonicalize_dedupes_cognosphere_and_hoyoverse():
-    """Cognosphere and HoYoverse on the same game both resolve to HoYoverse → one entry."""
+    """Cognosphere and HoYoverse (no parent links) both alias to miHoYo → one entry."""
     pairs = [("Cognosphere", None), ("HoYoverse", None)]
     result = canonicalize_publishers(pairs)
-    assert result == ["HoYoverse"]
+    assert result == ["miHoYo"]
 
 
 def test_canonicalize_dedupe_is_order_preserving_and_case_insensitive():
@@ -130,7 +133,7 @@ def test_resolve_companies_end_to_end():
     """
     Full pipeline fixture:
     - miHoYo: developer only, no parent, no alias
-    - Cognosphere: publisher only, no parent, alias → HoYoverse
+    - Cognosphere: publisher only, no parent, alias → miHoYo
     - Both Inc: both dev and publisher, has parent → parent used for publisher side
     - Dup Dev: developer repeated twice → deduped
     """
@@ -147,4 +150,4 @@ def test_resolve_companies_end_to_end():
     ]
     devs, pubs = resolve_companies(involved)
     assert devs == ["miHoYo", "Both Inc", "Dup Dev"]
-    assert pubs == ["HoYoverse", "Parent Corp"]
+    assert pubs == ["miHoYo", "Parent Corp"]

@@ -138,9 +138,9 @@ Each publisher entry is resolved to a canonical name in three steps:
 2. **Alias map:** the resolved name is looked up in `PUBLISHER_ALIASES` (keyed by casefolded name). This catches subsidiaries that IGDB does not yet link to a parent.
 3. **Dedupe:** the resulting list is deduplicated with order-preserving, case-insensitive comparison; first occurrence wins.
 
-Example: Cognosphere and HoYoverse both listed → step 1 resolves Cognosphere to its IGDB parent HoYoverse, step 3 deduplicates → stored as `["HoYoverse"]`.
+Example: IGDB lists miHoYo, HoYoverse, and Cognosphere as publishers of the same game, with HoYoverse and Cognosphere both pointing to the parent `miHoYo`. Step 1 resolves all three to `miHoYo`, step 3 deduplicates → stored as `["miHoYo"]`.
 
-The alias map lives in `app/services/company_resolution.py` as a code-maintained dict (seeded with `cognosphere → HoYoverse`). It fires for subsidiaries that IGDB has no parent link for. Adding a mapping requires a code change — there is no runtime configuration.
+The alias map lives in `app/services/company_resolution.py` as a code-maintained dict (seeded with `cognosphere → miHoYo` and `hoyoverse → miHoYo`). It fires for subsidiaries that IGDB has no parent link for. An alias value must match the IGDB parent-chain root for the same entity — otherwise a game where IGDB has the parent link and one where it is missing would resolve to different names and split into two buckets. Adding a mapping requires a code change — there is no runtime configuration.
 
 ### Why developers are not rolled up
 

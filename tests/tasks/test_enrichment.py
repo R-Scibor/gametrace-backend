@@ -335,7 +335,7 @@ def test_igdb_search_parses_metadata_response():
 
 
 def test_igdb_search_parses_parent_rollup():
-    """Unit-level: _igdb_search rolls publishers up to parent and aliases Cognosphere → HoYoverse."""
+    """Unit-level: _igdb_search rolls publishers up to parent and aliases Cognosphere → miHoYo."""
     from app.tasks import enrichment as enr
 
     fake_resp = MagicMock()
@@ -360,13 +360,13 @@ def test_igdb_search_parses_parent_rollup():
                     "developer": False,
                     "publisher": True,
                 },
-                # Cognosphere as publisher (no parent) — alias fires → HoYoverse
+                # Cognosphere as publisher (no parent) — alias fires → miHoYo
                 {
                     "company": {"name": "Cognosphere", "parent": None},
                     "developer": False,
                     "publisher": True,
                 },
-                # HoYoverse directly — would duplicate aliased Cognosphere if not deduped
+                # HoYoverse directly (no parent) — also aliases to miHoYo, deduped
                 {
                     "company": {"name": "HoYoverse", "parent": None},
                     "developer": False,
@@ -390,8 +390,8 @@ def test_igdb_search_parses_parent_rollup():
 
     # Developers stay raw — no parent rollup applied
     assert result.developers == ["Child Dev Studio"]
-    # Publishers: Sub Label → Parent Group; Cognosphere → HoYoverse (alias); HoYoverse deduped
-    assert result.publishers == ["Parent Group", "HoYoverse"]
+    # Publishers: Sub Label → Parent Group; Cognosphere/HoYoverse → miHoYo (alias to IGDB root); deduped
+    assert result.publishers == ["Parent Group", "miHoYo"]
 
 
 async def test_game_not_found_raises():
