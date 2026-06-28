@@ -306,8 +306,12 @@ def enrich_game(self, game_id: int) -> None:
 # One-shot backfill task — re-queues legacy ENRICHED games missing metadata
 # ---------------------------------------------------------------------------
 
-async def _run_backfill(batch_size: int) -> int:
-    """Iterate ENRICHED games with empty genres in chunks; dispatch enrich_game per row.
+async def _run_backfill(batch_size: int, full: bool = False) -> int:
+    """Iterate ENRICHED games in chunks; dispatch enrich_game per row.
+
+    When *full* is False (default) only games with an empty genres array are
+    queued.  When *full* is True every ENRICHED game is re-queued regardless
+    of genre data.
 
     Returns the total number of games queued.
     """
@@ -318,13 +322,15 @@ async def _run_backfill(batch_size: int) -> int:
     try:
         while True:
             async with SessionLocal() as db:
+                conditions = [
+                    Game.enrichment_status == EnrichmentStatus.ENRICHED,
+                    Game.id > last_id,
+                ]
+                if not full:
+                    conditions.append(func.jsonb_array_length(Game.genres) == 0)
                 stmt = (
                     select(Game.id)
-                    .where(
-                        Game.enrichment_status == EnrichmentStatus.ENRICHED,
-                        func.jsonb_array_length(Game.genres) == 0,
-                        Game.id > last_id,
-                    )
+                    .where(*conditions)
                     .order_by(Game.id)
                     .limit(batch_size)
                 )
@@ -351,12 +357,16 @@ async def _run_backfill(batch_size: int) -> int:
 
 
 @celery_app.task(name="tasks.backfill_metadata")
-def backfill_metadata(batch_size: int = 500) -> int:
-    """Re-queue every ENRICHED game whose genres array is empty for re-enrichment.
+def backfill_metadata(batch_size: int = 500, full: bool = False) -> int:
+    """Re-queue ENRICHED games for re-enrichment.
+
+    When *full* is False (default) only games with an empty genres array are
+    queued.  Pass ``full=True`` to re-fetch every ENRICHED game regardless of
+    genre data.
 
     Returns the number of games queued. Idempotent (re-queueing relies on the
     enrich_game dedup key task_id=enrich_game_{game_id}).
     """
-    queued = asyncio.run(_run_backfill(batch_size))
+    queued = asyncio.run(_run_backfill(batch_size, full=full))
     logger.info("backfill_metadata: queued %d games for re-enrichment", queued)
     return queued

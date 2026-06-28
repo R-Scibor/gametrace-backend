@@ -509,3 +509,31 @@ async def test_backfill_chunks_correctly():
     assert queued == 3
     assert session.execute.call_count == 2
     assert mock_apply.call_count == 3
+
+
+async def test_backfill_full_omits_genre_predicate():
+    """full=True must omit the jsonb_array_length predicate from the SELECT."""
+    factory, session = _backfill_session_mock([[]])
+    p_engine, p_sm = _backfill_engine_patches(factory)
+
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment.enrich_game.apply_async"):
+
+        await _run_backfill(batch_size=500, full=True)
+
+    stmt = session.execute.call_args_list[0].args[0]
+    assert "jsonb_array_length" not in str(stmt)
+
+
+async def test_backfill_default_keeps_genre_predicate():
+    """Default (full=False) must keep the jsonb_array_length predicate."""
+    factory, session = _backfill_session_mock([[]])
+    p_engine, p_sm = _backfill_engine_patches(factory)
+
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment.enrich_game.apply_async"):
+
+        await _run_backfill(batch_size=500)
+
+    stmt = session.execute.call_args_list[0].args[0]
+    assert "jsonb_array_length" in str(stmt)
