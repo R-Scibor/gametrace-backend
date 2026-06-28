@@ -91,6 +91,31 @@ docker compose run --rm api alembic downgrade -1
 
 Migrations also run automatically via the `alembic_init` init container before the API starts.
 
+## Backups
+
+Local backups run daily at 03:00 via host cron. Dumps land on a host path outside Docker named volumes — default `/data/gametrace-backups` on the homelab `/data` disk (`sda1`), separate from the NVMe where `/var/lib/docker` lives. Offsite cloud copy is deferred to [pre-release hardening](docs/roadmap.md#offsite-database-backups).
+
+```bash
+# One-shot backup (PostgreSQL custom dump + optional covers tar)
+docker compose --profile backup run --rm backup
+
+# Restore from latest symlinks (destructive — overwrites current DB + covers)
+docker compose --profile restore run --rm restore
+
+# Restore a specific dump
+docker compose --profile restore run --rm restore \
+  /backups/gametrace-2026-06-28T120000Z.dump \
+  /backups/covers-2026-06-28T120000Z.tar.gz
+```
+
+Cron is installed from `scripts/backup.cron` (daily 03:00, logs to `/data/gametrace-backups/cron.log`). Re-install after cloning:
+
+```bash
+crontab scripts/backup.cron
+```
+
+Retention defaults to 7 days (`BACKUP_RETENTION_DAYS`). Optional mirror: set `BACKUP_MIRROR_DIR` and add a second bind mount for `/mirror` in `docker-compose.yml` (e.g. `/data/bulk/gametrace-backups` on `sdb1`).
+
 ## Observability
 
 Two optional integrations, both off by default:

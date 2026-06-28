@@ -50,6 +50,11 @@ Each call to this endpoint is a paid OpenAI Whisper request. A leaked auth token
 
 Why this is deferred: the voice pipeline isn't fully validated end-to-end with the frontend yet. Adding rate-limiting before the happy path is locked in introduces a debugging variable we don't need.
 
+### Offsite database backups
+**Shipped (local):** Daily `pg_dump` + covers tar to `/data/gametrace-backups` on the homelab `/data` disk (`sda1`), via the compose `backup` profile and host cron (`scripts/backup.cron`). Covers dead-disk and `docker volume rm` on the local machine.
+
+**Deferred:** Cloud copy to GCS (dedicated bucket, lifecycle retention, service-account auth — encrypt dumps before upload since tokens are still plaintext in DB). Homelab threats are mitigated by the off-NVMe local path; offsite is required before the API is exposed outside the LAN. Optional mirror to `/data/bulk/gametrace-backups` (`sdb1`) is a one-line compose bind mount when wanted.
+
 ### MIME sniffing on uploads
 Two endpoints accept binary uploads (`PUT /games/{id}/cover`, `POST /voice/transcribe`) and currently rely on client-supplied content type. Plan:
 - **Cover:** sniff with `python-magic` (libmagic), allow only `image/jpeg|png|webp`, derive the on-disk extension from the sniffed type — never trust the client-supplied filename.

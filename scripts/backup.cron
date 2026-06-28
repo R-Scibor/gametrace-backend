@@ -1,0 +1,3 @@
+# Daily GameTrace backup — install with: crontab scripts/backup.cron
+# Logs append to /data/gametrace-backups/cron.log
+0 3 * * * cd /home/endmin/homelab/gametrace-backend && docker compose --profile backup run --rm backup >> /data/gametrace-backups/cron.log 2>&1

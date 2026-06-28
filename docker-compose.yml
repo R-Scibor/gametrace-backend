@@ -116,6 +116,46 @@ services:
       redis:
         condition: service_started
 
+  backup:
+    profiles: ["backup"]
+    image: postgres:15-alpine
+    container_name: gametrace_backup
+    entrypoint: ["/bin/sh", "/scripts/backup.sh"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gametrace_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gametrace_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-gametrace_db}
+      PGHOST: db
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+      BACKUP_MIRROR_DIR: ${BACKUP_MIRROR_DIR:-}
+    volumes:
+      - ./scripts/backup.sh:/scripts/backup.sh:ro
+      - ${BACKUP_DIR:-/data/gametrace-backups}:/backups
+      - covers_data:/covers:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  restore:
+    profiles: ["restore"]
+    image: postgres:15-alpine
+    container_name: gametrace_restore
+    entrypoint: ["/bin/sh", "/scripts/restore.sh"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gametrace_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gametrace_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-gametrace_db}
+      PGHOST: db
+      BACKUP_DIR: /backups
+    volumes:
+      - ./scripts/restore.sh:/scripts/restore.sh:ro
+      - ${BACKUP_DIR:-/data/gametrace-backups}:/backups:ro
+      - covers_data:/covers
+    depends_on:
+      db:
+        condition: service_healthy
+
   flower:
     image: mher/flower:2.0
     container_name: gametrace_flower
