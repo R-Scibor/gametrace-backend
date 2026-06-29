@@ -145,6 +145,46 @@ async def test_days_max_365_enforced(authed_client):
     assert resp.status_code == 422
 
 
+async def test_negative_days_rejected(authed_client):
+    resp = await authed_client.get("/api/v1/stats/summary?days=-1")
+
+    assert resp.status_code == 422
+
+
+# ── All-time (days=0) ─────────────────────────────────────────────────────────
+
+async def test_days_zero_is_all_time(authed_client, db, user):
+    game = await make_game(db)
+    # A session ~40 days ago is outside any finite window but must count for all-time.
+    await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=40 * 24), dt(hours_ago=40 * 24 - 1),
+    )
+
+    resp = await authed_client.get("/api/v1/stats/summary?days=0")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["days"] == 0
+    assert data["total_seconds"] == 3600
+    assert data["window_start"] is None  # no lower bound in all-time mode
+
+
+async def test_all_time_has_no_previous_window(authed_client, db, user):
+    game = await make_game(db)
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=40 * 24), dt(hours_ago=40 * 24 - 1),
+    )
+
+    resp = await authed_client.get("/api/v1/stats/summary?days=0")
+
+    assert resp.status_code == 200
+    # There is no "period before all-time", so the delta baseline is zero.
+    assert resp.json()["previous_total_seconds"] == 0
+
+
 # ── Insight fields (avg / longest / previous / new games) ─────────────────────
 
 async def test_empty_user_insight_fields_zeroed(authed_client):

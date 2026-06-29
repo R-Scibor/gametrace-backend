@@ -234,8 +234,25 @@ async def test_genres_days_excludes_old_sessions(authed_client, db, user):
     assert resp.json() == {"items": [{"genre": "RPG", "total_seconds": 3600}]}
 
 
-async def test_genres_invalid_days_returns_422(authed_client):
+async def test_genres_days_zero_is_all_time(authed_client, db, user):
+    game = await make_game(db)
+    game.genres = ["RPG"]
+    db.add(game)
+    await db.flush()
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=5), dt(hours_ago=4))
+    await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=40 * 24), dt(hours_ago=40 * 24 - 1),
+    )
+
     resp = await authed_client.get("/api/v1/stats/genres?days=0")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"items": [{"genre": "RPG", "total_seconds": 7200}]}
+
+
+async def test_genres_invalid_days_returns_422(authed_client):
+    resp = await authed_client.get("/api/v1/stats/genres?days=-1")
     assert resp.status_code == 422
 
 

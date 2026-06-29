@@ -26,8 +26,8 @@ class PendingErrorEntry(BaseModel):
 
 
 class StatsSummaryResponse(BaseModel):
-    days: int
-    window_start: datetime
+    days: int                                      # 0 = all-time
+    window_start: Optional[datetime] = None        # null in all-time mode (no lower bound)
     window_end: datetime
     total_seconds: int
     avg_session_seconds: int                       # mean COMPLETED session length in window

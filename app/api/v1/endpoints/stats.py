@@ -42,7 +42,7 @@ router = APIRouter()
 
 @router.get("/summary", response_model=StatsSummaryResponse)
 async def get_stats_summary(
-    days: int = Query(default=7, ge=1, le=365),
+    days: int = Query(default=7, ge=0, le=365, description="0 = all-time"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -51,7 +51,7 @@ async def get_stats_summary(
 
 @router.get("/heatmap", response_model=HeatmapResponse)
 async def get_heatmap(
-    days: int = Query(default=90, ge=1, le=365),
+    days: int = Query(default=90, ge=0, le=365, description="0 = all-time"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -77,7 +77,7 @@ async def get_weekly_trend(
 
 @router.get("/genres", response_model=GenresResponse)
 async def get_genres(
-    days: int | None = Query(default=None, ge=1, le=365),
+    days: int | None = Query(default=None, ge=0, le=365),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -95,7 +95,7 @@ async def get_genres(
 
 @router.get("/themes", response_model=ThemesResponse)
 async def get_themes(
-    days: int | None = Query(default=None, ge=1, le=365),
+    days: int | None = Query(default=None, ge=0, le=365),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -111,7 +111,7 @@ async def get_themes(
 async def get_companies(
     role: CompanyRole = Query(..., description="developer or publisher"),
     limit: int = Query(default=10, ge=1, le=50),
-    days: int | None = Query(default=None, ge=1, le=365),
+    days: int | None = Query(default=None, ge=0, le=365),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -127,7 +127,7 @@ async def get_companies(
 
 @router.get("/release-years", response_model=ReleaseYearsResponse)
 async def get_release_years(
-    days: int | None = Query(default=None, ge=1, le=365),
+    days: int | None = Query(default=None, ge=0, le=365),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
