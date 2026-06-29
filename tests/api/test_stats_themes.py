@@ -68,6 +68,47 @@ async def test_themes_sorted_desc(authed_client, db, user):
     assert items[0]["total_seconds"] >= items[1]["total_seconds"]
 
 
+# ── days window ───────────────────────────────────────────────────────────────
+
+async def test_themes_omitted_days_is_all_time(authed_client, db, user):
+    game = await make_game(db)
+    game.themes = ["Fantasy"]
+    db.add(game)
+    await db.flush()
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=5), dt(hours_ago=4))
+    await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=40 * 24), dt(hours_ago=40 * 24 - 1),
+    )
+
+    resp = await authed_client.get("/api/v1/stats/themes")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"items": [{"theme": "Fantasy", "total_seconds": 7200}]}
+
+
+async def test_themes_days_excludes_old_sessions(authed_client, db, user):
+    game = await make_game(db)
+    game.themes = ["Fantasy"]
+    db.add(game)
+    await db.flush()
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=5), dt(hours_ago=4))
+    await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=40 * 24), dt(hours_ago=40 * 24 - 1),
+    )
+
+    resp = await authed_client.get("/api/v1/stats/themes?days=7")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"items": [{"theme": "Fantasy", "total_seconds": 3600}]}
+
+
+async def test_themes_invalid_days_returns_422(authed_client):
+    resp = await authed_client.get("/api/v1/stats/themes?days=0")
+    assert resp.status_code == 422
+
+
 async def test_themes_unauthorized(client):
     resp = await client.get(
         "/api/v1/stats/themes", headers={"Authorization": "Bearer badtoken"}

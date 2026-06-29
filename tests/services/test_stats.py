@@ -4,9 +4,42 @@ The HTTP handler tests in tests/api/test_stats_summary.py already cover the
 endpoint contract. These tests exist to lock the helper's behaviour in place
 so it can be reused by the weekly-report Celery task without drift.
 """
+from datetime import datetime
+
 from app.models.session import SessionStatus
-from app.services.stats import summary_for_user
+from app.services.stats import _split_session_across_cells, summary_for_user
 from tests.factories import dt, make_game, make_pref, make_session
+
+
+# ── _split_session_across_cells (pure) ────────────────────────────────────────
+
+def test_split_within_single_hour():
+    start = datetime(2026, 4, 15, 14, 10)  # Wed
+    assert _split_session_across_cells(start, 600) == [(2, 14, 600)]
+
+
+def test_split_across_hour_boundary():
+    start = datetime(2026, 4, 15, 14, 30)  # Wed
+    assert _split_session_across_cells(start, 3600) == [(2, 14, 1800), (2, 15, 1800)]
+
+
+def test_split_across_midnight_changes_dow():
+    start = datetime(2026, 4, 15, 23, 0)  # Wed 23:00
+    assert _split_session_across_cells(start, 3 * 3600) == [
+        (2, 23, 3600),  # Wed 23:00
+        (3, 0, 3600),   # Thu 00:00
+        (3, 1, 3600),   # Thu 01:00
+    ]
+
+
+def test_split_zero_duration_is_empty():
+    assert _split_session_across_cells(datetime(2026, 4, 15, 14, 0), 0) == []
+
+
+def test_split_sunday_to_monday_wraps_dow():
+    start = datetime(2026, 4, 19, 23, 30)  # Sunday → dow=6
+    result = _split_session_across_cells(start, 3600)
+    assert result == [(6, 23, 1800), (0, 0, 1800)]  # wraps Sun→Mon
 
 
 async def test_summary_for_user_excludes_ignored_game(db, user):

@@ -30,6 +30,12 @@ class StatsSummaryResponse(BaseModel):
     window_start: datetime
     window_end: datetime
     total_seconds: int
+    avg_session_seconds: int                       # mean COMPLETED session length in window
+    longest_session_seconds: int                   # 0 when no COMPLETED sessions
+    longest_session_game_id: Optional[int] = None
+    longest_session_game_name: Optional[str] = None
+    previous_total_seconds: int                    # COMPLETED total over the prior equal-length window
+    new_games_count: int                           # games first-played within the window
     per_game: list[GameStatEntry]
     pending_errors: list[PendingErrorEntry]
 

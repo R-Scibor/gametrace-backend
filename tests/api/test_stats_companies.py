@@ -270,6 +270,51 @@ async def test_companies_includes_ongoing(authed_client, db, user):
     assert items[0]["game_count"] == 1
 
 
+# ── days window ───────────────────────────────────────────────────────────────
+
+async def test_companies_omitted_days_is_all_time(authed_client, db, user):
+    game = await make_game(db)
+    game.developers = ["Acme"]
+    db.add(game)
+    await db.flush()
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=5), dt(hours_ago=4))
+    await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=40 * 24), dt(hours_ago=40 * 24 - 1),
+    )
+
+    resp = await authed_client.get("/api/v1/stats/companies?role=developer")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "items": [{"name": "Acme", "total_seconds": 7200, "game_count": 1}]
+    }
+
+
+async def test_companies_days_excludes_old_sessions(authed_client, db, user):
+    game = await make_game(db)
+    game.developers = ["Acme"]
+    db.add(game)
+    await db.flush()
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=5), dt(hours_ago=4))
+    await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=40 * 24), dt(hours_ago=40 * 24 - 1),
+    )
+
+    resp = await authed_client.get("/api/v1/stats/companies?role=developer&days=7")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "items": [{"name": "Acme", "total_seconds": 3600, "game_count": 1}]
+    }
+
+
+async def test_companies_invalid_days_returns_422(authed_client):
+    resp = await authed_client.get("/api/v1/stats/companies?role=developer&days=0")
+    assert resp.status_code == 422
+
+
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 async def test_companies_unauthorized(client):
