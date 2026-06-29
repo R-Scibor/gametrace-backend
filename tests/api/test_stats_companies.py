@@ -311,7 +311,7 @@ async def test_companies_days_excludes_old_sessions(authed_client, db, user):
 
 
 async def test_companies_invalid_days_returns_422(authed_client):
-    resp = await authed_client.get("/api/v1/stats/companies?role=developer&days=0")
+    resp = await authed_client.get("/api/v1/stats/companies?role=developer&days=-1")
     assert resp.status_code == 422
 
 

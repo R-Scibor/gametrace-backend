@@ -203,6 +203,22 @@ async def test_heatmap_excludes_old_sessions(authed_client, db, user):
     assert all(c["seconds"] == 0 for c in resp.json()["cells"])
 
 
+async def test_heatmap_days_zero_is_all_time(authed_client, db, user):
+    game = await make_game(db)
+    # 100 days ago — outside the default 90-day window, but all-time must count it.
+    await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=100 * 24), dt(hours_ago=100 * 24 - 1),
+    )
+
+    resp = await authed_client.get("/api/v1/stats/heatmap?days=0")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["days"] == 0
+    assert sum(c["seconds"] for c in data["cells"]) == 3600
+
+
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 async def test_heatmap_returns_unauthorized_without_token(client):

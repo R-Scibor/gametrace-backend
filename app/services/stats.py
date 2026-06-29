@@ -42,7 +42,10 @@ async def summary_for_user(
     Excludes: soft-deleted sessions, ERROR sessions, ignored/unaccepted games.
     """
     now = datetime.now(timezone.utc)
-    window_start = now - timedelta(days=days)
+    # days == 0 → all-time (no lower bound). Otherwise a rolling window.
+    all_time = days == 0
+    window_start = None if all_time else now - timedelta(days=days)
+    window_filters = [] if all_time else [GameSession.start_time >= window_start]
 
     per_game_stmt = (
         select(
@@ -63,7 +66,7 @@ async def summary_for_user(
             GameSession.user_id == user.discord_id,
             GameSession.status == SessionStatus.COMPLETED,
             *visible_session(),
-            GameSession.start_time >= window_start,
+            *window_filters,
             library_visible_filter(),
         )
         .group_by(GameSession.game_id, Game.primary_name, Game.cover_image_url)
@@ -119,7 +122,7 @@ async def summary_for_user(
             GameSession.user_id == user.discord_id,
             GameSession.status == SessionStatus.COMPLETED,
             *visible_session(),
-            GameSession.start_time >= window_start,
+            *window_filters,
             library_visible_filter(),
         )
     )
@@ -144,7 +147,7 @@ async def summary_for_user(
             GameSession.user_id == user.discord_id,
             GameSession.status == SessionStatus.COMPLETED,
             *visible_session(),
-            GameSession.start_time >= window_start,
+            *window_filters,
             library_visible_filter(),
         )
         .order_by(GameSession.duration_seconds.desc())
@@ -161,32 +164,36 @@ async def summary_for_user(
         longest_session_game_name = None
 
     # Previous equal-length window [now - 2*days, window_start) — drives the
-    # "vs last period" delta on the client.
-    prev_window_start = now - timedelta(days=2 * days)
-    prev_stmt = (
-        select(
-            func.coalesce(
-                func.sum(func.coalesce(GameSession.duration_seconds, 0)), 0
+    # "vs last period" delta on the client. All-time has no preceding period,
+    # so the delta baseline is zero.
+    if all_time:
+        previous_total_seconds = 0
+    else:
+        prev_window_start = now - timedelta(days=2 * days)
+        prev_stmt = (
+            select(
+                func.coalesce(
+                    func.sum(func.coalesce(GameSession.duration_seconds, 0)), 0
+                )
+            )
+            .join(Game, GameSession.game_id == Game.id)
+            .outerjoin(
+                UserGamePreference,
+                and_(
+                    UserGamePreference.game_id == GameSession.game_id,
+                    UserGamePreference.user_id == user.discord_id,
+                ),
+            )
+            .where(
+                GameSession.user_id == user.discord_id,
+                GameSession.status == SessionStatus.COMPLETED,
+                *visible_session(),
+                GameSession.start_time >= prev_window_start,
+                GameSession.start_time < window_start,
+                library_visible_filter(),
             )
         )
-        .join(Game, GameSession.game_id == Game.id)
-        .outerjoin(
-            UserGamePreference,
-            and_(
-                UserGamePreference.game_id == GameSession.game_id,
-                UserGamePreference.user_id == user.discord_id,
-            ),
-        )
-        .where(
-            GameSession.user_id == user.discord_id,
-            GameSession.status == SessionStatus.COMPLETED,
-            *visible_session(),
-            GameSession.start_time >= prev_window_start,
-            GameSession.start_time < window_start,
-            library_visible_filter(),
-        )
-    )
-    previous_total_seconds = int((await db.execute(prev_stmt)).scalar_one() or 0)
+        previous_total_seconds = int((await db.execute(prev_stmt)).scalar_one() or 0)
 
     # New games: games whose first-ever visible session (across all history)
     # starts inside the window. A game replayed this window but first played
@@ -213,9 +220,11 @@ async def summary_for_user(
         .group_by(GameSession.game_id)
         .subquery()
     )
-    new_games_stmt = select(func.count()).select_from(first_play_subq).where(
-        first_play_subq.c.first_play >= window_start
-    )
+    new_games_stmt = select(func.count()).select_from(first_play_subq)
+    if not all_time:
+        new_games_stmt = new_games_stmt.where(
+            first_play_subq.c.first_play >= window_start
+        )
     new_games_count = int((await db.execute(new_games_stmt)).scalar_one() or 0)
 
     return StatsSummaryResponse(
@@ -268,11 +277,8 @@ async def heatmap_for_user(
     Each session's seconds are split across every (dow, hour) cell its local
     interval actually spans — a 23:00→02:00 session contributes 1h each to the
     23:00, 00:00 and 01:00 cells (the latter two on the following day). See
-    _split_session_across_cells.
+    _split_session_across_cells. days == 0 → all-time (no lower bound).
     """
-    now_utc = datetime.now(timezone.utc)
-    window_start = now_utc - timedelta(days=days)
-
     # Validate the user's stored tz string; fall back to UTC if invalid.
     try:
         ZoneInfo(user.timezone)
@@ -301,7 +307,7 @@ async def heatmap_for_user(
             GameSession.user_id == user.discord_id,
             GameSession.status != SessionStatus.ERROR,
             *visible_session(),
-            GameSession.start_time >= window_start,
+            *_window_filters(days),
             library_visible_filter(),
         )
     )
@@ -473,12 +479,13 @@ async def weekly_trend_for_user(
 
 
 def _window_filters(days: int | None) -> list:
-    """Optional start_time lower bound for the all-time stat endpoints.
+    """Optional start_time lower bound for the stat endpoints.
 
-    days=None → no filter (all-time). Otherwise a rolling window of the last
-    `days` days, mirroring summary_for_user's window semantics.
+    days in (None, 0) → no filter (all-time): omitting the param and the
+    explicit days=0 all-time sentinel are treated identically. Otherwise a
+    rolling window of the last `days` days, mirroring summary_for_user.
     """
-    if days is None:
+    if not days:
         return []
     window_start = datetime.now(timezone.utc) - timedelta(days=days)
     return [GameSession.start_time >= window_start]
