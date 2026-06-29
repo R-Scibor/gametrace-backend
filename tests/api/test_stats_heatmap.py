@@ -30,8 +30,10 @@ async def test_heatmap_empty_user_returns_168_zero_cells(authed_client):
 
 # ── Bucketing & timezone ──────────────────────────────────────────────────────
 
-async def test_heatmap_completed_session_buckets_correctly(authed_client, db, user):
-    # 2026-04-15 is a Wednesday → Mon=0 spec → dow=2
+async def test_heatmap_session_split_across_spanned_hours(authed_client, db, user):
+    # 2026-04-15 is a Wednesday → Mon=0 spec → dow=2.
+    # A 14:30→15:30 session straddles the 15:00 boundary, so its 3600s split
+    # 1800s into hour 14 and 1800s into hour 15.
     game = await make_game(db)
     start = datetime(2026, 4, 15, 14, 30, tzinfo=timezone.utc)
     end = start + timedelta(seconds=3600)
@@ -41,10 +43,43 @@ async def test_heatmap_completed_session_buckets_correctly(authed_client, db, us
 
     assert resp.status_code == 200
     cells = _cells_by_key(resp.json()["cells"])
-    assert cells[(2, 14)] == 3600
-    # All other cells zero
-    other_total = sum(v for k, v in cells.items() if k != (2, 14))
+    assert cells[(2, 14)] == 1800
+    assert cells[(2, 15)] == 1800
+    other_total = sum(v for k, v in cells.items() if k not in {(2, 14), (2, 15)})
     assert other_total == 0
+
+
+async def test_heatmap_within_single_hour_stays_in_one_cell(authed_client, db, user):
+    # 14:10→14:20 — entirely inside hour 14, so one cell, no split.
+    game = await make_game(db)
+    start = datetime(2026, 4, 15, 14, 10, tzinfo=timezone.utc)
+    end = start + timedelta(seconds=600)
+    await make_session(db, user.discord_id, game.id, start, end)
+
+    resp = await authed_client.get("/api/v1/stats/heatmap")
+
+    assert resp.status_code == 200
+    cells = _cells_by_key(resp.json()["cells"])
+    assert cells[(2, 14)] == 600
+    assert sum(v for k, v in cells.items() if k != (2, 14)) == 0
+
+
+async def test_heatmap_session_crosses_midnight_splits_dow(authed_client, db, user):
+    # 23:00 Wed → 02:00 Thu (3h): 1h each into Wed 23:00, Thu 00:00, Thu 01:00.
+    game = await make_game(db)
+    start = datetime(2026, 4, 15, 23, 0, tzinfo=timezone.utc)  # Wed → dow=2
+    end = start + timedelta(seconds=3 * 3600)
+    await make_session(db, user.discord_id, game.id, start, end)
+
+    resp = await authed_client.get("/api/v1/stats/heatmap")
+
+    assert resp.status_code == 200
+    cells = _cells_by_key(resp.json()["cells"])
+    assert cells[(2, 23)] == 3600   # Wed 23:00
+    assert cells[(3, 0)] == 3600    # Thu 00:00
+    assert cells[(3, 1)] == 3600    # Thu 01:00
+    # Conservation: every second lands in exactly one cell.
+    assert sum(cells.values()) == 3 * 3600
 
 
 async def test_heatmap_respects_user_timezone(authed_client, db, user):
@@ -62,8 +97,10 @@ async def test_heatmap_respects_user_timezone(authed_client, db, user):
 
     assert resp.status_code == 200
     cells = _cells_by_key(resp.json()["cells"])
-    # Wed 14:30 UTC → Wed 10:30 EDT → dow=2, hour=10
-    assert cells[(2, 10)] == 3600
+    # Wed 14:30 UTC → Wed 10:30 EDT; the 1h session splits across local hours
+    # 10 and 11 (not the UTC hour 14).
+    assert cells[(2, 10)] == 1800
+    assert cells[(2, 11)] == 1800
     assert cells[(2, 14)] == 0
 
 

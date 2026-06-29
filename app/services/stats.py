@@ -113,6 +113,29 @@ async def summary_for_user(
     )
 
 
+def _split_session_across_cells(
+    local_start: datetime, duration_seconds: int
+) -> list[tuple[int, int, int]]:
+    """Distribute a session's seconds across each (dow, hour) cell its local
+    interval spans.
+
+    local_start is a naive local-time datetime (Postgres `timezone(tz, ts)`).
+    Returns (spec_dow, hour, seconds) tuples where spec_dow is Python's
+    weekday() (Mon=0..Sun=6) — already the spec's 0=Monday convention. Walking
+    hour-by-hour naturally rolls the dow over at midnight (Sun→Mon wraps).
+    """
+    allocations: list[tuple[int, int, int]] = []
+    remaining = duration_seconds
+    cur = local_start
+    while remaining > 0:
+        secs_to_boundary = 3600 - (cur.minute * 60 + cur.second)
+        chunk = min(remaining, secs_to_boundary)
+        allocations.append((cur.weekday(), cur.hour, chunk))
+        remaining -= chunk
+        cur += timedelta(seconds=chunk)
+    return allocations
+
+
 async def heatmap_for_user(
     db: AsyncSession, user: User, days: int
 ) -> HeatmapResponse:
@@ -121,9 +144,10 @@ async def heatmap_for_user(
     user's timezone. Includes ONGOING sessions (now() - start_time as
     duration). Excludes soft-deleted, ERROR sessions, and is_ignored games.
 
-    v1 simplification: each session is bucketed by its start_time's local
-    DOW/hour — not split across hour/day boundaries. Adequate for visualization;
-    revisit if users complain about long sessions appearing in only one cell.
+    Each session's seconds are split across every (dow, hour) cell its local
+    interval actually spans — a 23:00→02:00 session contributes 1h each to the
+    23:00, 00:00 and 01:00 cells (the latter two on the following day). See
+    _split_session_across_cells.
     """
     now_utc = datetime.now(timezone.utc)
     window_start = now_utc - timedelta(days=days)
@@ -135,20 +159,14 @@ async def heatmap_for_user(
     except (ZoneInfoNotFoundError, ValueError):
         tz_name = "UTC"
 
-    local_start = func.timezone(tz_name, GameSession.start_time)
-    pg_dow = func.extract("dow", local_start).cast(Integer).label("pg_dow")
-    hour_col = func.extract("hour", local_start).cast(Integer).label("hour")
+    local_start = func.timezone(tz_name, GameSession.start_time).label("local_start")
     duration = func.coalesce(
         GameSession.duration_seconds,
         func.extract("epoch", func.now() - GameSession.start_time),
-    ).cast(Integer)
+    ).cast(Integer).label("duration")
 
     stmt = (
-        select(
-            pg_dow,
-            hour_col,
-            func.sum(duration).label("total_seconds"),
-        )
+        select(local_start, duration)
         .select_from(GameSession)
         .join(Game, GameSession.game_id == Game.id)
         .outerjoin(
@@ -165,15 +183,15 @@ async def heatmap_for_user(
             GameSession.start_time >= window_start,
             library_visible_filter(),
         )
-        .group_by(pg_dow, hour_col)
     )
     rows = (await db.execute(stmt)).all()
 
-    # Postgres dow: 0=Sun..6=Sat; spec dow: 0=Mon..6=Sun → (pg + 6) % 7
     bucket: dict[tuple[int, int], int] = {}
     for row in rows:
-        spec_dow = (row.pg_dow + 6) % 7
-        bucket[(spec_dow, row.hour)] = int(row.total_seconds or 0)
+        for dow, hour, secs in _split_session_across_cells(
+            row.local_start, int(row.duration or 0)
+        ):
+            bucket[(dow, hour)] = bucket.get((dow, hour), 0) + secs
 
     cells = [
         HeatmapCell(dow=d, hour=h, seconds=bucket.get((d, h), 0))
