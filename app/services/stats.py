@@ -103,11 +103,132 @@ async def summary_for_user(
         for session, game_name in (await db.execute(errors_stmt)).all()
     ]
 
+    # Average + longest COMPLETED session in the window. Same join/exclusion
+    # shape as the per-game query above; ONGOING is excluded (no duration).
+    avg_stmt = (
+        select(func.avg(GameSession.duration_seconds))
+        .join(Game, GameSession.game_id == Game.id)
+        .outerjoin(
+            UserGamePreference,
+            and_(
+                UserGamePreference.game_id == GameSession.game_id,
+                UserGamePreference.user_id == user.discord_id,
+            ),
+        )
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.status == SessionStatus.COMPLETED,
+            *visible_session(),
+            GameSession.start_time >= window_start,
+            library_visible_filter(),
+        )
+    )
+    avg_seconds = (await db.execute(avg_stmt)).scalar()
+    avg_session_seconds = int(round(float(avg_seconds))) if avg_seconds is not None else 0
+
+    longest_stmt = (
+        select(
+            GameSession.duration_seconds,
+            GameSession.game_id,
+            Game.primary_name,
+        )
+        .join(Game, GameSession.game_id == Game.id)
+        .outerjoin(
+            UserGamePreference,
+            and_(
+                UserGamePreference.game_id == GameSession.game_id,
+                UserGamePreference.user_id == user.discord_id,
+            ),
+        )
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.status == SessionStatus.COMPLETED,
+            *visible_session(),
+            GameSession.start_time >= window_start,
+            library_visible_filter(),
+        )
+        .order_by(GameSession.duration_seconds.desc())
+        .limit(1)
+    )
+    longest_row = (await db.execute(longest_stmt)).first()
+    if longest_row is not None:
+        longest_session_seconds = int(longest_row.duration_seconds or 0)
+        longest_session_game_id = longest_row.game_id
+        longest_session_game_name = longest_row.primary_name
+    else:
+        longest_session_seconds = 0
+        longest_session_game_id = None
+        longest_session_game_name = None
+
+    # Previous equal-length window [now - 2*days, window_start) — drives the
+    # "vs last period" delta on the client.
+    prev_window_start = now - timedelta(days=2 * days)
+    prev_stmt = (
+        select(
+            func.coalesce(
+                func.sum(func.coalesce(GameSession.duration_seconds, 0)), 0
+            )
+        )
+        .join(Game, GameSession.game_id == Game.id)
+        .outerjoin(
+            UserGamePreference,
+            and_(
+                UserGamePreference.game_id == GameSession.game_id,
+                UserGamePreference.user_id == user.discord_id,
+            ),
+        )
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.status == SessionStatus.COMPLETED,
+            *visible_session(),
+            GameSession.start_time >= prev_window_start,
+            GameSession.start_time < window_start,
+            library_visible_filter(),
+        )
+    )
+    previous_total_seconds = int((await db.execute(prev_stmt)).scalar_one() or 0)
+
+    # New games: games whose first-ever visible session (across all history)
+    # starts inside the window. A game replayed this window but first played
+    # earlier does not count.
+    first_play_subq = (
+        select(
+            GameSession.game_id,
+            func.min(GameSession.start_time).label("first_play"),
+        )
+        .join(Game, GameSession.game_id == Game.id)
+        .outerjoin(
+            UserGamePreference,
+            and_(
+                UserGamePreference.game_id == GameSession.game_id,
+                UserGamePreference.user_id == user.discord_id,
+            ),
+        )
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.status != SessionStatus.ERROR,
+            *visible_session(),
+            library_visible_filter(),
+        )
+        .group_by(GameSession.game_id)
+        .subquery()
+    )
+    new_games_stmt = select(func.count()).select_from(first_play_subq).where(
+        first_play_subq.c.first_play >= window_start
+    )
+    new_games_count = int((await db.execute(new_games_stmt)).scalar_one() or 0)
+
     return StatsSummaryResponse(
         days=days,
         window_start=window_start,
         window_end=now,
         total_seconds=total_seconds,
+        avg_session_seconds=avg_session_seconds,
+        longest_session_seconds=longest_session_seconds,
+        longest_session_game_id=longest_session_game_id,
+        longest_session_game_name=longest_session_game_name,
+        previous_total_seconds=previous_total_seconds,
+        new_games_count=new_games_count,
         per_game=per_game,
         pending_errors=pending_errors,
     )
