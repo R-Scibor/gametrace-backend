@@ -205,6 +205,47 @@ async def test_release_years_decade_boundary_2019_is_2010s(authed_client, db, us
     assert items[0]["decade"] == "2010s"
 
 
+# ── days window ───────────────────────────────────────────────────────────────
+
+async def test_release_years_omitted_days_is_all_time(authed_client, db, user):
+    game = await make_game(db)
+    game.first_release_date = date(2015, 6, 15)
+    db.add(game)
+    await db.flush()
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=5), dt(hours_ago=4))
+    await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=40 * 24), dt(hours_ago=40 * 24 - 1),
+    )
+
+    resp = await authed_client.get("/api/v1/stats/release-years")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"items": [{"decade": "2010s", "total_seconds": 7200}]}
+
+
+async def test_release_years_days_excludes_old_sessions(authed_client, db, user):
+    game = await make_game(db)
+    game.first_release_date = date(2015, 6, 15)
+    db.add(game)
+    await db.flush()
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=5), dt(hours_ago=4))
+    await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=40 * 24), dt(hours_ago=40 * 24 - 1),
+    )
+
+    resp = await authed_client.get("/api/v1/stats/release-years?days=7")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"items": [{"decade": "2010s", "total_seconds": 3600}]}
+
+
+async def test_release_years_invalid_days_returns_422(authed_client):
+    resp = await authed_client.get("/api/v1/stats/release-years?days=0")
+    assert resp.status_code == 422
+
+
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 async def test_release_years_unauthorized(client):

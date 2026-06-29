@@ -333,8 +333,20 @@ async def weekly_trend_for_user(
     return WeeklyTrendResponse(weeks=entries)
 
 
+def _window_filters(days: int | None) -> list:
+    """Optional start_time lower bound for the all-time stat endpoints.
+
+    days=None → no filter (all-time). Otherwise a rolling window of the last
+    `days` days, mirroring summary_for_user's window semantics.
+    """
+    if days is None:
+        return []
+    window_start = datetime.now(timezone.utc) - timedelta(days=days)
+    return [GameSession.start_time >= window_start]
+
+
 async def _jsonb_breakdown(
-    db: AsyncSession, user: User, jsonb_col
+    db: AsyncSession, user: User, jsonb_col, days: int | None = None
 ) -> list[tuple[str, int]]:
     """Aggregate session duration grouped by JSONB-array element from games.<col>.
 
@@ -369,6 +381,7 @@ async def _jsonb_breakdown(
             GameSession.user_id == user.discord_id,
             GameSession.status != SessionStatus.ERROR,
             *visible_session(),
+            *_window_filters(days),
             library_visible_filter(),
         )
         .group_by(tag_col)
@@ -378,22 +391,30 @@ async def _jsonb_breakdown(
     return [(row.tag, int(row.total_seconds or 0)) for row in rows]
 
 
-async def genres_for_user(db: AsyncSession, user: User) -> GenresResponse:
-    rows = await _jsonb_breakdown(db, user, Game.genres)
+async def genres_for_user(
+    db: AsyncSession, user: User, days: int | None = None
+) -> GenresResponse:
+    rows = await _jsonb_breakdown(db, user, Game.genres, days)
     return GenresResponse(
         items=[GenreEntry(genre=t, total_seconds=s) for t, s in rows]
     )
 
 
-async def themes_for_user(db: AsyncSession, user: User) -> ThemesResponse:
-    rows = await _jsonb_breakdown(db, user, Game.themes)
+async def themes_for_user(
+    db: AsyncSession, user: User, days: int | None = None
+) -> ThemesResponse:
+    rows = await _jsonb_breakdown(db, user, Game.themes, days)
     return ThemesResponse(
         items=[ThemeEntry(theme=t, total_seconds=s) for t, s in rows]
     )
 
 
 async def companies_for_user(
-    db: AsyncSession, user: User, role: CompanyRole, limit: int
+    db: AsyncSession,
+    user: User,
+    role: CompanyRole,
+    limit: int,
+    days: int | None = None,
 ) -> CompaniesResponse:
     """Top companies by total seconds played for the given role.
 
@@ -429,6 +450,7 @@ async def companies_for_user(
             GameSession.user_id == user.discord_id,
             GameSession.status != SessionStatus.ERROR,
             *visible_session(),
+            *_window_filters(days),
             library_visible_filter(),
         )
         .group_by(name_col)
@@ -450,7 +472,7 @@ async def companies_for_user(
 
 
 async def release_years_for_user(
-    db: AsyncSession, user: User
+    db: AsyncSession, user: User, days: int | None = None
 ) -> ReleaseYearsResponse:
     """Total seconds played, bucketed by decade of game release.
 
@@ -483,6 +505,7 @@ async def release_years_for_user(
             GameSession.user_id == user.discord_id,
             GameSession.status != SessionStatus.ERROR,
             *visible_session(),
+            *_window_filters(days),
             Game.first_release_date.is_not(None),
             library_visible_filter(),
         )

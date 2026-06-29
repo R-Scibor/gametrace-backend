@@ -77,6 +77,7 @@ async def get_weekly_trend(
 
 @router.get("/genres", response_model=GenresResponse)
 async def get_genres(
+    days: int | None = Query(default=None, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -85,23 +86,32 @@ async def get_genres(
     Sums can exceed total playtime: a game can carry multiple genres and
     each session counts toward every genre on its game. This is "genre
     exposure," not a partition. Frontend should clarify in tooltips.
+
+    `days` optionally restricts to a rolling window of the last N days;
+    omit for all-time.
     """
-    return await genres_for_user(db, user)
+    return await genres_for_user(db, user, days)
 
 
 @router.get("/themes", response_model=ThemesResponse)
 async def get_themes(
+    days: int | None = Query(default=None, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Time spent with games tagged by each theme. Same caveat as /genres."""
-    return await themes_for_user(db, user)
+    """Time spent with games tagged by each theme. Same caveat as /genres.
+
+    `days` optionally restricts to a rolling window of the last N days;
+    omit for all-time.
+    """
+    return await themes_for_user(db, user, days)
 
 
 @router.get("/companies", response_model=CompaniesResponse)
 async def get_companies(
     role: CompanyRole = Query(..., description="developer or publisher"),
     limit: int = Query(default=10, ge=1, le=50),
+    days: int | None = Query(default=None, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -109,22 +119,25 @@ async def get_companies(
 
     `role` selects which JSONB column is unnested (developers or publishers).
     Same exclusion filter as /genres: ERROR/deleted/is_ignored excluded.
-    Ties broken by name asc for deterministic ordering.
+    Ties broken by name asc for deterministic ordering. `days` optionally
+    restricts to a rolling window of the last N days; omit for all-time.
     """
-    return await companies_for_user(db, user, role, limit)
+    return await companies_for_user(db, user, role, limit, days)
 
 
 @router.get("/release-years", response_model=ReleaseYearsResponse)
 async def get_release_years(
+    days: int | None = Query(default=None, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Total seconds played, bucketed by decade of game release.
 
     Games with first_release_date IS NULL are excluded. Same exclusion
-    filter as other stats endpoints. Ordered by decade asc.
+    filter as other stats endpoints. Ordered by decade asc. `days` optionally
+    restricts to a rolling window of the last N days; omit for all-time.
     """
-    return await release_years_for_user(db, user)
+    return await release_years_for_user(db, user, days)
 
 
 def _total_seconds_for_window(rows: list, window_start: datetime) -> int:
