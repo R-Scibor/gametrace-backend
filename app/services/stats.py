@@ -253,6 +253,13 @@ def _split_session_across_cells(
     Returns (spec_dow, hour, seconds) tuples where spec_dow is Python's
     weekday() (Mon=0..Sun=6) — already the spec's 0=Monday convention. Walking
     hour-by-hour naturally rolls the dow over at midnight (Sun→Mon wraps).
+
+    Known limitation (DST): the anchor (local_start) is DST-correct, but we
+    then advance by physical elapsed seconds over a *naive* clock, so a session
+    that crosses a daylight-saving boundary in the user's zone (~2 days/year)
+    can have its per-cell placement skewed by up to an hour. The total is
+    always exact — every second is allocated. Accepted as negligible for a
+    play-habits heatmap; revisit with tz-aware arithmetic only if it surfaces.
     """
     allocations: list[tuple[int, int, int]] = []
     remaining = duration_seconds
