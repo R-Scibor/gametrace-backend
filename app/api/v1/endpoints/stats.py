@@ -22,6 +22,7 @@ from app.schemas.stats import (
     StatsSummaryResponse,
     StreakResponse,
     ThemesResponse,
+    TrendResponse,
     WeeklyTrendResponse,
 )
 from app.services.library_visibility import library_visible_filter
@@ -34,6 +35,7 @@ from app.services.stats import (
     streak_for_user,
     summary_for_user,
     themes_for_user,
+    trend_for_user,
     weekly_trend_for_user,
 )
 
@@ -73,6 +75,22 @@ async def get_weekly_trend(
     user: User = Depends(get_current_user),
 ):
     return await weekly_trend_for_user(db, user, weeks)
+
+
+@router.get("/trend", response_model=TrendResponse)
+async def get_trend(
+    days: int = Query(default=7, ge=0, le=365, description="0 = all-time"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Playtime trend bucketed across the selected window.
+
+    Generalizes /weekly-trend: bucket size (day/week/month) is derived from
+    `days` (≤30 → day, ≤120 → week, else month; 0/all-time → month). Buckets
+    are contiguous and zero-filled, oldest first. COMPLETED sessions only;
+    each session's seconds are split across the calendar buckets it spans.
+    """
+    return await trend_for_user(db, user, days)
 
 
 @router.get("/genres", response_model=GenresResponse)

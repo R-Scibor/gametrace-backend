@@ -26,6 +26,8 @@ from app.schemas.stats import (
     StreakResponse,
     ThemeEntry,
     ThemesResponse,
+    TrendBucket,
+    TrendResponse,
     WeeklyTrendEntry,
     WeeklyTrendResponse,
 )
@@ -512,6 +514,119 @@ async def weekly_trend_for_user(
         for i in range(weeks)
     ]
     return WeeklyTrendResponse(weeks=entries)
+
+
+def _granularity_for_days(days: int) -> str:
+    """Map the period selector to a bucket size. days == 0 is all-time → month.
+    Otherwise ≤30 → day, ≤120 → week, else month."""
+    if days == 0:
+        return "month"
+    if days <= 30:
+        return "day"
+    if days <= 120:
+        return "week"
+    return "month"
+
+
+def _trend_bucket_start(d: date, granularity: str) -> date:
+    """Calendar bucket a local date falls into: the day itself (day), its
+    Monday (week), or the 1st of its month (month)."""
+    if granularity == "day":
+        return d
+    if granularity == "week":
+        return d - timedelta(days=d.weekday())
+    return d.replace(day=1)
+
+
+def _next_trend_bucket(b: date, granularity: str) -> date:
+    """Start of the bucket immediately after `b` (which must itself be a
+    bucket_start). Used to zero-fill the contiguous range."""
+    if granularity == "day":
+        return b + timedelta(days=1)
+    if granularity == "week":
+        return b + timedelta(days=7)
+    if b.month == 12:
+        return date(b.year + 1, 1, 1)
+    return date(b.year, b.month + 1, 1)
+
+
+async def trend_for_user(db: AsyncSession, user: User, days: int) -> TrendResponse:
+    """
+    Total seconds played bucketed across the selected window, contiguous and
+    zero-filled in chronological order. Generalizes /stats/weekly-trend: the
+    bucket size (day/week/month) is derived from `days` via _granularity_for_days.
+
+    COMPLETED sessions only (matching how total_seconds is computed elsewhere).
+    Each session's seconds are split across every calendar day it spans (see
+    _split_session_across_days), so a session crossing midnight / a month
+    boundary contributes to both buckets rather than landing wholly in its
+    start bucket. days == 0 → all-time (buckets span from the user's earliest
+    session to the current bucket). Excludes soft-deleted and is_ignored games.
+    """
+    try:
+        ZoneInfo(user.timezone)
+        tz_name = user.timezone
+    except (ZoneInfoNotFoundError, ValueError):
+        tz_name = "UTC"
+
+    tz = ZoneInfo(tz_name)
+    granularity = _granularity_for_days(days)
+    today_local = datetime.now(tz).date()
+    last_bucket = _trend_bucket_start(today_local, granularity)
+
+    all_time = days == 0
+    window_filters: list = []
+    if not all_time:
+        window_start_local = (
+            datetime.now(timezone.utc) - timedelta(days=days)
+        ).astimezone(tz).date()
+        first_bucket = _trend_bucket_start(window_start_local, granularity)
+        # Aware local-midnight lower bound — comparable to start_time and
+        # index-friendly. Snaps to the first bucket so a calendar bucket is
+        # never half-populated by the rolling instant.
+        lower_bound = datetime.combine(first_bucket, time.min, tzinfo=tz)
+        window_filters = [GameSession.start_time >= lower_bound]
+
+    local_start = func.timezone(tz_name, GameSession.start_time).label("local_start")
+    duration = func.coalesce(GameSession.duration_seconds, 0).label("duration")
+
+    stmt = (
+        select(local_start, duration)
+        .select_from(GameSession)
+        .join(Game, GameSession.game_id == Game.id)
+        .outerjoin(
+            UserGamePreference,
+            and_(
+                UserGamePreference.game_id == GameSession.game_id,
+                UserGamePreference.user_id == user.discord_id,
+            ),
+        )
+        .where(
+            GameSession.user_id == user.discord_id,
+            GameSession.status == SessionStatus.COMPLETED,
+            *visible_session(),
+            *window_filters,
+            library_visible_filter(),
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+
+    bucket: dict[date, int] = {}
+    for row in rows:
+        for d, secs in _split_session_across_days(row.local_start, int(row.duration or 0)):
+            b = _trend_bucket_start(d, granularity)
+            bucket[b] = bucket.get(b, 0) + secs
+
+    if all_time:
+        first_bucket = min(bucket.keys()) if bucket else last_bucket
+
+    buckets: list[TrendBucket] = []
+    cur = first_bucket
+    while cur <= last_bucket:
+        buckets.append(TrendBucket(bucket_start=cur, total_seconds=bucket.get(cur, 0)))
+        cur = _next_trend_bucket(cur, granularity)
+
+    return TrendResponse(granularity=granularity, buckets=buckets)
 
 
 def _window_filters(days: int | None) -> list:

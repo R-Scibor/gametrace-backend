@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -79,6 +79,16 @@ class WeeklyTrendEntry(BaseModel):
 
 class WeeklyTrendResponse(BaseModel):
     weeks: list[WeeklyTrendEntry]   # always `weeks` entries, oldest first
+
+
+class TrendBucket(BaseModel):
+    bucket_start: date    # day itself / Monday (weekly) / 1st (monthly), user TZ
+    total_seconds: int
+
+
+class TrendResponse(BaseModel):
+    granularity: Literal["day", "week", "month"]
+    buckets: list[TrendBucket]   # contiguous, zero-filled, oldest first
 
 
 class GenreEntry(BaseModel):
