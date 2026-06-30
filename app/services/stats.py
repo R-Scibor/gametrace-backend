@@ -273,6 +273,35 @@ def _split_session_across_cells(
     return allocations
 
 
+def _split_session_across_days(
+    local_start: datetime, duration_seconds: int
+) -> list[tuple[date, int]]:
+    """Distribute a session's seconds across each calendar day its local
+    interval spans.
+
+    local_start is a naive local-time datetime (Postgres `timezone(tz, ts)`).
+    Returns (local_date, seconds) tuples in chronological order. A session
+    crossing midnight (or a month boundary) contributes to both days, so the
+    trend chart never dumps a whole session into its start bucket. Days are
+    later folded into the selected week/month bucket.
+
+    Same DST caveat as _split_session_across_cells: the anchor is DST-correct,
+    but elapsed seconds advance over a naive clock, so a session crossing a
+    daylight-saving boundary can shift a sliver across the midnight boundary.
+    The total is always exact — every second is allocated.
+    """
+    allocations: list[tuple[date, int]] = []
+    remaining = duration_seconds
+    cur = local_start
+    while remaining > 0:
+        secs_to_midnight = 86400 - (cur.hour * 3600 + cur.minute * 60 + cur.second)
+        chunk = min(remaining, secs_to_midnight)
+        allocations.append((cur.date(), chunk))
+        remaining -= chunk
+        cur += timedelta(seconds=chunk)
+    return allocations
+
+
 async def heatmap_for_user(
     db: AsyncSession, user: User, days: int
 ) -> HeatmapResponse:

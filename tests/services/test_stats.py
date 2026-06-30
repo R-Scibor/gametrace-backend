@@ -4,10 +4,14 @@ The HTTP handler tests in tests/api/test_stats_summary.py already cover the
 endpoint contract. These tests exist to lock the helper's behaviour in place
 so it can be reused by the weekly-report Celery task without drift.
 """
-from datetime import datetime
+from datetime import date, datetime
 
 from app.models.session import SessionStatus
-from app.services.stats import _split_session_across_cells, summary_for_user
+from app.services.stats import (
+    _split_session_across_cells,
+    _split_session_across_days,
+    summary_for_user,
+)
 from tests.factories import dt, make_game, make_pref, make_session
 
 
@@ -40,6 +44,42 @@ def test_split_sunday_to_monday_wraps_dow():
     start = datetime(2026, 4, 19, 23, 30)  # Sunday → dow=6
     result = _split_session_across_cells(start, 3600)
     assert result == [(6, 23, 1800), (0, 0, 1800)]  # wraps Sun→Mon
+
+
+# ── _split_session_across_days (pure) ─────────────────────────────────────────
+
+def test_split_days_within_single_day():
+    start = datetime(2026, 6, 22, 14, 10)
+    assert _split_session_across_days(start, 600) == [(date(2026, 6, 22), 600)]
+
+
+def test_split_days_across_midnight():
+    start = datetime(2026, 6, 22, 23, 0)  # 1h to midnight, then 1h on the 23rd
+    assert _split_session_across_days(start, 2 * 3600) == [
+        (date(2026, 6, 22), 3600),
+        (date(2026, 6, 23), 3600),
+    ]
+
+
+def test_split_days_spans_three_days():
+    start = datetime(2026, 6, 22, 12, 0)  # 12h left day 1, 24h day 2, 12h day 3
+    assert _split_session_across_days(start, 48 * 3600) == [
+        (date(2026, 6, 22), 12 * 3600),
+        (date(2026, 6, 23), 24 * 3600),
+        (date(2026, 6, 24), 12 * 3600),
+    ]
+
+
+def test_split_days_across_month_boundary():
+    start = datetime(2026, 6, 30, 23, 0)  # crosses into July
+    assert _split_session_across_days(start, 2 * 3600) == [
+        (date(2026, 6, 30), 3600),
+        (date(2026, 7, 1), 3600),
+    ]
+
+
+def test_split_days_zero_duration_is_empty():
+    assert _split_session_across_days(datetime(2026, 6, 22, 14, 0), 0) == []
 
 
 async def test_summary_for_user_excludes_ignored_game(db, user):
