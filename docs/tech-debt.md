@@ -161,6 +161,39 @@ Two ENRICHED rows for the same game:
 
 ---
 
+## Lords of the Fallen — identical titles for 2014 vs 2023 releases (2026-06-30)
+
+### Summary
+
+Bot presence for "Lords of the Fallen" auto-created game `id=63` (ENRICHED). Enrichment chose IGDB 194987 (2017 Deck13 original, cover `co5rl5`, release 2017-02-06, devs "Deck13 Interactive" + "Octopus Games") because the popular 2023 Hexworks reboot (IGDB 21593) has the *exact same canonical name*.
+
+Both candidates scored **1.0** via `_confidence` (and the number guard does not apply — no digits). IGDB `/games` search returned the 2017 entry first in its result list, so `_igdb_search` picked it. Users saw the old game's cover art in the library/dashboard.
+
+**Interim remediation (2026-06-30):** Fetched correct metadata with `_igdb_fetch_by_id(21593)`, inserted a fresh correct `Game` row (new `id=77` with `external_api_id="21593"`, cover `co72u9`, `first_release_date=2023-10-13`, developers `["HEXWORKS"]`, publishers `["CI Games"]`, proper genres/themes). Re-pointed the 6 sessions and the existing `game_aliases` row to it, then deleted the wrong `id=63`.
+
+### Symptoms / user impact
+
+- Wrong (old) cover appeared for what was actually the 2023 game.
+- Metadata (release date, developers) was incorrect in stats and game details.
+- Because the row was already `ENRICHED`, it never landed in Unrecognized; no user-visible signal that enrichment had chosen the wrong IGDB entry.
+- Simply re-queuing `enrich_game` on the old row produces the *same* wrong result (search order + perfect score tie is stable in this case).
+
+### Root causes
+
+1. **Title collision across releases.** "Lords of the Fallen" legitimately refers to two (actually three) different IGDB records. The pipeline has no tie-breaker when multiple candidates reach the maximum score (1.0 here).
+
+2. **Search result ordering decides the winner.** `_igdb_search` walks the returned list and keeps the first one whose score improves `best_score`. API order is not guaranteed to prefer recent / mainline releases.
+
+3. **No year / platform signal used at selection time.** The number guard only penalizes *digit mismatch*; identical names with no numbers always tie.
+
+4. **IGDB path does not populate `external_api_id`.** Only the Steam fallback sets it. Pure-IGDB matches cannot be stably deduplicated later by ID.
+
+Current mitigation for end users: call `POST /games/match` (returns `IGDBCandidateOut` list with `year` + distinct covers), choose the correct `igdb_id`, `POST /games {igdb_id: ...}`, then `POST /games/{wrong}/merge/{correct}` if a bad stub already exists.
+
+**Code paths:** `app/services/game_matching.py` (`_igdb_search`, `_igdb_search_candidates`, `_confidence`); `app/tasks/enrichment.py` (`_run_enrichment`); `app/api/v1/endpoints/games.py` (match + create + merge).
+
+---
+
 ## Enrichment v2 — token subset + LLM adjudicator (design sketch)
 
 **Status:** Design only — not implemented.
@@ -174,6 +207,7 @@ Three recurring failure modes share the same shape: **retrieval succeeds, determ
 | Heroes III HotA | `Heroes III ∙ Horn of the Abyss` | `Heroes of Might and Magic III: Horn of the Abyss` | 0.75 | short ⊆ long ✓ | correct |
 | Skyrim SE (dupes) | `Skyrim Special Edition` | `The Elder Scrolls V: Skyrim - Special Edition` | 0.75 | short ⊆ long ✓ | both ENRICHED |
 | Kingdom Hearts | `KINGDOM HEARTS -HD 1.5+2.5 ReMIX-` | `Kingdom Hearts HD 1.5 + 2.5 Remix` | 1.0 | neither ⊆ | search recall broken |
+| Lords of the Fallen | `Lords of the Fallen` | two distinct IGDB games both named "Lords of the Fallen" (2017 vs 2023) | 1.0 | n/a | **wrong** IGDB hit (first in search order) |
 
 Token subset fixes Heroes and Skyrim scoring; Kingdom Hearts needs **alias linking** (and `_sanitize` version-token fix for IGDB search). LLM covers all three when rules are insufficient, and is the natural place to **propose aliases** and **link to existing DB rows** before inserting a new stub.
 

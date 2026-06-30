@@ -47,6 +47,7 @@ Words stay space-separated. The whitespace strip needed for substring scoring (e
 - **Parenthesis content is dropped entirely.** `"Dark Souls (Remastered)"` loses the word `"Remastered"`. The score usually still clears the threshold via WRatio partial matching, but information is gone.
 - **Standalone `i` and `v` are treated as roman numerals.** A game title containing these as words (e.g. `"I Am Alive"`) gets digits injected (`"1 am alive"`). Same-game comparisons are unaffected since both sides transform identically, but cross-game comparisons involving such titles may produce unexpected number sets.
 - **Non-ASCII characters are stripped.** `"Pokémon"` → `"pokmon"`. Because the same transformation applies to both sides, the match still works for the same title; it only fails if the two sides use different encodings of the same accented character (rare in practice).
+- **Identical titles across distinct releases (reboots / remakes).** When IGDB contains multiple games with the exact same name (e.g. the 2014/2017 "Lords of the Fallen" vs the 2023 reboot), they all score 1.0. The first result in the IGDB search response wins; there is no year, platform, or recency tie-breaker. This attaches the wrong cover + metadata. See the Lords of the Fallen incident in [tech-debt.md](tech-debt.md). Workaround: use `POST /api/v1/games/match` (returns candidates with `year`) + `POST /games {igdb_id}` + merge if needed.
 
 ## Gotcha — search-query vs scoring sanitization
 
