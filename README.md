@@ -54,7 +54,7 @@ All endpoints are prefixed `/api/v1/`. Auth is `Authorization: Bearer <token>`. 
 
 Full endpoint reference: **[docs/api.md](docs/api.md)**. Live schemas: `http://localhost:8010/docs`.
 
-Dashboard polling uses `GET /api/v1/stats/dashboard` (tiles + `pending_errors`); the analytical breakdown is `GET /api/v1/stats/summary?days=N`. Additional analytics endpoints (`heatmap`, `streak`, `weekly-trend`, `genres`, `themes`, `companies`, `release-years`) are documented in `docs/api.md`. Bot liveness: `GET /api/v1/health`.
+Dashboard polling uses `GET /api/v1/stats/dashboard` (tiles + `pending_errors`); the analytical breakdown is `GET /api/v1/stats/summary?days=N`. Additional analytics endpoints (`heatmap`, `streak`, `trend`, `genres`, `themes`, `companies`, `release-years`) are documented in `docs/api.md`. Bot liveness: `GET /api/v1/health`.
 
 ## Session state machine
 

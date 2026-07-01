@@ -72,15 +72,6 @@ class StreakResponse(BaseModel):
     longest_streak: int
 
 
-class WeeklyTrendEntry(BaseModel):
-    week_start: date          # Monday in user TZ
-    total_seconds: int
-
-
-class WeeklyTrendResponse(BaseModel):
-    weeks: list[WeeklyTrendEntry]   # always `weeks` entries, oldest first
-
-
 class TrendBucket(BaseModel):
     bucket_start: date    # day itself / Monday (weekly) / 1st (monthly), user TZ
     total_seconds: int
