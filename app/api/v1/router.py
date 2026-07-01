@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     notifications,
     preferences,
     profile,
+    reports,
     sessions,
     stats,
     voice,
@@ -27,3 +28,4 @@ api_router.include_router(profile.router, prefix="/profile", tags=["profile"])
 api_router.include_router(
     notifications.router, prefix="/notifications", tags=["notifications"]
 )
+api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
