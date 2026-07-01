@@ -2,7 +2,7 @@
 
 Source of truth: SQLAlchemy models in `app/models/` and Alembic migrations in `alembic/versions/`.
 
-Seven tables total. All timestamps are stored as `TIMESTAMP WITH TIME ZONE` in UTC. Soft-delete is via `deleted_at` columns where applicable.
+Eight tables total. All timestamps are stored as `TIMESTAMP WITH TIME ZONE` in UTC. Soft-delete is via `deleted_at` columns where applicable.
 
 ## Tables
 
@@ -138,12 +138,32 @@ Per-user metadata layered on top of the global `games` catalog. Not all users ha
 
 Unique constraint on `(user_id, game_id)`. The merge endpoint (`POST /games/{id}/merge/{target_id}`) reassigns these rows transactionally, dropping conflicts where the target already has a preference for the same user.
 
+### `reports`
+
+In-app user feedback submitted via `POST /reports`. Store-only — no read/list endpoint yet.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `INTEGER` | Primary key |
+| `user_id` | `VARCHAR(32)` | FK → `users.discord_id`, `ON DELETE CASCADE`, indexed |
+| `message` | `TEXT` | Free-text feedback, trimmed server-side. `NOT NULL`. |
+| `context` | `JSONB` | Diagnostic blob captured client-side — `screen`, `platform`, `osVersion`, `appVersion` (camelCase keys). `NOT NULL`. |
+| `created_at` | `TIMESTAMPTZ` | Default `NOW()`, indexed. |
+
+**Indexes:**
+
+- `ix_reports_user_id` — btree on `user_id`. Migration `0010`.
+- `ix_reports_created_at` — btree on `created_at`. Migration `0010`.
+
+`ON DELETE CASCADE` on `user_id` — deleting a user removes their reports along with them.
+
 ## Relationships at a glance
 
 ```
 users ─┬── user_auth_tokens   (1:N, cascade)
        ├── user_devices       (1:N, cascade)
-       └── game_sessions      (1:N, cascade)
+       ├── game_sessions      (1:N, cascade)
+       └── reports            (1:N, cascade)
 
 games ─┬── game_aliases       (1:N, cascade)
        ├── game_sessions      (1:N, no cascade)
@@ -163,6 +183,7 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 | `0005_game_sessions_deleted_at_partial_index.py` | Partial index for the hard-delete sweeper |
 | `0006_drop_daily_user_stats.py` | Removed an earlier rollup table — sessions are kept raw indefinitely. Range-partitioning by month is on the [roadmap](roadmap.md#scale) for when the table grows past ~10M rows. |
 | `0007_game_metadata.py` | Adds `first_release_date` + `genres`/`themes`/`developers`/`publishers` JSONB columns to `games` with GIN indexes. |
+| `0010_reports_table.py` | Adds the `reports` table (`user_id` FK cascade, `message`, `context` JSONB, `created_at`) with `ix_reports_user_id` and `ix_reports_created_at` indexes. |
 
 ## Scheduled tasks (Celery Beat)
 
