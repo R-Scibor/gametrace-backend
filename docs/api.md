@@ -6,19 +6,19 @@ For full request/response schemas, hit the FastAPI interactive docs at `http://l
 
 ## HTTP status reference
 
-Grouped by code — see endpoint sections below for path-specific detail. Authed routes return `401` when the bearer token is missing, unknown, or past `expires_at` (expired tokens are deleted on first use).
+Grouped by code — see endpoint sections below for path-specific detail. Authed routes return `401` when the bearer token is unknown or past `expires_at` (expired tokens are deleted on first use), and `403` when the `Authorization` header is absent entirely (FastAPI's `HTTPBearer` default — see `POST /reports`).
 
 | Code | When |
 |---|---|
 | `200` | Successful read or update (`GET`, `PATCH`, `PUT`, `POST /auth/login`, `POST /sessions/{id}/restore`). `GET /games/resolve` also returns `200` with body `null` on miss. `POST /games` returns `200` when the game already exists (deduplication by `igdb_id`). |
-| `201` | `POST /sessions` — manual session created. `POST /games` — new game row created (either mode). |
+| `201` | `POST /sessions` — manual session created. `POST /games` — new game row created (either mode). `POST /reports` — feedback report stored. |
 | `204` | Successful delete with no body (`POST /auth/logout`, `DELETE /sessions/{id}`, `DELETE /user/preferences/{game_id}`, `DELETE /notifications/register-token`, `POST /games/{id}/merge/{target_id}`). |
 | `400` | Client input rejected — e.g. self-merge (`POST /games/{id}/merge/{target_id}`), empty audio upload (`POST /voice/transcribe`), `redirect_uri` not allowlisted (`POST /auth/discord`). |
 | `401` | Invalid or expired bearer token (`get_current_user`), or unknown token on `POST /auth/logout`, or bad/expired Discord code (`POST /auth/discord`). |
-| `403` | Bot-managed row — `PATCH` or soft `DELETE` on an `ONGOING` session. Also custom cover upload (`PUT /games/{id}/cover`), which is disabled pending admin controls. |
+| `403` | Bot-managed row — `PATCH` or soft `DELETE` on an `ONGOING` session. Also custom cover upload (`PUT /games/{id}/cover`), which is disabled pending admin controls. Also missing bearer token on any authed route (e.g. `POST /reports`) — `HTTPBearer` raises `403` when the `Authorization` header itself is absent, distinct from `401` for an invalid/expired token. |
 | `404` | Resource not found or not owned by the caller — user not registered (`POST /auth/login`), session/game missing, game missing on preference upsert. Soft-deleting an already-trashed session also returns `404` (same as not found). |
 | `409` | Session time overlap — `POST /sessions`, `PATCH /sessions/{id}`, `POST /sessions/{id}/restore` (body: `{detail: {detail, conflicting_session}}`). |
-| `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone on `PUT /profile/settings` (Pydantic). |
+| `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone on `PUT /profile/settings` (Pydantic). Blank/whitespace-only or over-4000-char `message`, or a missing `context` field, on `POST /reports` (Pydantic). |
 | `500` | Unhandled server error (global handler in `app/main.py`). |
 | `502` | Upstream voice failure — OpenAI Whisper or Vertex Gemini error (`POST /voice/transcribe`). Discord OAuth upstream failure (`POST /auth/discord`). IGDB upstream error — non-rate-limit failure (`POST /games/match`). |
 | `503` | Voice pipeline not configured — `OPENAI_API_KEY` or `GCP_PROJECT` unset (`POST /voice/transcribe`). IGDB rate-limited or auth expired (`POST /games/match`, `POST /games` with `igdb_id`). |
@@ -251,6 +251,12 @@ Gemini uses `response_mime_type="application/json"` + `response_schema` — no m
 |---|---|---|
 | `POST` | `/api/v1/notifications/register-token` | Upsert an FCM device token for the current user. `ON CONFLICT (fcm_token)` reassigns the token if the same device logs in as a different user. |
 | `DELETE` | `/api/v1/notifications/register-token` | Unregister an FCM token. Idempotent — silent OK if the token isn't on file. |
+
+## Reports
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/reports` | Store an in-app feedback report. Body: `{"message": "<string, 1–4000 chars>", "context": {"screen": "<string>", "platform": "<string>", "osVersion": "<string\|int>", "appVersion": "<string>"}}` — `message` is trimmed server-side and rejected (`422`) if blank after trimming or over 4000 chars; `context` is rejected (`422`) if any field is missing. Returns `201` `{"id": <int>, "created_at": <datetime>}`. Store-only — no list/read endpoint exists yet. |
 
 ## Health
 
