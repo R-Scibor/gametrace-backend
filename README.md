@@ -120,7 +120,7 @@ Retention defaults to 7 days (`BACKUP_RETENTION_DAYS`). Optional mirror: set `BA
 
 Two optional integrations, both off by default:
 
-- **Sentry** — set `SENTRY_DSN` in `.env` and api / bot / worker / beat will start reporting unhandled exceptions, tagged with `component={api,bot,celery}`. Bearer tokens in `Authorization` headers and `?token=` query strings are scrubbed before send. Empty DSN keeps the SDK uninitialised — zero overhead.
+- **Sentry** — set `SENTRY_DSN` in `.env` and api / bot / worker / beat will start reporting unhandled exceptions, tagged with `component={api,bot,celery}`. Bearer tokens in `Authorization` headers and `?token=` query strings are scrubbed before send. Empty DSN keeps the SDK uninitialised — zero overhead. Errors-only by default (`traces_sample_rate=0.0`); this can be expanded to **Performance tracing** — raise the rate (e.g. `0.1`, or a `traces_sampler` scoped to `/stats/*`) to also record request latency/throughput transactions, which is the trigger data for the stats-caching work in `docs/roadmap.md`.
 - **Flower** — Celery queue monitor on port 5555 inside the docker network. Set `FLOWER_BASIC_AUTH=user:pass` in `.env` to require auth. Flower has no read-only mode, so do not expose it publicly without auth — route through Nginx Proxy Manager and gate on the LAN if you want a browser view.
 - **Health** — `GET /health` for container liveness; `GET /api/v1/health` for version metadata and bot online/offline status (Redis heartbeat). Optional build args `GIT_SHA`, `BUILD_TIME`, `APP_VERSION` in `docker-compose.yml` populate version fields.
 

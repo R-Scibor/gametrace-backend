@@ -175,10 +175,12 @@ services:
       CELERY_BROKER_URL: ${REDIS_URL:-redis://redis:6379/0}
       GAMETRACE_FLOWER_AUTH: ${FLOWER_BASIC_AUTH:-}
       FLOWER_PORT: "5555"
-    # Uncomment for direct local-dev access. In a homelab, prefer routing
-    # through Nginx Proxy Manager so Flower stays off the public port.
-    # ports:
-    #   - "5555:5555"
+    # Published so Nginx Proxy Manager (separate stack, no shared network) can
+    # reach it at <host>:5555 for the flower.home proxy host. Basic-auth gated
+    # via GAMETRACE_FLOWER_AUTH — never expose without it (Flower has no
+    # read-only mode). Keep off any public/WAN interface; LAN only.
+    ports:
+      - "5555:5555"
     depends_on:
       redis:
         condition: service_started
