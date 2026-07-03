@@ -116,6 +116,12 @@ async def test_invalid_release_decade_rejected(authed_client, db, user):
     assert resp.status_code == 422
 
 
+async def test_out_of_range_release_decade_rejected(authed_client, db, user):
+    # Matches the regex but year 0 / 10000 are outside date()'s representable range.
+    assert (await authed_client.get("/api/v1/games?release_decade=0000s")).status_code == 422
+    assert (await authed_client.get("/api/v1/games?release_decade=9990s")).status_code == 422
+
+
 # ── GET /games — sort + order ────────────────────────────────────────────────
 
 async def test_sort_by_playtime_desc(authed_client, db, user):

@@ -115,6 +115,8 @@ async def list_games(
         base_filters.append(Game.publishers.contains([publisher]))
     if release_decade:
         start_year = int(release_decade[:-1])
+        if not (1 <= start_year <= 9989):  # keep date() bounds representable
+            raise HTTPException(status_code=422, detail="release_decade out of range")
         base_filters.append(Game.first_release_date >= date(start_year, 1, 1))
         base_filters.append(Game.first_release_date < date(start_year + 10, 1, 1))
 
