@@ -59,7 +59,7 @@ Game catalog. Created as stubs by the bot, enriched asynchronously by the Celery
 | `primary_name` | `VARCHAR(256)` | The canonical name. For new stubs this is just the Discord process name; enrichment overwrites it with the IGDB/Steam canonical name. |
 | `external_api_id` | `VARCHAR(64)` | Optional — IGDB game ID or Steam AppID, prefixed by source. |
 | `cover_image_url` | `VARCHAR(512)` | Optional. |
-| `cover_source` | `ENUM('EXTERNAL', 'CUSTOM')` | If `CUSTOM`, the enrichment worker will not overwrite `cover_image_url`. Set by `PUT /games/{id}/cover`. |
+| `cover_source` | `ENUM('EXTERNAL', 'CUSTOM')` | If `CUSTOM`, the enrichment worker will not overwrite `cover_image_url`. Set by `PUT /api/v1/admin/games/{id}/cover` (admin-only). |
 | `enrichment_status` | `ENUM('PENDING', 'ENRICHED', 'NEEDS_REVIEW')` | `PENDING` on insert; `ENRICHED` when match confidence ≥ 85%; `NEEDS_REVIEW` when no source crossed the threshold. |
 | `first_release_date` | `DATE` | Optional. IGDB `first_release_date` (Unix seconds → DATE). NULL when unknown or when matched only via Steam fallback (Steam doesn't expose this). |
 | `genres` | `JSONB` | Array of names from IGDB, e.g. `["RPG", "Adventure"]`. Defaults to `'[]'`. GIN-indexed. |
@@ -137,7 +137,7 @@ Per-user metadata layered on top of the global `games` catalog. Not all users ha
 | `is_accepted` | `BOOLEAN` | Nullable. Only meaningful for `NEEDS_REVIEW` games: `false` = Unrecognized inbox (hidden from main library/stats), `true` = user accepted the stub. `NULL` when not applicable (`ENRICHED`/`PENDING`). Auto-set to `false` when enrichment lands on `NEEDS_REVIEW`; cleared to `NULL` when the game later becomes `ENRICHED`. |
 | `custom_tag` | `VARCHAR(64)` | Optional user-supplied label. |
 
-Unique constraint on `(user_id, game_id)`. The merge endpoint (`POST /games/{id}/merge/{target_id}`) reassigns these rows transactionally, dropping conflicts where the target already has a preference for the same user.
+Unique constraint on `(user_id, game_id)`. The merge endpoint (`POST /api/v1/admin/games/{id}/merge/{target_id}`, admin-only) reassigns these rows transactionally, dropping conflicts where the target already has a preference for the same user.
 
 ### `reports`
 

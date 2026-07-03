@@ -63,7 +63,7 @@ User attestation that IGDB has no correct match (obscure indie, typo they'll fix
 - no `external_api_id`
 - optional `game_aliases` row for future resolve
 
-Same semantics as a bot stub that failed enrichment, but chosen knowingly. `POST /games/{id}/merge/{target_id}` still handles duplicates.
+Same semantics as a bot stub that failed enrichment, but chosen knowingly. `POST /api/v1/admin/games/{id}/merge/{target_id}` (admin-only) still handles duplicates.
 
 ## Implemented API surface
 

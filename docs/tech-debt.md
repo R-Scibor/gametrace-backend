@@ -78,7 +78,7 @@ For the canonical name `Kingdom Hearts HD 1.5 + 2.5 ReMIX`, sanitization yields 
 
 #### 3. Bot `get_or_create_game` matches aliases by exact string
 
-When Discord changes the rich-presence format (spacing, casing, `-HD` prefix, glued `1.5+2.5`), the bot treats it as a new game and inserts a fresh stub + alias. No fuzzy dedup at write time. Merges are manual (`POST /games/{id}/merge/{target_id}`) or ops SQL.
+When Discord changes the rich-presence format (spacing, casing, `-HD` prefix, glued `1.5+2.5`), the bot treats it as a new game and inserts a fresh stub + alias. No fuzzy dedup at write time. Merges are manual (`POST /api/v1/admin/games/{id}/merge/{target_id}`, admin-only) or ops SQL.
 
 **Code:** `app/bot/session_manager.py` → `get_or_create_game`.
 
@@ -188,7 +188,7 @@ Both candidates scored **1.0** via `_confidence` (and the number guard does not 
 
 4. **IGDB path does not populate `external_api_id`.** Only the Steam fallback sets it. Pure-IGDB matches cannot be stably deduplicated later by ID.
 
-Current mitigation for end users: call `POST /games/match` (returns `IGDBCandidateOut` list with `year` + distinct covers), choose the correct `igdb_id`, `POST /games {igdb_id: ...}`, then `POST /games/{wrong}/merge/{correct}` if a bad stub already exists.
+Current mitigation for end users: call `POST /games/match` (returns `IGDBCandidateOut` list with `year` + distinct covers), choose the correct `igdb_id`, `POST /games {igdb_id: ...}`, then `POST /api/v1/admin/games/{wrong}/merge/{correct}` (admin-only) if a bad stub already exists.
 
 **Code paths:** `app/services/game_matching.py` (`_igdb_search`, `_igdb_search_candidates`, `_confidence`); `app/tasks/enrichment.py` (`_run_enrichment`); `app/api/v1/endpoints/games.py` (match + create + merge).
 
