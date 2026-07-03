@@ -140,7 +140,7 @@ UI v1 can be minimal — table + action buttons. Overlaps planned mobile [manual
 
 ### P2 — Observability + user feedback
 
-**Server errors — use Sentry, don't rebuild it.** `init_sentry()` is wired ([Ops / quality](#verify-sentry--flower-end-to-end)); verify DSN end-to-end first. Admin panel links or embeds Sentry issues — not a custom `error_events` table fed from every 4xx (409 overlap, 404, 403 ONGOING are normal user flow).
+**Server errors — use Sentry, don't rebuild it.** `init_sentry()` is wired and confirmed reporting against the live backend. Admin panel links or embeds Sentry issues — not a custom `error_events` table fed from every 4xx (409 overlap, 404, 403 ONGOING are normal user flow).
 
 Optional thin feed: log **5xx + selected upstream failures** (502 voice, 502 Discord OAuth) with `request_id`, route, `user_id` — append-only table or Redis stream for a simple admin "Recent failures" tab. Complements Sentry; does not replace it.
 
@@ -180,7 +180,7 @@ The dashboard is the one polled stats endpoint, so it's the first to benefit fro
 
 TTL-only to start, no write-invalidation: bounded staleness on a polling tile is invisible, and it sidesteps the fact that the bot writes sessions straight to Postgres (not through the API), so there's no single place to bust the key today. Add write-invalidation later, once the bot↔API link exists for other features and can carry an invalidation signal — not before, to avoid coupling the cache to an undefined contract. Known ≤TTL quirk: a cache entry straddling the user's local midnight shows the previous "today" total until it expires — a once-a-day, sub-minute blip, acceptable at this TTL.
 
-**How we'll know it's time:** the trigger is *throughput*, not data volume. Enable Sentry Performance tracing (see Ops / quality) and watch the `/stats/dashboard` transaction's requests/min; when concurrent polling load climbs, build this. (Needs Sentry actually running first.)
+**How we'll know it's time:** the trigger is *throughput*, not data volume. Watch the `/stats/dashboard` transaction's requests/min in Sentry Performance; when concurrent polling load climbs, build this.
 
 ### Cache the fixed-tier stats windows (long-term)
 The analytical stats screen (`/stats/summary` etc.) is fetched on app-open and manual refresh, not polled, so it carries far less load than the dashboard — caching is insurance, not urgent. When it lands, cache only the **fixed window tier** (7/30/90d), keyed `stats:summary:{discord_id}:{days}`; those few shared buckets give a usable hit rate.
@@ -195,12 +195,6 @@ The dashboard is poll-based (the frontend re-fetches `/stats/dashboard` on a tim
 Deliberately the cheap version of event-driven: reuses the existing FCM stack, no persistent connections (WebSocket/SSE would mean a bot→Redis pub/sub bridge plus connection lifecycle — over-engineering for a tile whose live element already ticks locally). FCM data delivery is best-effort, so a foreground reconcile fetch stays regardless. Long-term and explicitly *after* response caching lands — caching turns each poll into a cheap Redis read, which already removes most of the motivation. Only worth building if dashboard freshness becomes a feature rather than a nicety.
 
 ## Ops / quality
-
-### Verify Sentry + Flower end-to-end
-Both were wired but never confirmed working against a live backend. They're gated on empty env defaults, so absent config they silently no-op rather than error — which is exactly how "added but untested" hides.
-
-- **Sentry** — `init_sentry()` no-ops unless `SENTRY_DSN` is set (`example.env` ships it blank). Verify: set a real DSN, trigger a deliberate exception, confirm it lands in the Sentry project. Separately, `traces_sample_rate` is currently `0.0` (errors only) — Performance tracing is off, so there's no endpoint throughput/latency data yet. Raise it (e.g. `0.1`, or a `traces_sampler` scoped to `/stats/*`) and confirm transactions appear. This is the prerequisite for the "how we'll know it's time" triggers on the caching items above.
-- **Flower** — runs at `:5555` (internal), reads `GAMETRACE_FLOWER_AUTH` (renamed from `FLOWER_BASIC_AUTH` so the image doesn't auto-pick an empty value into a broken 401 mode — see `docker-compose.yml`). Verify: set `FLOWER_BASIC_AUTH`, open the UI, confirm it authenticates and shows live workers/tasks. No read-only mode, so keep it internal-only.
 
 ### Bot flicker handling — shipped
 
