@@ -4,6 +4,7 @@ Patch target for Redis: app.api.v1.endpoints.auth.get_redis
 """
 import fakeredis.aioredis
 import pytest
+import redis.exceptions
 
 from app.core.config import settings
 from app.services import link_codes
@@ -43,6 +44,19 @@ async def test_link_happy_path_token_works(client, db, user, redis_client):
         headers={"Authorization": f"Bearer {data['token']}"},
     )
     assert protected.status_code == 200
+
+
+async def test_spaced_code_accepted(client, db, user, redis_client, monkeypatch):
+    import secrets
+
+    monkeypatch.setattr(secrets, "randbelow", lambda n: 231_996)
+    code = await link_codes.issue_code(redis_client, user.discord_id)
+    assert code == "231996"
+
+    resp = await client.post("/api/v1/auth/link", json={"code": "231 996"})
+
+    assert resp.status_code == 200
+    assert resp.json()["discord_id"] == user.discord_id
 
 
 async def test_wrong_code_returns_401(client, user, redis_client):
@@ -130,13 +144,22 @@ async def test_empty_secret_returns_503(client, user, redis_client, monkeypatch)
     assert resp.status_code == 503
 
 
-async def test_redis_unavailable_returns_503(client, user, redis_client, monkeypatch):
+@pytest.mark.parametrize(
+    "redis_fault",
+    [
+        lambda: redis.exceptions.ConnectionError("redis unavailable"),
+        lambda: ConnectionError("socket down"),
+    ],
+)
+async def test_redis_unavailable_returns_503(
+    client, user, redis_client, monkeypatch, redis_fault
+):
     code = await link_codes.issue_code(redis_client, user.discord_id)
 
-    def _raise_connection_error():
-        raise ConnectionError("redis unavailable")
+    def _raise():
+        raise redis_fault()
 
-    monkeypatch.setattr("app.api.v1.endpoints.auth.get_redis", _raise_connection_error)
+    monkeypatch.setattr("app.api.v1.endpoints.auth.get_redis", _raise)
 
     resp = await client.post("/api/v1/auth/link", json={"code": code})
 

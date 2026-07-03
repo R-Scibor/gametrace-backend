@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import httpx
+import redis.exceptions
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
@@ -90,7 +91,7 @@ async def link_login(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Login link codes are not configured",
         )
-    except (ConnectionError, OSError):
+    except (redis.exceptions.RedisError, ConnectionError, OSError):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Service temporarily unavailable",
@@ -99,7 +100,7 @@ async def link_login(
     if discord_id is None:
         try:
             await link_codes.record_failure(r, ip)
-        except (ConnectionError, OSError):
+        except (redis.exceptions.RedisError, ConnectionError, OSError):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Service temporarily unavailable",

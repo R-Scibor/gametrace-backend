@@ -22,7 +22,7 @@ class LinkCodeRequest(BaseModel):
     @field_validator("code")
     @classmethod
     def _code_must_be_six_digits(cls, v: str) -> str:
-        v = v.strip()
+        v = "".join(v.split())
         if len(v) != 6 or not v.isdigit():
             raise ValueError("code must be exactly 6 digits")
         return v
