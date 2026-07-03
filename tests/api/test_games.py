@@ -1,7 +1,6 @@
-import base64
 from datetime import date, datetime, timezone
 
-from app.models.game import CoverSource, EnrichmentStatus
+from app.models.game import EnrichmentStatus
 from app.models.session import GameSession, SessionStatus
 
 from tests.factories import (
@@ -531,29 +530,8 @@ async def test_excludes_soft_deleted_sessions(authed_client, db, user):
     assert deleted.id not in ids
 
 
-# ── PUT /games/{id}/cover (disabled) ──────────────────────────────────────────
-
-async def test_cover_upload_disabled(authed_client, db, user):
-    game = await make_game(db)
-    img_b64 = base64.b64encode(b"fake_image_data").decode()
-
-    resp = await authed_client.put(
-        f"/api/v1/games/{game.id}/cover",
-        json={"image_base64": img_b64, "extension": "jpg"},
-    )
-
-    assert resp.status_code == 403
-    await db.refresh(game)
-    assert game.cover_source == CoverSource.EXTERNAL
-    assert game.cover_image_url is None
-
-
-async def test_cover_upload_disabled_unknown_game(authed_client, db, user):
-    img_b64 = base64.b64encode(b"data").decode()
-
-    resp = await authed_client.put(
-        "/api/v1/games/99999/cover",
-        json={"image_base64": img_b64, "extension": "jpg"},
-    )
-
-    assert resp.status_code == 403
+# ── PUT /games/{id}/cover (removed — see tests/api/test_admin.py) ─────────────
+#
+# The public cover-upload route is gone; uploads now go through the admin-only
+# PUT /api/v1/admin/games/{id}/cover (test_cover_upload_* in test_admin.py).
+# test_old_public_cover_url_gone in test_admin.py asserts this old URL is 404.

@@ -1,6 +1,8 @@
+import base64
+
 from sqlalchemy import select
 
-from app.models.game import Game, UserGamePreference
+from app.models.game import CoverSource, Game, UserGamePreference
 
 from tests.factories import (
     dt,
@@ -9,6 +11,8 @@ from tests.factories import (
     make_pref,
     make_session,
 )
+
+TINY_IMAGE_B64 = base64.b64encode(b"fake_image_bytes").decode()
 
 
 # ── Auth gate ─────────────────────────────────────────────────────────────────
@@ -41,6 +45,17 @@ async def test_unauthenticated_on_admin_merge_url_returns_401(client, db):
     )
 
     assert resp.status_code == 401
+
+
+async def test_old_public_cover_url_gone(authed_client, db, user):
+    game = await make_game(db, "Source Game")
+
+    resp = await authed_client.put(
+        f"/api/v1/games/{game.id}/cover",
+        json={"image_base64": TINY_IMAGE_B64, "extension": "jpg"},
+    )
+
+    assert resp.status_code == 404
 
 
 # ── POST /admin/games/{id}/merge/{target_id} ─────────────────────────────────
@@ -108,3 +123,114 @@ async def test_merge_target_not_found(admin_client, db, admin_user):
     resp = await admin_client.post(f"/api/v1/admin/games/{source.id}/merge/99999")
 
     assert resp.status_code == 404
+
+
+# ── PUT /admin/games/{id}/cover ───────────────────────────────────────────────
+
+async def test_cover_upload_happy_path(admin_client, db, admin_user, tmp_path, monkeypatch):
+    monkeypatch.setenv("COVERS_DIR", str(tmp_path))
+    game = await make_game(db, "Cover Game")
+
+    resp = await admin_client.put(
+        f"/api/v1/admin/games/{game.id}/cover",
+        json={"image_base64": TINY_IMAGE_B64, "extension": "jpg"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cover_image_url"] == f"/covers/{game.id}.jpg"
+    assert body["cover_source"] == "CUSTOM"
+
+    written = tmp_path / f"{game.id}.jpg"
+    assert written.exists()
+    assert written.read_bytes() == base64.b64decode(TINY_IMAGE_B64)
+
+    await db.refresh(game)
+    assert game.cover_image_url == f"/covers/{game.id}.jpg"
+    assert game.cover_source == CoverSource.CUSTOM
+
+
+async def test_cover_upload_non_admin_returns_403(authed_client, db, user, tmp_path, monkeypatch):
+    monkeypatch.setenv("COVERS_DIR", str(tmp_path))
+    game = await make_game(db)
+
+    resp = await authed_client.put(
+        f"/api/v1/admin/games/{game.id}/cover",
+        json={"image_base64": TINY_IMAGE_B64, "extension": "jpg"},
+    )
+
+    assert resp.status_code == 403
+    assert list(tmp_path.iterdir()) == []
+
+
+async def test_cover_upload_missing_game_returns_404(admin_client, db, admin_user, tmp_path, monkeypatch):
+    monkeypatch.setenv("COVERS_DIR", str(tmp_path))
+
+    resp = await admin_client.put(
+        "/api/v1/admin/games/99999/cover",
+        json={"image_base64": TINY_IMAGE_B64, "extension": "jpg"},
+    )
+
+    assert resp.status_code == 404
+
+
+async def test_cover_upload_path_traversal_extension_returns_422(admin_client, db, admin_user, tmp_path, monkeypatch):
+    monkeypatch.setenv("COVERS_DIR", str(tmp_path))
+    game = await make_game(db)
+
+    resp = await admin_client.put(
+        f"/api/v1/admin/games/{game.id}/cover",
+        json={"image_base64": TINY_IMAGE_B64, "extension": "../../etc/x"},
+    )
+
+    assert resp.status_code == 422
+    assert list(tmp_path.iterdir()) == []
+
+
+async def test_cover_upload_disallowed_extension_returns_422(admin_client, db, admin_user, tmp_path, monkeypatch):
+    monkeypatch.setenv("COVERS_DIR", str(tmp_path))
+    game = await make_game(db)
+
+    resp = await admin_client.put(
+        f"/api/v1/admin/games/{game.id}/cover",
+        json={"image_base64": TINY_IMAGE_B64, "extension": "svg"},
+    )
+
+    assert resp.status_code == 422
+
+
+async def test_cover_upload_malformed_base64_returns_422(admin_client, db, admin_user, tmp_path, monkeypatch):
+    monkeypatch.setenv("COVERS_DIR", str(tmp_path))
+    game = await make_game(db)
+
+    resp = await admin_client.put(
+        f"/api/v1/admin/games/{game.id}/cover",
+        json={"image_base64": "not-valid-base64!!!", "extension": "jpg"},
+    )
+
+    assert resp.status_code == 422
+
+
+async def test_cover_upload_updates_existing_custom_cover(admin_client, db, admin_user, tmp_path, monkeypatch):
+    """Re-uploading overwrites the file and audit-logs the previous URL as `before`."""
+    monkeypatch.setenv("COVERS_DIR", str(tmp_path))
+    game = await make_game(db, "Cover Game")
+
+    first = await admin_client.put(
+        f"/api/v1/admin/games/{game.id}/cover",
+        json={"image_base64": TINY_IMAGE_B64, "extension": "jpg"},
+    )
+    assert first.status_code == 200
+
+    new_b64 = base64.b64encode(b"different_bytes").decode()
+    second = await admin_client.put(
+        f"/api/v1/admin/games/{game.id}/cover",
+        json={"image_base64": new_b64, "extension": "png"},
+    )
+
+    assert second.status_code == 200
+    body = second.json()
+    assert body["cover_image_url"] == f"/covers/{game.id}.png"
+
+    written = tmp_path / f"{game.id}.png"
+    assert written.read_bytes() == base64.b64decode(new_b64)

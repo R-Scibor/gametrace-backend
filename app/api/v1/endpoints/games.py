@@ -14,7 +14,6 @@ from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, User
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
 from app.schemas.game import (
-    CoverUpload,
     GameCreateRequest,
     GameListResponse,
     GameMatchRequest,
@@ -537,28 +536,3 @@ async def get_game_stats(
     if stats is None:
         raise HTTPException(status_code=404, detail="Game not found")
     return stats
-
-
-# ---------------------------------------------------------------------------
-# PUT /{game_id}/cover
-# ---------------------------------------------------------------------------
-
-@router.put("/{game_id}/cover", response_model=GameResponse)
-async def upload_cover(
-    game_id: int,
-    body: CoverUpload,
-    user: User = Depends(get_current_user),
-):
-    """
-    Disabled. Custom cover uploads previously mutated the global Game row
-    (cover_source=CUSTOM) with no per-user scoping or RBAC, so one user could
-    overwrite the shared cover art seen by everyone — and a stale on-disk URL
-    could leave a game with broken, unrecoverable art. The write path is closed
-    pending admin-only controls; see docs/roadmap.md → "Game covers". The storage
-    machinery (CUSTOM enum, /covers static mount, enrichment skip-guard) is
-    intentionally retained for that future feature.
-    """
-    raise HTTPException(
-        status_code=403,
-        detail="Custom cover uploads are temporarily disabled pending admin controls.",
-    )

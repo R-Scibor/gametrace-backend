@@ -1,4 +1,6 @@
+import base64
 import logging
+import os
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select, update
@@ -7,12 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.endpoints.auth import require_admin
 from app.core.database import get_db
 from app.core.observability import log_admin_action
-from app.models.game import Game, GameAlias, UserGamePreference
+from app.models.game import CoverSource, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession
 from app.models.user import User
+from app.schemas.game import CoverUpload, GameResponse
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+ALLOWED_COVER_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
 
 # ---------------------------------------------------------------------------
@@ -84,3 +89,66 @@ async def merge_game(
     log_admin_action(
         user.discord_id, "merge_game", f"game:{game_id}", after=f"target:{target_id}"
     )
+
+
+# ---------------------------------------------------------------------------
+# PUT /games/{game_id}/cover
+# ---------------------------------------------------------------------------
+
+@router.put("/games/{game_id}/cover", response_model=GameResponse)
+async def upload_cover(
+    game_id: int,
+    body: CoverUpload,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),  # auth required
+):
+    """
+    Admin-only custom cover upload. Decodes `image_base64` and writes it to
+    COVERS_DIR (env var, default /app/covers) as "{game_id}.{extension}",
+    then stores a durable relative URL ("/covers/{game_id}.{extension}") on
+    the Game row with cover_source=CUSTOM. The enrichment worker skips
+    overwriting CUSTOM covers (see tasks/enrichment.py).
+
+    Returns 422 for an unsupported/invalid extension or malformed base64.
+    Returns 404 if the game does not exist.
+    """
+    extension = body.extension.lower()
+    if extension not in ALLOWED_COVER_EXTENSIONS:
+        raise HTTPException(
+            status_code=422, detail=f"Unsupported cover extension: {body.extension!r}"
+        )
+
+    try:
+        image_bytes = base64.b64decode(body.image_base64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Malformed base64 image data.")
+
+    game = await db.get(Game, game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail=f"Game {game_id} not found.")
+
+    before_url = game.cover_image_url
+    before_source = CoverSource(game.cover_source).value
+
+    covers_dir = os.environ.get("COVERS_DIR", "/app/covers")
+    os.makedirs(covers_dir, exist_ok=True)
+    file_path = os.path.join(covers_dir, f"{game_id}.{extension}")
+    with open(file_path, "wb") as f:
+        f.write(image_bytes)
+
+    new_url = f"/covers/{game_id}.{extension}"
+    game.cover_image_url = new_url
+    game.cover_source = CoverSource.CUSTOM
+    await db.commit()
+    await db.refresh(game)
+
+    logger.info("upload_cover: game_id=%d extension=%s", game_id, extension)
+    log_admin_action(
+        user.discord_id,
+        "upload_cover",
+        f"game:{game_id}",
+        before=f"cover_image_url={before_url} cover_source={before_source}",
+        after=f"cover_image_url={new_url} cover_source={CoverSource.CUSTOM.value}",
+    )
+
+    return game
