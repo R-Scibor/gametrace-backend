@@ -29,6 +29,9 @@ class Settings(BaseSettings):
 
     flower_basic_auth: str = ""
 
+    link_code_secret: str = ""  # HMAC key for /login codes; empty disables the feature
+    trusted_proxy_ips: str = ""  # comma-separated IPs allowed to set X-Forwarded-For
+
     session_token_expire_days: int = 30
     trash_retention_days: int = 7
 
@@ -50,6 +53,10 @@ class Settings(BaseSettings):
     @property
     def discord_guild_id_set(self) -> set[str]:
         return {g.strip() for g in self.discord_guild_ids.split(",") if g.strip()}
+
+    @property
+    def trusted_proxy_ip_set(self) -> set[str]:
+        return {ip.strip() for ip in self.trusted_proxy_ips.split(",") if ip.strip()}
 
     @model_validator(mode="after")
     def _gc_margin_exceeds_stitch_window(self) -> "Settings":

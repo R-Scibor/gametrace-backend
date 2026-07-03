@@ -46,3 +46,28 @@ def test_defaults_satisfy_invariant():
     """Default values must themselves pass the invariant."""
     s = Settings(**_REQUIRED)
     assert s.session_flicker_gc_margin_seconds > s.session_stitch_window_seconds
+
+
+def test_link_code_secret_defaults_empty():
+    s = Settings(**_REQUIRED)
+    assert s.link_code_secret == ""
+
+
+def test_trusted_proxy_ips_defaults_empty():
+    s = Settings(**_REQUIRED)
+    assert s.trusted_proxy_ips == ""
+
+
+def test_trusted_proxy_ip_set_splits_and_strips():
+    s = Settings(**_REQUIRED, trusted_proxy_ips="10.0.0.1, 10.0.0.2 , 10.0.0.3")
+    assert s.trusted_proxy_ip_set == {"10.0.0.1", "10.0.0.2", "10.0.0.3"}
+
+
+def test_trusted_proxy_ip_set_ignores_blanks():
+    s = Settings(**_REQUIRED, trusted_proxy_ips="10.0.0.1,,  ,10.0.0.2")
+    assert s.trusted_proxy_ip_set == {"10.0.0.1", "10.0.0.2"}
+
+
+def test_empty_trusted_proxy_ips_yields_empty_set():
+    s = Settings(**_REQUIRED, trusted_proxy_ips="")
+    assert s.trusted_proxy_ip_set == set()
