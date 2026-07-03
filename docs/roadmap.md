@@ -24,6 +24,8 @@ The secure version of the `/login` path and the second user-selectable login opt
 
 **Update (2026-06-21):** RBAC is the gate for the [Admin panel](#admin-panel) — catalog ops (merge, cover, enrich), cross-user error visibility, and bug-report triage all require `require_admin` on `/api/v1/admin/*`. Seed `is_admin=true` for the homelab operator; no role hierarchy in v1.
 
+**Shipped:** `users.is_admin` flag + `require_admin` dependency (403 for non-admins), gating the whole `/api/v1/admin/*` router at include time. Merge moved to `POST /api/v1/admin/games/{id}/merge/{target_id}` — the old public merge route is gone (404). `is_admin` is also surfaced in the login and profile responses so clients can show/hide admin entry points; enforcement stays server-side regardless. See [Admin panel](#admin-panel) for the rest of the P0 slice.
+
 ### Secure Token Storage
 **New (Audit 2026-05-14):** Current authentication tokens are stored in plain text. We should transition to storing SHA-256 hashes of the tokens to protect active sessions in the event of a database compromise.
 
@@ -56,7 +58,7 @@ Why this is deferred: the voice pipeline isn't fully validated end-to-end with t
 **Deferred:** Cloud copy to GCS (dedicated bucket, lifecycle retention, service-account auth — encrypt dumps before upload since tokens are still plaintext in DB). Homelab threats are mitigated by the off-NVMe local path; offsite is required before the API is exposed outside the LAN. Optional mirror to `/data/bulk/gametrace-backups` (`sdb1`) is a one-line compose bind mount when wanted.
 
 ### MIME sniffing on uploads
-Two endpoints accept binary uploads (`PUT /games/{id}/cover`, `POST /voice/transcribe`) and currently rely on client-supplied content type. Plan:
+Two endpoints accept binary uploads (`PUT /api/v1/admin/games/{id}/cover`, `POST /voice/transcribe`) and currently rely on client-supplied content type. Plan:
 - **Cover:** sniff with `python-magic` (libmagic), allow only `image/jpeg|png|webp`, derive the on-disk extension from the sniffed type — never trust the client-supplied filename.
 - **Voice:** lighter check — match the first ~12 bytes against known audio signatures (RIFF/WAVE, ID3, MP3 frame sync, MP4 `ftyp`, Ogg). Whisper itself is container-tolerant, so full libmagic would be over-engineered; the goal is to reject obvious garbage before paying for the API call.
 
@@ -95,34 +97,36 @@ When a user edits a `BOT` session (fixes an ERROR or adjusts `end_time` via PATC
 
 ## Game covers
 
-### Custom cover writes disabled — interim
+### Custom cover writes disabled — interim, now superseded
 
 `PUT /games/{id}/cover` let any authenticated user upload a custom cover, which overwrote `cover_image_url` and set `cover_source=CUSTOM` on the **global** `Game` row — visible to every user, and frozen out of re-enrichment by the worker's `cover_source != CUSTOM` skip-guard.
 
 This produced a data-integrity incident: at least one game (id 40) had its working IGDB cover overwritten by a homelab URL (`http://10.10.0.200/covers/40.png`) that now returns HTTP 400, leaving the record pointing at unrecoverable art with no fallback. Root cause is the combination of (a) global mutation with no ownership/RBAC, and (b) an on-disk store (the `/covers` static mount) whose URLs aren't guaranteed to keep resolving.
 
-**Interim action:** the write endpoint returns `403` and writes nothing; affected `CUSTOM` rows are reset to `EXTERNAL` and re-enriched so they fall back to live IGDB covers (or land in `NEEDS_REVIEW` with no cover — strictly better than a broken URL). The storage machinery — `CoverSource.CUSTOM` enum, the `/covers` static mount, and the enrichment skip-guard — is intentionally retained for the admin feature below; only the open write path is closed.
+**Interim action (superseded):** the public write endpoint returned `403` and wrote nothing; affected `CUSTOM` rows were reset to `EXTERNAL` and re-enriched so they fell back to live IGDB covers (or landed in `NEEDS_REVIEW` with no cover). The old public route is now deleted entirely (404) rather than 403 — see [Admin-curated global covers](#admin-curated-global-covers) for the replacement.
 
 ### Admin-curated global covers
-The legitimate version of the feature above: let an **admin** set a global cover for a game that enrichment can't resolve (un-matched or `NEEDS_REVIEW`), rather than letting any user mutate shared art. Ships as part of the [Admin panel](#admin-panel) catalog ops slice — `PUT /admin/games/{id}/cover` behind `require_admin`, not a public route. Still needs the on-disk durability fixed (the dead-URL incident above): either guarantee the `/covers` mount is served by the same host the URL points at, or store covers somewhere with a stable URL contract. MIME sniffing on this endpoint is already tracked under [MIME sniffing on uploads](#mime-sniffing-on-uploads).
+**Shipped:** `PUT /api/v1/admin/games/{id}/cover`, behind `require_admin`, replaces the old public route. Extension allowlist (`jpg`/`jpeg`/`png`/`webp`); stores a **relative** `cover_image_url` (`/covers/{id}.{ext}`) that clients resolve against the API base — this is the durability fix for the dead-URL incident above, since the URL no longer hardcodes a specific host. Absolute IGDB URLs are untouched. Sets `cover_source=CUSTOM`; every write emits a `log_admin_action` structured log line. MIME sniffing on this endpoint is still tracked separately under [MIME sniffing on uploads](#mime-sniffing-on-uploads).
 
 ### Per-user cover persistence — deferred (frontend-owned)
 Per the mobile team: user-added cover photos are currently stored **locally** — per device on mobile, per browser on web — and don't sync across devices. Server-side persistence so covers follow the user is intentionally deferred: hosting user-uploaded images turns GameTrace into a UGC platform with content-moderation and legal/liability obligations that are out of scope today. Distinct from admin-curated covers (shared, few, vetted) — this one is per-user and unbounded. Revisit only if cross-device cover persistence becomes a real user need.
 
 ## Admin panel
 
-**Not scheduled — design captured 2026-06-21.** Homelab ops today (manual SQL merges, `enrich_game` dispatch, `NEEDS_REVIEW` triage) justify a thin admin surface before public release. Three slices share one RBAC gate; don't build a monolithic console on day one.
+**Design captured 2026-06-21; P0 shipped, P1–P3 not scheduled.** Homelab ops today (manual SQL merges, `enrich_game` dispatch, `NEEDS_REVIEW` triage) justify a thin admin surface before public release. Three slices share one RBAC gate; don't build a monolithic console on day one.
 
 **Frontend:** separate route on `gametrace-web` (`/admin`) — not inside the React Native app. Login via existing auth; API checks `is_admin`.
 
-### P0 — RBAC + `/api/v1/admin/*` router
+### P0 — RBAC + `/api/v1/admin/*` router — shipped
 
-- Migration: `users.is_admin BOOLEAN NOT NULL DEFAULT false`
-- `require_admin` dependency (403 for non-admins)
-- Move destructive global mutations behind admin:
-  - `POST /admin/games/{id}/merge/{target_id}` (remove or proxy public merge)
-  - `PUT /admin/games/{id}/cover` (re-open cover writes; see [Admin-curated global covers](#admin-curated-global-covers))
-- Audit log table or structured log line on every admin write: `{ admin_id, action, resource, before/after }`
+- [x] Migration: `users.is_admin BOOLEAN NOT NULL DEFAULT false`
+- [x] `require_admin` dependency (403 for non-admins), gating the whole `/api/v1/admin/*` router at include time
+- [x] Move destructive global mutations behind admin:
+  - `POST /api/v1/admin/games/{id}/merge/{target_id}` — old public merge route deleted (404), not proxied
+  - `PUT /api/v1/admin/games/{id}/cover` — cover writes re-opened admin-only; see [Admin-curated global covers](#admin-curated-global-covers)
+- [x] Audit log: structured `log_admin_action` log line on every admin write (`{ admin_id, action, resource, before/after }`); a dedicated audit table is deferred to [P2](#p2--observability--user-feedback) if log-based review proves insufficient
+
+Seeding the first `is_admin=true` operator is a manual `psql` step, not a tracked-doc concern (per-deploy state).
 
 ### P1 — Catalog ops (highest value)
 
