@@ -89,3 +89,17 @@ async def authed_client(db, client, user):
     token = await make_token(db, user.discord_id)
     client.headers.update({"Authorization": f"Bearer {token}"})
     return client
+
+
+@pytest.fixture
+async def admin_user(db):
+    """Admin test user, pre-created in the test DB."""
+    return await make_user(db, discord_id="222222222222222222", username="adminuser", is_admin=True)
+
+
+@pytest.fixture
+async def admin_client(db, client, admin_user):
+    """HTTP client with a valid Bearer token for the admin test user."""
+    token = await make_token(db, admin_user.discord_id)
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    return client
