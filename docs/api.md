@@ -1,6 +1,6 @@
 # API Reference
 
-All endpoints are prefixed `/api/v1/`. Auth uses `Authorization: Bearer <token>` issued by `POST /auth/login`. Pagination uses `?skip=0&limit=20` (default 20, max 100).
+All endpoints are prefixed `/api/v1/`. Auth uses `Authorization: Bearer <token>` issued by `POST /auth/link`, `POST /auth/login`, or `POST /auth/discord`. Pagination uses `?skip=0&limit=20` (default 20, max 100).
 
 For full request/response schemas, hit the FastAPI interactive docs at `http://localhost:8010/docs` once the stack is running.
 
@@ -10,28 +10,30 @@ Grouped by code — see endpoint sections below for path-specific detail. Authed
 
 | Code | When |
 |---|---|
-| `200` | Successful read or update (`GET`, `PATCH`, `PUT`, `POST /auth/login`, `POST /sessions/{id}/restore`). `GET /games/resolve` also returns `200` with body `null` on miss. `POST /games` returns `200` when the game already exists (deduplication by `igdb_id`). |
+| `200` | Successful read or update (`GET`, `PATCH`, `PUT`, `POST /auth/link`, `POST /auth/login`, `POST /sessions/{id}/restore`). `GET /games/resolve` also returns `200` with body `null` on miss. `POST /games` returns `200` when the game already exists (deduplication by `igdb_id`). |
 | `201` | `POST /sessions` — manual session created. `POST /games` — new game row created (either mode). `POST /reports` — feedback report stored. |
 | `204` | Successful delete with no body (`POST /auth/logout`, `DELETE /sessions/{id}`, `DELETE /user/preferences/{game_id}`, `DELETE /notifications/register-token`, `POST /admin/games/{id}/merge/{target_id}`). |
 | `400` | Client input rejected — e.g. self-merge (`POST /admin/games/{id}/merge/{target_id}`), empty audio upload (`POST /voice/transcribe`), `redirect_uri` not allowlisted (`POST /auth/discord`). |
-| `401` | Invalid or expired bearer token (`get_current_user`), or unknown token on `POST /auth/logout`, or bad/expired Discord code (`POST /auth/discord`). |
+| `401` | Invalid or expired bearer token (`get_current_user`), or unknown token on `POST /auth/logout`, invalid or expired link code (`POST /auth/link`), or bad/expired Discord code (`POST /auth/discord`). |
 | `403` | A valid but non-admin bearer token on any `/admin/*` route (`require_admin`), including `PUT /admin/games/{id}/cover`. Also `PATCH` or soft `DELETE` on an `ONGOING` session (bot-managed row). Also missing bearer token on any authed route (e.g. `POST /reports`) — `HTTPBearer` raises `403` when the `Authorization` header itself is absent, distinct from `401` for an invalid/expired token. |
 | `404` | Resource not found or not owned by the caller — user not registered (`POST /auth/login`), session/game missing, game missing on preference upsert. Soft-deleting an already-trashed session also returns `404` (same as not found). |
 | `409` | Session time overlap — `POST /sessions`, `PATCH /sessions/{id}`, `POST /sessions/{id}/restore` (body: `{detail: {detail, conflicting_session}}`). |
-| `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone on `PUT /profile/settings` (Pydantic). Blank/whitespace-only or over-4000-char `message`, or a missing `context` field, on `POST /reports` (Pydantic). Unsupported/invalid `extension` or malformed `image_base64` on `PUT /admin/games/{id}/cover`. |
+| `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone on `PUT /profile/settings` (Pydantic). Link `code` not exactly 6 digits (`POST /auth/link`, Pydantic). Blank/whitespace-only or over-4000-char `message`, or a missing `context` field, on `POST /reports` (Pydantic). Unsupported/invalid `extension` or malformed `image_base64` on `PUT /admin/games/{id}/cover`. |
 | `500` | Unhandled server error (global handler in `app/main.py`). |
 | `502` | Upstream voice failure — OpenAI Whisper or Vertex Gemini error (`POST /voice/transcribe`). Discord OAuth upstream failure (`POST /auth/discord`). IGDB upstream error — non-rate-limit failure (`POST /games/match`). |
-| `503` | Voice pipeline not configured — `OPENAI_API_KEY` or `GCP_PROJECT` unset (`POST /voice/transcribe`). IGDB rate-limited or auth expired (`POST /games/match`, `POST /games` with `igdb_id`). |
+| `429` | Too many failed link-code attempts (`POST /auth/link`) — per-IP or global lockout; response includes `Retry-After` (seconds). |
+| `503` | Voice pipeline not configured — `OPENAI_API_KEY` or `GCP_PROJECT` unset (`POST /voice/transcribe`). Link codes not configured (`LINK_CODE_SECRET` unset) or Redis unreachable (`POST /auth/link`). IGDB rate-limited or auth expired (`POST /games/match`, `POST /games` with `igdb_id`). |
 
 `GET /health` and `GET /api/v1/health` always return `200`; bot offline or Redis loss is reflected in the JSON payload (`bot.status`: `offline` / `unknown`), not the HTTP status.
 
 ## Auth
 
-Two login paths exist: username (`/auth/login`) and Discord OAuth2 (`/auth/discord`). OAuth requires the user to be a member of a configured bot server for presence tracking to produce data; non-members can still log in but receive `needs_server_join: true`.
+Three login paths exist: link code (`/auth/link` — primary mobile flow), legacy username (`/auth/login`), and Discord OAuth2 (`/auth/discord`). OAuth requires the user to be a member of a configured bot server for presence tracking to produce data; non-members can still log in but receive `needs_server_join: true`.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/auth/login` | Login by Discord username (user must be pre-registered via `/login` slash command). Issues a session token. Returns `404` with "User not found. Run /login on Discord first." if the user isn't registered. Accepts optional `timezone` (IANA); non-`UTC` values are persisted on the user row. Response: `token`, `discord_id`, `username`, `timezone`, `is_admin`. |
+| `POST` | `/api/v1/auth/link` | Redeem a one-time 6-digit code from the Discord `/login` slash command. Body `{code, timezone?}` — `code` must be exactly 6 digits (whitespace trimmed); `timezone` is optional IANA (default `UTC`, max 64 chars); non-`UTC` values are persisted on the user row. Issues a session token. Response: `token`, `discord_id`, `username`, `timezone`, `is_admin`. `401` if the code is invalid or expired (or the user row is missing — same opaque message). `422` if `code` is not exactly 6 digits. `429` after too many failed attempts (per-IP or global lockout) with `Retry-After` header (seconds). `503` if `LINK_CODE_SECRET` is unset or Redis is unreachable. |
+| `POST` | `/api/v1/auth/login` | **Unchanged** — login by Discord username (user must be pre-registered via `/login` or `/register` on Discord). Issues a session token. Returns `404` with "User not found. Run /login on Discord first." if the user isn't registered. Accepts optional `timezone` (IANA); non-`UTC` values are persisted on the user row. Response: `token`, `discord_id`, `username`, `timezone`, `is_admin`. |
 | `POST` | `/api/v1/auth/logout` | Invalidate the current bearer token server-side. |
 | `POST` | `/api/v1/auth/discord` | Discord OAuth2 login (code + PKCE). Body `{code, code_verifier, redirect_uri}`. Backend exchanges the code server-side, reads `/users/@me`, and issues a session token. Auto-creates the user on first login (verified `discord_id` + `username`). Response includes `is_admin` and `needs_server_join: true` when the user is in none of the configured bot servers — the app should prompt them to join so presence tracking works. `400` if `redirect_uri` is not allowlisted; `401` on bad/expired code; `502` if Discord is unreachable. |
 

@@ -26,7 +26,7 @@ docker compose up
 
 API at `http://localhost:8010`. Interactive Swagger docs at `http://localhost:8010/docs`.
 
-**Required secrets:** `DISCORD_BOT_TOKEN`, `IGDB_CLIENT_ID` / `IGDB_CLIENT_SECRET` (Twitch dev console). **Discord OAuth2 login** additionally needs `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_OAUTH_REDIRECT_URIS`, and `DISCORD_GUILD_IDS` — register the same redirect URIs in the Discord Developer Portal → OAuth2 → Redirects. **Voice pipeline** additionally needs `OPENAI_API_KEY`, `GCP_PROJECT`, and a mounted GCP service-account JSON. **Push notifications** need `credentials/firebase-cred.json`. Features with missing config return `503` (voice) or silently skip (FCM, Sentry).
+**Required secrets:** `DISCORD_BOT_TOKEN`, `LINK_CODE_SECRET` (login codes — generate with `openssl rand -hex 32`), `IGDB_CLIENT_ID` / `IGDB_CLIENT_SECRET` (Twitch dev console). **Discord OAuth2 login** additionally needs `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_OAUTH_REDIRECT_URIS`, and `DISCORD_GUILD_IDS` — register the same redirect URIs in the Discord Developer Portal → OAuth2 → Redirects. **Voice pipeline** additionally needs `OPENAI_API_KEY`, `GCP_PROJECT`, and a mounted GCP service-account JSON. **Push notifications** need `credentials/firebase-cred.json`. Features with missing config return `503` (voice, link codes) or silently skip (FCM, Sentry).
 
 ## Services
 
@@ -45,8 +45,10 @@ flower        Celery monitor (port 5555, internal)
 
 Two login paths are available:
 
-- **Username login (`POST /auth/login`)** — requires pre-registration via the `/login` slash command on Discord. The bot registers the user in the database; the mobile app then logs in by Discord username.
+- **Link code login (`POST /auth/link`)** — run `/login` on Discord to get a 6-digit code (valid 5 minutes, single-use). Enter the code in the mobile app. Re-running `/login` invalidates any previous pending code. Use `/logout` on Discord to revoke all app sessions and discard pending codes. Requires `LINK_CODE_SECRET` in `.env`.
 - **Discord OAuth2 (`POST /auth/discord`)** — self-provisioning. The mobile app completes the OAuth2 flow (code + PKCE) and the backend creates the user on first login. Requires `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_OAUTH_REDIRECT_URIS`, and `DISCORD_GUILD_IDS` in `.env`. Non-members of the configured bot servers can still log in but receive `needs_server_join: true` — presence tracking will not produce data until they join.
+
+The legacy username endpoint (`POST /auth/login`) is unchanged but no longer the primary mobile flow. Run `/register` on Discord to opt into presence tracking without logging into the app.
 
 ## API
 
@@ -140,7 +142,7 @@ docker compose up
 # Run tests
 docker compose run --rm api pytest
 
-# Add a user directly (dev shortcut, bypasses /login)
+# Add a user directly (dev shortcut, bypasses /register)
 docker exec -it gametrace_db psql -U gametrace_user -d gametrace_db \
   -c "INSERT INTO users (discord_id, username) VALUES ('<id>', '<username>');"
 ```
@@ -150,7 +152,7 @@ docker exec -it gametrace_db psql -U gametrace_user -d gametrace_db \
 | Document | Description |
 |----------|-------------|
 | [docs/api.md](docs/api.md) | Full endpoint reference |
-| [docs/bot.md](docs/bot.md) | Bot architecture — presence tracking, `/login` flow, Self-Healing |
+| [docs/bot.md](docs/bot.md) | Bot architecture — presence tracking, `/register` / `/login` / `/logout`, Self-Healing |
 | [docs/schema.md](docs/schema.md) | Database schema — tables, relationships, indexes, invariants |
 | [docs/game-matching.md](docs/game-matching.md) | Game-name matching pipeline — sanitization, WRatio, number guard, IGDB alternative names |
 | [docs/roadmap.md](docs/roadmap.md) | Future plans — auth, voice pipeline, hardening, scale |

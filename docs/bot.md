@@ -2,14 +2,14 @@
 
 The bot is the only writer of `source=BOT` sessions. It runs as the `bot` service in `docker-compose.yml` and shares the database with the API.
 
-Source: `app/bot/main.py`, `app/bot/session_manager.py`, `app/bot/self_healing.py`.
+Source: `app/bot/main.py`, `app/bot/commands.py`, `app/bot/session_manager.py`, `app/bot/self_healing.py`.
 
 ## What it does
 
 - Listens for Discord rich-presence updates (`on_presence_update`) on every guild it's in.
 - Translates "user started / stopped / switched games" into `game_sessions` rows.
 - On restart, reconciles every `ONGOING` session against current presence (Self-Healing).
-- Exposes a `/login` slash command that registers a user in the database. Until a user runs `/login` at least once, the bot ignores their presence entirely.
+- Exposes `/register`, `/login`, and `/logout` slash commands for user onboarding and session management. Until a user exists in the `users` table (via `/register` or `/login`), the bot ignores their presence entirely.
 
 ## Intents and prerequisites
 
@@ -20,23 +20,49 @@ Required Discord intents (set in `app/bot/main.py` before client init):
 
 Both are **privileged** and must be explicitly enabled in the Discord Developer Portal under *Bot → Privileged Gateway Intents*. Without them, `discord.py` will fail to connect.
 
-The OAuth2 invite URL must include both `bot` and `applications.commands` scopes — the latter is required for the `/login` slash command to register. If the bot was invited without `applications.commands`, re-invite it (this does not remove it from existing servers).
+The OAuth2 invite URL must include both `bot` and `applications.commands` scopes — the latter is required for slash commands to register. If the bot was invited without `applications.commands`, re-invite it (this does not remove it from existing servers).
 
-## `/login` slash command
+## Slash commands
 
-`login_command` in `app/bot/main.py`. Reads `discord_id` and `username` from the interaction context (no user input — Discord supplies them) and upserts a `users` row:
+All three commands read `discord_id` and `username` from the interaction context (no user input — Discord supplies them). Replies are ephemeral (only the invoking user sees them). Logic lives in `app/bot/commands.py`.
 
-- New user → INSERT.
-- Existing user → sync the `username` field in case the user renamed on Discord; everything else stays.
+### `/register`
 
-The reply is ephemeral (only the invoking user sees it). After running `/login` once, the user can log into the mobile app with their Discord username.
+Upserts a `users` row:
+
+- New user → INSERT, reply: "Zarejestrowano w GameTrace!"
+- Existing user → sync the `username` field in case the user renamed on Discord; reply: "Już jesteś zarejestrowany."
+
+Use this when a user wants to be tracked by the bot without logging into the mobile app yet.
+
+### `/login`
+
+Upserts the `users` row (same as `/register`), then issues a one-time login code stored in Redis (`LINK_CODE_SECRET` must be set):
+
+- **6-digit code** — cryptographically random, displayed as `XXX XXX` (e.g. `482 193`).
+- **5-minute TTL** — expires automatically after 300 seconds.
+- **Single-use** — redeemed via `POST /api/v1/auth/link`; the code is deleted on successful redemption.
+- **Re-run invalidates** — issuing a new `/login` deletes any previous pending code for that user.
+
+Reply: `Twój kod logowania: **XXX XXX**. Wpisz go w aplikacji w ciągu 5 minut.` If `LINK_CODE_SECRET` is unset, reply: `Kody logowania nie są skonfigurowane.`
+
+After running `/login`, the user enters the code in the mobile app to obtain a bearer token.
+
+### `/logout`
+
+Revokes **all** active app sessions for the user:
+
+1. Deletes every `user_auth_tokens` row for the user's `discord_id`.
+2. Discards any pending link code in Redis.
+
+Reply: `Wylogowano. Unieważniono N sesji w aplikacji.` (or `Nie jesteś zarejestrowany.` if the user has no `users` row).
 
 ## Presence tracking
 
 `on_presence_update` fires whenever any cached member changes activity. The `on_presence_update` handler does:
 
 1. **Filter:** ignore bots; ignore presence changes that didn't change the playing-game name.
-2. **Gate:** look up the user in `users`. If they haven't run `/login`, return — the bot is "blind" to non-registered users.
+2. **Gate:** look up the user in `users`. If they haven't run `/register` or `/login`, return — the bot is "blind" to non-registered users.
 3. **Resolve game:** for an active game name, find or create a `games` row via `game_aliases.discord_process_name`. New games are inserted as a stub (just the process name) and queued for async enrichment via Celery.
 4. **Apply transition** to the user's current `ONGOING` session (if any):
 
@@ -116,3 +142,4 @@ The 12h ceiling is intentionally generous — it's a backstop for "user fell asl
 | Celery / Redis down at session start | Enrichment task fails to enqueue; the session is still written. Game stays `enrichment_status=PENDING` until the next presence event for that game (which retries the enqueue). |
 | User leaves all guilds the bot is in | Their `ONGOING` session can no longer be reconciled; on next restart Self-Healing marks it `ERROR` with "user not found". |
 | Discord rich-presence flicker | Handled by stitch-resume + flicker suppression (see above). Short BOT sessions are flagged `is_flicker=true` at close; if the same game resumes within `SESSION_STITCH_WINDOW_SECONDS`, the session is reopened and the flag is cleared. |
+| `LINK_CODE_SECRET` unset | `/login` replies with an error message; `POST /auth/link` returns `503`. |
