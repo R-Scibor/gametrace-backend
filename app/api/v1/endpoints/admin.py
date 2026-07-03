@@ -1,5 +1,4 @@
 import base64
-import logging
 import os
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,7 +14,6 @@ from app.models.user import User
 from app.schemas.game import CoverUpload, GameResponse
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 ALLOWED_COVER_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
@@ -29,7 +27,7 @@ async def merge_game(
     game_id: int,
     target_id: int,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_admin),  # auth required
+    user: User = Depends(require_admin),  # admin gate + identity for audit log
 ):
     """
     Merge game_id into target_id (ACID transaction):
@@ -85,7 +83,6 @@ async def merge_game(
     await db.delete(source)
     await db.commit()
 
-    logger.info("merge_game: game_id=%d merged into target_id=%d", game_id, target_id)
     log_admin_action(
         user.discord_id, "merge_game", f"game:{game_id}", after=f"target:{target_id}"
     )
@@ -100,7 +97,7 @@ async def upload_cover(
     game_id: int,
     body: CoverUpload,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_admin),  # auth required
+    user: User = Depends(require_admin),  # admin gate + identity for audit log
 ):
     """
     Admin-only custom cover upload. Decodes `image_base64` and writes it to
@@ -142,7 +139,6 @@ async def upload_cover(
     await db.commit()
     await db.refresh(game)
 
-    logger.info("upload_cover: game_id=%d extension=%s", game_id, extension)
     log_admin_action(
         user.discord_id,
         "upload_cover",

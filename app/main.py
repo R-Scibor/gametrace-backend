@@ -15,7 +15,7 @@ app = FastAPI(title="GameTrace API", version="1.0.0")
 
 app.include_router(api_router, prefix="/api/v1")
 
-# Serve custom game covers uploaded via PUT /games/{id}/cover
+# Serve custom game covers uploaded via PUT /api/v1/admin/games/{id}/cover
 os.makedirs(COVERS_DIR, exist_ok=True)
 app.mount("/covers", StaticFiles(directory=COVERS_DIR), name="covers")
 
