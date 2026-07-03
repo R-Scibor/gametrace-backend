@@ -116,6 +116,79 @@ async def test_invalid_release_decade_rejected(authed_client, db, user):
     assert resp.status_code == 422
 
 
+# ── GET /games — sort + order ────────────────────────────────────────────────
+
+async def test_sort_by_playtime_desc(authed_client, db, user):
+    low = await make_game(db, "Low")
+    high = await make_game(db, "High")
+    await make_session(db, user.discord_id, low.id, dt(hours_ago=3), dt(hours_ago=2))    # 3600
+    await make_session(db, user.discord_id, high.id, dt(hours_ago=6), dt(hours_ago=2))   # 14400
+
+    resp = await authed_client.get("/api/v1/games?sort=playtime")
+
+    names = [g["primary_name"] for g in resp.json()["items"]]
+    assert names == ["High", "Low"]
+
+
+async def test_sort_by_playtime_asc(authed_client, db, user):
+    low = await make_game(db, "Low")
+    high = await make_game(db, "High")
+    await make_session(db, user.discord_id, low.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_session(db, user.discord_id, high.id, dt(hours_ago=6), dt(hours_ago=2))
+
+    resp = await authed_client.get("/api/v1/games?sort=playtime&order=asc")
+
+    names = [g["primary_name"] for g in resp.json()["items"]]
+    assert names == ["Low", "High"]
+
+
+async def test_sort_by_last_played_desc(authed_client, db, user):
+    old = await make_game(db, "Old")
+    recent = await make_game(db, "Recent")
+    await make_session(db, user.discord_id, old.id, dt(hours_ago=50), dt(hours_ago=49))
+    await make_session(db, user.discord_id, recent.id, dt(hours_ago=2), dt(hours_ago=1))
+
+    resp = await authed_client.get("/api/v1/games?sort=last_played")
+
+    names = [g["primary_name"] for g in resp.json()["items"]]
+    assert names == ["Recent", "Old"]
+
+
+async def test_tied_playtime_pagination_is_stable(authed_client, db, user):
+    # 5 games, all zero playtime (ERROR-only) → all tied; tie-break by name asc.
+    for i in range(5):
+        g = await make_game(db, f"Tie {i:02d}")
+        await make_session(
+            db, user.discord_id, g.id, dt(hours_ago=3), None, status=SessionStatus.ERROR
+        )
+
+    page1 = await authed_client.get("/api/v1/games?sort=playtime&skip=0&limit=2")
+    page2 = await authed_client.get("/api/v1/games?sort=playtime&skip=2&limit=2")
+
+    names1 = [g["primary_name"] for g in page1.json()["items"]]
+    names2 = [g["primary_name"] for g in page2.json()["items"]]
+    assert names1 == ["Tie 00", "Tie 01"]
+    assert names2 == ["Tie 02", "Tie 03"]
+    assert set(names1).isdisjoint(names2)
+
+
+async def test_invalid_sort_rejected(authed_client, db, user):
+    resp = await authed_client.get("/api/v1/games?sort=bogus")
+    assert resp.status_code == 422
+
+
+async def test_default_sort_is_name_asc(authed_client, db, user):
+    b = await make_game(db, "Bravo")
+    a = await make_game(db, "Alpha")
+    await make_session(db, user.discord_id, b.id, dt(hours_ago=3), dt(hours_ago=1))
+    await make_session(db, user.discord_id, a.id, dt(hours_ago=3), dt(hours_ago=2))
+
+    resp = await authed_client.get("/api/v1/games")
+
+    names = [g["primary_name"] for g in resp.json()["items"]]
+    assert names == ["Alpha", "Bravo"]
+
+
 # ── GET /games ────────────────────────────────────────────────────────────────
 
 async def test_returns_user_games(authed_client, db, user):

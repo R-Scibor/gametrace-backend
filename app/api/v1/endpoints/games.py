@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from datetime import date
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import Integer, and_, case, delete, func, or_, select, update
@@ -80,6 +81,8 @@ async def list_games(
     developer: str | None = Query(default=None),
     publisher: str | None = Query(default=None),
     release_decade: str | None = Query(default=None, pattern=r"^\d{3}0s$"),
+    sort: Literal["name", "playtime", "last_played"] = Query(default="name"),
+    order: Literal["asc", "desc"] | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -146,6 +149,19 @@ async def list_games(
     ).cast(Integer).label("total_seconds")
     last_played_expr = func.max(GameSession.start_time).label("last_played")
 
+    descending = (order == "desc") if order is not None else (sort != "name")
+    if sort == "playtime":
+        sort_col = playtime_expr
+    elif sort == "last_played":
+        sort_col = last_played_expr
+    else:
+        sort_col = Game.primary_name
+    primary = sort_col.desc() if descending else sort_col.asc()
+    if sort == "name":
+        order_by = [primary, Game.id.asc()]
+    else:
+        order_by = [primary, Game.primary_name.asc(), Game.id.asc()]
+
     count_q = (
         select(func.count(func.distinct(Game.id)))
         .join(GameSession, GameSession.game_id == Game.id)
@@ -160,7 +176,7 @@ async def list_games(
         .outerjoin(UserGamePreference, pref_join)
         .where(*base_filters, visibility_filter)
         .group_by(Game.id)
-        .order_by(Game.primary_name.asc(), Game.id.asc())
+        .order_by(*order_by)
         .offset(skip)
         .limit(limit)
     )
