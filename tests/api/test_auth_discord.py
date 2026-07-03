@@ -42,6 +42,7 @@ async def test_new_user_is_auto_created(client, db, monkeypatch):
     assert data["discord_id"] == "555"
     assert data["username"] == "newbie"
     assert data["needs_server_join"] is False
+    assert data["is_admin"] is False
     assert "token" in data
 
     from app.models.user import User

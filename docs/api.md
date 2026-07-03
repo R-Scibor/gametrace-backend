@@ -31,9 +31,9 @@ Two login paths exist: username (`/auth/login`) and Discord OAuth2 (`/auth/disco
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/auth/login` | Login by Discord username (user must be pre-registered via `/login` slash command). Issues a session token. Returns `404` with "User not found. Run /login on Discord first." if the user isn't registered. Accepts optional `timezone` (IANA); non-`UTC` values are persisted on the user row. |
+| `POST` | `/api/v1/auth/login` | Login by Discord username (user must be pre-registered via `/login` slash command). Issues a session token. Returns `404` with "User not found. Run /login on Discord first." if the user isn't registered. Accepts optional `timezone` (IANA); non-`UTC` values are persisted on the user row. Response: `token`, `discord_id`, `username`, `timezone`, `is_admin`. |
 | `POST` | `/api/v1/auth/logout` | Invalidate the current bearer token server-side. |
-| `POST` | `/api/v1/auth/discord` | Discord OAuth2 login (code + PKCE). Body `{code, code_verifier, redirect_uri}`. Backend exchanges the code server-side, reads `/users/@me`, and issues a session token. Auto-creates the user on first login (verified `discord_id` + `username`). Response includes `needs_server_join: true` when the user is in none of the configured bot servers — the app should prompt them to join so presence tracking works. `400` if `redirect_uri` is not allowlisted; `401` on bad/expired code; `502` if Discord is unreachable. |
+| `POST` | `/api/v1/auth/discord` | Discord OAuth2 login (code + PKCE). Body `{code, code_verifier, redirect_uri}`. Backend exchanges the code server-side, reads `/users/@me`, and issues a session token. Auto-creates the user on first login (verified `discord_id` + `username`). Response includes `is_admin` and `needs_server_join: true` when the user is in none of the configured bot servers — the app should prompt them to join so presence tracking works. `400` if `redirect_uri` is not allowlisted; `401` on bad/expired code; `502` if Discord is unreachable. |
 
 Tokens expire after `SESSION_TOKEN_EXPIRE_DAYS` of inactivity (sliding window — every authenticated request bumps `expires_at`). On expiry the token row is deleted and subsequent calls return `401`.
 
@@ -41,7 +41,7 @@ Tokens expire after `SESSION_TOKEN_EXPIRE_DAYS` of inactivity (sliding window �
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/v1/profile/me` | Current user's profile (`discord_id`, `username`, `timezone`, notification toggles). |
+| `GET` | `/api/v1/profile/me` | Current user's profile (`discord_id`, `username`, `timezone`, notification toggles, `is_admin`). |
 | `PUT` | `/api/v1/profile/settings` | Update timezone and/or notification toggles (`weekly_report_enabled`, `push_enabled`). Partial update — unset fields are left alone. |
 
 ## Sessions

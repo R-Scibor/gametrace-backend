@@ -16,6 +16,7 @@ def _to_response(user: User) -> ProfileResponse:
         timezone=user.timezone,
         weekly_report_enabled=user.weekly_report_enabled,
         push_enabled=user.push_enabled,
+        is_admin=user.is_admin,
     )
 
 

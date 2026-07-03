@@ -25,6 +25,14 @@ async def test_get_me_returns_defaults(authed_client, user):
     assert body["timezone"] == "UTC"
     assert body["weekly_report_enabled"] is True
     assert body["push_enabled"] is True
+    assert body["is_admin"] is False
+
+
+async def test_get_me_reflects_is_admin_true(admin_client, admin_user):
+    resp = await admin_client.get("/api/v1/profile/me")
+
+    assert resp.status_code == 200
+    assert resp.json()["is_admin"] is True
 
 
 async def test_put_settings_partial_update(authed_client, db, user):

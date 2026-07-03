@@ -11,6 +11,7 @@ class LoginResponse(BaseModel):
     discord_id: str
     username: str
     timezone: str
+    is_admin: bool
     needs_server_join: bool = False
 
 

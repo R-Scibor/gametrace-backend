@@ -52,6 +52,7 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
         discord_id=user.discord_id,
         username=user.username,
         timezone=user.timezone,
+        is_admin=user.is_admin,
     )
 
 
@@ -111,6 +112,7 @@ async def discord_login(payload: DiscordCallbackRequest, db: AsyncSession = Depe
         discord_id=user.discord_id,
         username=user.username,
         timezone=user.timezone,
+        is_admin=user.is_admin,
         needs_server_join=needs_server_join,
     )
 

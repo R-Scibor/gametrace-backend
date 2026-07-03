@@ -16,6 +16,7 @@ async def test_login_success(client, db):
     assert "token" in data
     assert data["username"] == "testuser"
     assert data["discord_id"] == "111111111111111111"
+    assert data["is_admin"] is False
 
 
 async def test_login_updates_timezone(client, db):

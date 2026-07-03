@@ -13,6 +13,7 @@ class ProfileResponse(BaseModel):
     timezone: str
     weekly_report_enabled: bool
     push_enabled: bool
+    is_admin: bool
 
 
 class ProfileSettingsUpdate(BaseModel):
