@@ -138,7 +138,8 @@ Replaces manual `psql` / Celery one-offs documented in [tech-debt.md](tech-debt.
 | `POST /admin/games/{id}/enrich` | Re-queue `enrich_game` Celery task |
 | `POST /admin/games/match` + `POST /admin/games/{id}/igdb-link` | Sync IGDB search; admin picks candidate → set metadata + `ENRICHED` |
 | `POST /admin/games/{id}/aliases` | Add exact `discord_process_name` (Discord format variants) |
-| `POST /admin/games/{id}/merge/{target_id}` | Transactional merge (existing logic) |
+
+`POST /admin/games/{id}/merge/{target_id}` already shipped in [P0](#p0--rbac--apiv1admin-router--shipped) — not part of this sketch.
 
 UI v1 can be minimal — table + action buttons. Overlaps planned mobile [manual game tracking](manual-game-tracking.md) confirm step, but admin is **global** and does not require the caller to have sessions on the game.
 
@@ -171,7 +172,7 @@ Subjective user feedback ("stats look wrong") stays separate from objective serv
 ### Explicitly out of scope (v1)
 
 - Per-user session replay or full remote client log streaming
-- Re-opening public `PUT /games/{id}/cover` or merge for non-admins
+- Re-opening the removed public cover/merge routes for non-admins
 - Per-user server-side cover hosting ([Per-user cover persistence](#per-user-cover-persistence--deferred-frontend-owned))
 
 ## Stats

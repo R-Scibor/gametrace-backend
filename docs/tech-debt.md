@@ -188,7 +188,7 @@ Both candidates scored **1.0** via `_confidence` (and the number guard does not 
 
 4. **IGDB path does not populate `external_api_id`.** Only the Steam fallback sets it. Pure-IGDB matches cannot be stably deduplicated later by ID.
 
-Current mitigation for end users: call `POST /games/match` (returns `IGDBCandidateOut` list with `year` + distinct covers), choose the correct `igdb_id`, `POST /games {igdb_id: ...}`, then `POST /api/v1/admin/games/{wrong}/merge/{correct}` (admin-only) if a bad stub already exists.
+Current mitigation: any authenticated user can call `POST /games/match` (returns `IGDBCandidateOut` list with `year` + distinct covers), choose the correct `igdb_id`, and `POST /games {igdb_id: ...}` to get the right row created. If a bad stub already exists, cleaning it up requires an admin: `POST /api/v1/admin/games/{wrong}/merge/{correct}`.
 
 **Code paths:** `app/services/game_matching.py` (`_igdb_search`, `_igdb_search_candidates`, `_confidence`); `app/tasks/enrichment.py` (`_run_enrichment`); `app/api/v1/endpoints/games.py` (match + create + merge).
 

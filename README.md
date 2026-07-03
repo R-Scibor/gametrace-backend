@@ -159,7 +159,6 @@ docker exec -it gametrace_db psql -U gametrace_user -d gametrace_db \
 
 High-level — see [docs/roadmap.md](docs/roadmap.md) for full context.
 
-- **RBAC on destructive ops** — merge and cover endpoints need admin/owner controls so one user cannot affect another's data.
 - **Pre-release hardening** — request body size cap (nginx), rate-limit on `/voice/transcribe` (per-user, Redis-backed), MIME sniffing on cover + audio uploads.
 - **Voice pipeline robustness** — regex fallback when Vertex AI is unavailable, bring-your-own-key (user-supplied GCP / OpenAI), self-hosted Whisper option.
 - **Timezone-aware weekly reports** — hourly fan-out so each user gets the digest at their local Monday 09:00, not UTC's.
