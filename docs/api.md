@@ -12,10 +12,10 @@ Grouped by code — see endpoint sections below for path-specific detail. Authed
 |---|---|
 | `200` | Successful read or update (`GET`, `PATCH`, `PUT`, `POST /auth/login`, `POST /sessions/{id}/restore`). `GET /games/resolve` also returns `200` with body `null` on miss. `POST /games` returns `200` when the game already exists (deduplication by `igdb_id`). |
 | `201` | `POST /sessions` — manual session created. `POST /games` — new game row created (either mode). `POST /reports` — feedback report stored. |
-| `204` | Successful delete with no body (`POST /auth/logout`, `DELETE /sessions/{id}`, `DELETE /user/preferences/{game_id}`, `DELETE /notifications/register-token`, `POST /games/{id}/merge/{target_id}`). |
-| `400` | Client input rejected — e.g. self-merge (`POST /games/{id}/merge/{target_id}`), empty audio upload (`POST /voice/transcribe`), `redirect_uri` not allowlisted (`POST /auth/discord`). |
+| `204` | Successful delete with no body (`POST /auth/logout`, `DELETE /sessions/{id}`, `DELETE /user/preferences/{game_id}`, `DELETE /notifications/register-token`, `POST /admin/games/{id}/merge/{target_id}`). |
+| `400` | Client input rejected — e.g. self-merge (`POST /admin/games/{id}/merge/{target_id}`), empty audio upload (`POST /voice/transcribe`), `redirect_uri` not allowlisted (`POST /auth/discord`). |
 | `401` | Invalid or expired bearer token (`get_current_user`), or unknown token on `POST /auth/logout`, or bad/expired Discord code (`POST /auth/discord`). |
-| `403` | Bot-managed row — `PATCH` or soft `DELETE` on an `ONGOING` session. Also custom cover upload (`PUT /games/{id}/cover`), which is disabled pending admin controls. Also missing bearer token on any authed route (e.g. `POST /reports`) — `HTTPBearer` raises `403` when the `Authorization` header itself is absent, distinct from `401` for an invalid/expired token. |
+| `403` | Bot-managed row — `PATCH` or soft `DELETE` on an `ONGOING` session. Also custom cover upload (`PUT /games/{id}/cover`), which is disabled pending admin controls. Also a valid but non-admin bearer token on any `/admin/*` route (`require_admin`). Also missing bearer token on any authed route (e.g. `POST /reports`) — `HTTPBearer` raises `403` when the `Authorization` header itself is absent, distinct from `401` for an invalid/expired token. |
 | `404` | Resource not found or not owned by the caller — user not registered (`POST /auth/login`), session/game missing, game missing on preference upsert. Soft-deleting an already-trashed session also returns `404` (same as not found). |
 | `409` | Session time overlap — `POST /sessions`, `PATCH /sessions/{id}`, `POST /sessions/{id}/restore` (body: `{detail: {detail, conflicting_session}}`). |
 | `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone on `PUT /profile/settings` (Pydantic). Blank/whitespace-only or over-4000-char `message`, or a missing `context` field, on `POST /reports` (Pydantic). |
@@ -72,8 +72,9 @@ Session state machine — see the [README session state machine](../README.md#se
 | `POST` | `/api/v1/games/match` | Synchronous IGDB candidate search — no DB write. Body: `{"query": "<string>"}`. Returns `list[IGDBCandidateOut]` (`igdb_id`, `name`, `year\|null`, `cover_url\|null`, `score`). Use when suggest has no usable match; pass the chosen `igdb_id` to `POST /games`. `503` rate-limited; `502` other IGDB error. |
 | `GET` | `/api/v1/games/{id}/sessions` | Paginated session list for a game. `is_ignored` does not apply — same visibility rules as other session reads (soft-deleted and flicker rows excluded). |
 | `GET` | `/api/v1/games/{id}/stats` | Lifetime playtime stats for a single game — `total_seconds` (ONGOING counted live via `now() - start_time`), `session_count`, `first_played`, `last_played`. `404` when the caller has no visible sessions for the game (also covers a non-existent `game_id`). |
-| `POST` | `/api/v1/games/{id}/merge/{target_id}` | Transactional merge — reassigns aliases + sessions + preferences from `id` to `target_id`, deletes the source row. `400` on self-merge, `404` if either game is missing. Returns `204`. |
 | `PUT` | `/api/v1/games/{id}/cover` | **Disabled** — returns `403`, no upload performed. Custom covers mutated the global `Game` row with no per-user scoping or RBAC, so one user could overwrite shared cover art for everyone. Closed pending admin-only controls; see `docs/roadmap.md` → "Game covers". |
+
+Game merging moved behind admin auth — see [Admin](#admin) → `POST /admin/games/{id}/merge/{target_id}`. The old `POST /games/{id}/merge/{target_id}` route no longer exists (`404`).
 
 ### `GET /games` — library list
 
@@ -209,6 +210,20 @@ Search IGDB synchronously and return ranked candidates for `query`. No DB write 
 | `score` | `float` | Ranking confidence score |
 
 Returns `401` without a valid bearer token. Returns `503` when IGDB is rate-limited or the Twitch auth token has expired. Returns `502` on any other IGDB failure (logged server-side).
+
+## Admin
+
+All `/api/v1/admin/*` routes require `require_admin` (`users.is_admin = true`), enforced at router-include time — a new admin endpoint cannot forget the gate.
+
+Auth semantics for these routes:
+- `401` — no bearer token, or an invalid/expired one (same as any other authed route).
+- `403` — a valid bearer token for a user whose `is_admin` is `false`.
+
+Every write is logged via `log_admin_action()` (`app/core/observability.py`) — one structured line per action: `admin_action admin_id=... action=... resource=... before=... after=...`. Plain stdlib logging, no dedicated audit table yet.
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/admin/games/{id}/merge/{target_id}` | Transactional merge — reassigns aliases + sessions + preferences from `id` to `target_id`, deletes the source row. `400` on self-merge, `404` if either game is missing. Returns `204`. Replaces the old public `POST /games/{id}/merge/{target_id}`, which is now `404`. |
 
 ## Stats
 

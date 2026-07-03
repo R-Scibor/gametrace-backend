@@ -1,9 +1,12 @@
+import logging
 from typing import Any
 
 import sentry_sdk
 from sentry_sdk.integrations.celery import CeleryIntegration
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _before_send(event: dict, hint: dict) -> dict:
@@ -41,3 +44,21 @@ def init_sentry(component: str) -> None:
         integrations=integrations,
     )
     sentry_sdk.set_tag("component", component)
+
+
+def log_admin_action(
+    admin_id: str,
+    action: str,
+    resource: str,
+    before: str | None = None,
+    after: str | None = None,
+) -> None:
+    """Structured audit-log line for an admin write. Plain stdlib logging, no Sentry coupling."""
+    logger.info(
+        "admin_action admin_id=%s action=%s resource=%s before=%s after=%s",
+        admin_id,
+        action,
+        resource,
+        before,
+        after,
+    )
