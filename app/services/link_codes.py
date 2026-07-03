@@ -1,0 +1,79 @@
+"""One-time login link codes — issue, redeem, discard (Redis-backed)."""
+import hashlib
+import hmac
+import secrets
+
+from app.core.config import settings
+
+CODE_TTL_SECONDS = 300
+_MAX_COLLISION_RETRIES = 5
+
+
+class LinkCodesNotConfigured(Exception):
+    """Raised when link_code_secret is empty and issue/redeem is attempted."""
+
+
+def code_key(digest: str) -> str:
+    return f"link:code:{digest}"
+
+
+def user_key(discord_id: str) -> str:
+    return f"link:user:{discord_id}"
+
+
+def _require_secret() -> str:
+    secret = settings.link_code_secret
+    if not secret:
+        raise LinkCodesNotConfigured("link_code_secret is not configured")
+    return secret
+
+
+def _code_digest(code: str, secret: str) -> str:
+    return hmac.new(secret.encode(), code.encode(), hashlib.sha256).hexdigest()
+
+
+def _generate_code() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+async def issue_code(r, discord_id: str) -> str:
+    secret = _require_secret()
+    reverse_key = user_key(discord_id)
+    old_code_key = await r.get(reverse_key)
+
+    for _ in range(_MAX_COLLISION_RETRIES):
+        code = _generate_code()
+        digest = _code_digest(code, secret)
+        new_code_key = code_key(digest)
+
+        pipe = r.pipeline()
+        if old_code_key:
+            pipe.delete(old_code_key)
+        pipe.set(new_code_key, discord_id, nx=True, ex=CODE_TTL_SECONDS)
+        if not (await pipe.execute())[-1]:
+            continue
+
+        await r.set(reverse_key, new_code_key, ex=CODE_TTL_SECONDS)
+        return code
+
+    raise RuntimeError("failed to allocate a unique link code after collision retries")
+
+
+async def redeem_code(r, code: str) -> str | None:
+    secret = _require_secret()
+    digest = _code_digest(code, secret)
+    digest_key = code_key(digest)
+    discord_id = await r.getdel(digest_key)
+    if discord_id is None:
+        return None
+    await r.delete(user_key(discord_id))
+    return discord_id
+
+
+async def discard_pending_code(r, discord_id: str) -> int:
+    reverse_key = user_key(discord_id)
+    code_key_name = await r.getdel(reverse_key)
+    if not code_key_name:
+        return 0
+    await r.delete(code_key_name)
+    return 1
