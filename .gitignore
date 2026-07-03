@@ -1,3 +1,6 @@
+# Git worktrees (local feature isolation)
+.worktrees/
+
 # Python
 __pycache__/
 *.py[cod]
