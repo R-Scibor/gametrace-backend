@@ -5,6 +5,7 @@ import secrets
 
 import fakeredis.aioredis
 import pytest
+from starlette.requests import Request
 
 from app.core.config import settings
 from app.services import link_codes
@@ -128,3 +129,86 @@ async def test_discard_removes_code_key(r):
     assert await r.exists(digest_key)
     await link_codes.discard_pending_code(r, _DISCORD_ID)
     assert not await r.exists(digest_key)
+
+
+def _make_request(client_host: str, xff: str | None = None) -> Request:
+    headers: list[tuple[bytes, bytes]] = []
+    if xff is not None:
+        headers.append((b"x-forwarded-for", xff.encode()))
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "path": "/",
+        "headers": headers,
+        "client": (client_host, 12345),
+        "server": ("testserver", 80),
+    }
+    return Request(scope)
+
+
+async def test_tenth_per_ip_failure_locks_that_ip_only(r):
+    locked_ip = "203.0.113.10"
+    fresh_ip = "203.0.113.99"
+
+    for _ in range(link_codes.IP_FAIL_LIMIT - 1):
+        await link_codes.record_failure(r, locked_ip)
+    assert await link_codes.check_lockout(r, locked_ip) is None
+    assert await link_codes.check_lockout(r, fresh_ip) is None
+
+    await link_codes.record_failure(r, locked_ip)
+    assert await link_codes.check_lockout(r, locked_ip) is not None
+    assert await link_codes.check_lockout(r, fresh_ip) is None
+
+
+async def test_hundredth_global_failure_locks_fresh_ip(r):
+    for i in range(link_codes.GLOBAL_FAIL_LIMIT - 1):
+        await link_codes.record_failure(r, f"10.0.0.{i % 254 + 1}")
+
+    fresh_ip = "198.51.100.42"
+    assert await link_codes.check_lockout(r, fresh_ip) is None
+
+    await link_codes.record_failure(r, "10.0.0.200")
+    assert await link_codes.check_lockout(r, fresh_ip) is not None
+
+
+async def test_lockout_retry_after_within_window(r):
+    ip = "203.0.113.50"
+    for _ in range(link_codes.IP_FAIL_LIMIT):
+        await link_codes.record_failure(r, ip)
+
+    retry_after = await link_codes.check_lockout(r, ip)
+    assert retry_after is not None
+    assert 1 <= retry_after <= link_codes.IP_FAIL_WINDOW_SECONDS
+
+
+async def test_expire_set_once_per_window(r):
+    ip = "203.0.113.77"
+    await link_codes.record_failure(r, ip)
+
+    ip_key = link_codes.ip_fail_key(ip)
+    global_key = link_codes.global_fail_key()
+    assert await r.ttl(ip_key) == link_codes.IP_FAIL_WINDOW_SECONDS
+    assert await r.ttl(global_key) == link_codes.GLOBAL_FAIL_WINDOW_SECONDS
+
+    await r.expire(ip_key, 100)
+    await r.expire(global_key, 40)
+
+    await link_codes.record_failure(r, ip)
+    assert await r.ttl(ip_key) == 100
+    assert await r.ttl(global_key) == 40
+
+
+@pytest.mark.parametrize(
+    ("trusted_proxy_ips", "client_host", "xff", "expected"),
+    [
+        ("10.0.0.1", "10.0.0.1", "203.0.113.1, 198.51.100.9", "198.51.100.9"),
+        ("10.0.0.1", "10.0.0.1", None, "10.0.0.1"),
+        ("10.0.0.1", "203.0.113.5", "198.51.100.9", "203.0.113.5"),
+        ("", "203.0.113.5", "198.51.100.9", "203.0.113.5"),
+    ],
+)
+def test_get_client_ip_trust_matrix(monkeypatch, trusted_proxy_ips, client_host, xff, expected):
+    monkeypatch.setattr(settings, "trusted_proxy_ips", trusted_proxy_ips)
+    request = _make_request(client_host, xff)
+    assert link_codes.get_client_ip(request) == expected

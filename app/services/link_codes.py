@@ -3,9 +3,15 @@ import hashlib
 import hmac
 import secrets
 
+from starlette.requests import Request
+
 from app.core.config import settings
 
 CODE_TTL_SECONDS = 300
+IP_FAIL_LIMIT = 10
+IP_FAIL_WINDOW_SECONDS = 900
+GLOBAL_FAIL_LIMIT = 100
+GLOBAL_FAIL_WINDOW_SECONDS = 60
 _MAX_COLLISION_RETRIES = 5
 
 
@@ -19,6 +25,14 @@ def code_key(digest: str) -> str:
 
 def user_key(discord_id: str) -> str:
     return f"link:user:{discord_id}"
+
+
+def ip_fail_key(ip: str) -> str:
+    return f"link:fails:ip:{ip}"
+
+
+def global_fail_key() -> str:
+    return "link:fails:global"
 
 
 def _require_secret() -> str:
@@ -68,6 +82,43 @@ async def redeem_code(r, code: str) -> str | None:
         return None
     await r.delete(user_key(discord_id))
     return discord_id
+
+
+async def check_lockout(r, ip: str) -> int | None:
+    """Return Retry-After seconds when locked out, else None (per-IP then global)."""
+    ip_key = ip_fail_key(ip)
+    ip_count = await r.get(ip_key)
+    if ip_count is not None and int(ip_count) >= IP_FAIL_LIMIT:
+        return max(1, await r.ttl(ip_key))
+
+    global_key = global_fail_key()
+    global_count = await r.get(global_key)
+    if global_count is not None and int(global_count) >= GLOBAL_FAIL_LIMIT:
+        return max(1, await r.ttl(global_key))
+
+    return None
+
+
+async def record_failure(r, ip: str) -> None:
+    ip_key = ip_fail_key(ip)
+    ip_count = await r.incr(ip_key)
+    if ip_count == 1:
+        await r.expire(ip_key, IP_FAIL_WINDOW_SECONDS)
+
+    global_key = global_fail_key()
+    global_count = await r.incr(global_key)
+    if global_count == 1:
+        await r.expire(global_key, GLOBAL_FAIL_WINDOW_SECONDS)
+
+
+def get_client_ip(request: Request) -> str:
+    peer = request.client.host if request.client else ""
+    if peer in settings.trusted_proxy_ip_set:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            return xff.split(",")[-1].strip()
+        return peer
+    return peer
 
 
 async def discard_pending_code(r, discord_id: str) -> int:
