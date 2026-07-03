@@ -1,3 +1,20 @@
+from tests.factories import make_user
+
+
+async def test_make_user_defaults_is_admin_false(db):
+    user = await make_user(db, discord_id="222222222222222222", username="regular")
+
+    assert user.is_admin is False
+
+
+async def test_make_user_is_admin_true(db):
+    user = await make_user(
+        db, discord_id="333333333333333333", username="admin", is_admin=True
+    )
+
+    assert user.is_admin is True
+
+
 async def test_get_me_returns_defaults(authed_client, user):
     resp = await authed_client.get("/api/v1/profile/me")
 

@@ -17,6 +17,7 @@ The root identity table. Keyed on Discord ID (a snowflake — string, not intege
 | `timezone` | `VARCHAR(64)` | IANA tz name. Default `UTC`. Updated on mobile login from device OS, or manually via `PUT /profile/settings`. |
 | `weekly_report_enabled` | `BOOLEAN` | Default `true`. Gates the weekly Celery push. |
 | `push_enabled` | `BOOLEAN` | Default `true`. Master switch for any push notification. |
+| `is_admin` | `BOOLEAN` | Default `false`. Gates admin-only endpoints. Not settable via API — operators promote users manually. |
 | `created_at` | `TIMESTAMPTZ` | |
 
 A user must exist here before the bot will track their presence — the bot is intentionally blind to non-registered users.
