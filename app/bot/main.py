@@ -8,11 +8,11 @@ import logging
 import time
 
 import discord
-import redis.asyncio as redis_async
 from discord import app_commands
 from discord.ext import tasks
 
 from app.core.config import settings
+from app.core.redis import get_redis
 from app.core.database import AsyncSessionLocal
 from app.core.observability import init_sentry
 
@@ -22,20 +22,10 @@ BOT_STARTED_AT_KEY = "bot:started_at"
 BOT_HEARTBEAT_KEY = "bot:heartbeat"
 HEARTBEAT_TTL_SECONDS = 90
 
-_redis: redis_async.Redis | None = None
-
-
-def _get_redis() -> redis_async.Redis:
-    global _redis
-    if _redis is None:
-        _redis = redis_async.from_url(settings.redis_url, decode_responses=True)
-    return _redis
-
-
 @tasks.loop(seconds=30)
 async def _heartbeat_loop() -> None:
     try:
-        await _get_redis().set(BOT_HEARTBEAT_KEY, int(time.time()), ex=HEARTBEAT_TTL_SECONDS)
+        await get_redis().set(BOT_HEARTBEAT_KEY, int(time.time()), ex=HEARTBEAT_TTL_SECONDS)
     except Exception:
         logger.warning("Heartbeat write to Redis failed", exc_info=True)
 
@@ -66,7 +56,7 @@ async def on_ready():
     await tree.sync()
     logger.info("Slash commands synced.")
     try:
-        await _get_redis().set(BOT_STARTED_AT_KEY, int(time.time()))
+        await get_redis().set(BOT_STARTED_AT_KEY, int(time.time()))
     except Exception:
         logger.warning("Failed to write bot:started_at to Redis", exc_info=True)
     if not _heartbeat_loop.is_running():

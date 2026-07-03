@@ -2,10 +2,10 @@ import logging
 import time
 from typing import Any
 
-import redis.asyncio as redis_async
 from fastapi import APIRouter
 
 from app.core.config import settings
+from app.core.redis import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -17,23 +17,13 @@ HEARTBEAT_STALE_AFTER_SECONDS = 90
 
 API_STARTED_AT = int(time.time())
 
-_redis: redis_async.Redis | None = None
-
-
-def _get_redis() -> redis_async.Redis:
-    global _redis
-    if _redis is None:
-        _redis = redis_async.from_url(settings.redis_url, decode_responses=True)
-    return _redis
-
-
 @router.get("")
 async def health() -> dict[str, Any]:
     now = int(time.time())
 
     bot: dict[str, Any]
     try:
-        r = _get_redis()
+        r = get_redis()
         started_at_raw = await r.get(BOT_STARTED_AT_KEY)
         heartbeat_raw = await r.get(BOT_HEARTBEAT_KEY)
 
