@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class LoginRequest(BaseModel):
@@ -13,6 +13,19 @@ class LoginResponse(BaseModel):
     timezone: str
     is_admin: bool
     needs_server_join: bool = False
+
+
+class LinkCodeRequest(BaseModel):
+    code: str
+    timezone: str = Field(default="UTC", max_length=64)
+
+    @field_validator("code")
+    @classmethod
+    def _code_must_be_six_digits(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) != 6 or not v.isdigit():
+            raise ValueError("code must be exactly 6 digits")
+        return v
 
 
 class DiscordCallbackRequest(BaseModel):

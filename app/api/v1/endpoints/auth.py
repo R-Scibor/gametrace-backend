@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -9,9 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.redis import get_redis
 from app.models.user import User, UserAuthToken
-from app.schemas.auth import DiscordCallbackRequest, LoginRequest, LoginResponse
-from app.services import discord_oauth
+from app.schemas.auth import (
+    DiscordCallbackRequest,
+    LinkCodeRequest,
+    LoginRequest,
+    LoginResponse,
+)
+from app.services import discord_oauth, link_codes
 
 router = APIRouter()
 bearer_scheme = HTTPBearer()
@@ -37,6 +43,82 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
         user.timezone = payload.timezone
 
     # Issue a new token
+    token_value = UserAuthToken.generate_token()
+    token = UserAuthToken(
+        user_id=user.discord_id,
+        token=token_value,
+        expires_at=_token_expiry(),
+    )
+    db.add(token)
+    await db.commit()
+    await db.refresh(user)
+
+    return LoginResponse(
+        token=token_value,
+        discord_id=user.discord_id,
+        username=user.username,
+        timezone=user.timezone,
+        is_admin=user.is_admin,
+    )
+
+
+@router.post("/link", response_model=LoginResponse, status_code=status.HTTP_200_OK)
+async def link_login(
+    payload: LinkCodeRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    if not settings.link_code_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Login link codes are not configured",
+        )
+
+    try:
+        r = get_redis()
+        ip = link_codes.get_client_ip(request)
+        retry_after = await link_codes.check_lockout(r, ip)
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many failed attempts",
+                headers={"Retry-After": str(retry_after)},
+            )
+        discord_id = await link_codes.redeem_code(r, payload.code)
+    except link_codes.LinkCodesNotConfigured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Login link codes are not configured",
+        )
+    except (ConnectionError, OSError):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service temporarily unavailable",
+        )
+
+    if discord_id is None:
+        try:
+            await link_codes.record_failure(r, ip)
+        except (ConnectionError, OSError):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Service temporarily unavailable",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired code",
+        )
+
+    user = await db.get(User, discord_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired code",
+        )
+
+    if payload.timezone != "UTC":
+        user.timezone = payload.timezone
+
     token_value = UserAuthToken.generate_token()
     token = UserAuthToken(
         user_id=user.discord_id,
