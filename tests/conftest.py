@@ -16,6 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
+
+# Never transmit test-run errors to the real Sentry project. Must run before
+# `app.main` is imported, since that import calls init_sentry() at module load.
+settings.sentry_dsn = ""
+
 from app.core.database import Base, get_db
 from app.main import app
 from tests.factories import make_token, make_user
