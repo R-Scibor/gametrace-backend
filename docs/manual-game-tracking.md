@@ -87,7 +87,7 @@ Same semantics as a bot stub that failed enrichment, but chosen knowingly. `POST
 ## Operational notes
 
 - **Rate limits** — IGDB search on every "not in my library" submit needs per-user throttling (same class of concern as `/voice/transcribe`).
-- **RBAC** — Creating global `Game` rows is lower risk than merge, but still shared data. Revisit after [Administrative Access (RBAC)](roadmap.md#administrative-access-rbac) if abuse becomes a concern.
+- **RBAC** — Creating global `Game` rows is lower risk than merge, but still shared data. RBAC has shipped (see the Admin section of [api.md](api.md)); revisit whether creation needs the admin gate if abuse becomes a concern.
 - **Voice reuse** — After transcription, if library resolve misses, the app can run the same `match` → pick → session path instead of dead-ending.
 
 ## Related docs
