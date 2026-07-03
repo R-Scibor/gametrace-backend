@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from app.models.game import CoverSource, EnrichmentStatus, UserGamePreference
-from app.models.session import GameSession
+from app.models.session import GameSession, SessionStatus
 
 from tests.factories import (
     dt,
@@ -13,6 +13,49 @@ from tests.factories import (
     make_session,
     make_user,
 )
+
+
+# ── GET /games — playtime + last_played aggregation ──────────────────────────
+
+async def test_response_includes_playtime_and_last_played(authed_client, db, user):
+    game = await make_game(db, "Timed")
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))  # 3600s
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=6), dt(hours_ago=4))  # 7200s
+
+    resp = await authed_client.get("/api/v1/games")
+
+    assert resp.status_code == 200
+    item = next(g for g in resp.json()["items"] if g["primary_name"] == "Timed")
+    assert item["total_seconds"] == 10800
+    assert item["last_played"] is not None
+
+
+async def test_error_session_contributes_zero_playtime_but_sets_last_played(authed_client, db, user):
+    game = await make_game(db, "Errored")
+    await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=2), None,
+        status=SessionStatus.ERROR,
+    )
+
+    resp = await authed_client.get("/api/v1/games")
+
+    item = next(g for g in resp.json()["items"] if g["primary_name"] == "Errored")
+    assert item["total_seconds"] == 0
+    assert item["last_played"] is not None
+
+
+async def test_ongoing_session_counted_live(authed_client, db, user):
+    game = await make_game(db, "Live")
+    await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=2), None,
+        status=SessionStatus.ONGOING,
+    )
+
+    resp = await authed_client.get("/api/v1/games")
+
+    item = next(g for g in resp.json()["items"] if g["primary_name"] == "Live")
+    # ~2h live; allow a wide margin for clock/DB timing
+    assert 7000 <= item["total_seconds"] <= 7400
 
 
 # ── GET /games ────────────────────────────────────────────────────────────────

@@ -2,14 +2,14 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import Integer, and_, case, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.v1.endpoints.auth import get_current_user
 from app.core.database import get_db
 from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, UserGamePreference
-from app.models.session import GameSession
+from app.models.session import GameSession, SessionStatus
 from app.models.user import User
 from app.schemas.game import (
     CoverUpload,
@@ -43,7 +43,12 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _game_response(game: Game, pref: UserGamePreference | None) -> GameResponse:
+def _game_response(
+    game: Game,
+    pref: UserGamePreference | None,
+    total_seconds: int = 0,
+    last_played=None,
+) -> GameResponse:
     return GameResponse(
         id=game.id,
         primary_name=game.primary_name,
@@ -52,6 +57,8 @@ def _game_response(game: Game, pref: UserGamePreference | None) -> GameResponse:
         enrichment_status=game.enrichment_status,
         is_ignored=pref.is_ignored if pref else False,
         is_accepted=pref.is_accepted if pref else None,
+        total_seconds=total_seconds,
+        last_played=last_played,
     )
 
 
@@ -106,6 +113,21 @@ async def list_games(
             base_filters.append(Game.enrichment_status == status)
         visibility_filter = library_visible_filter()
 
+    playtime_expr = func.coalesce(
+        func.sum(
+            case(
+                (GameSession.status == SessionStatus.COMPLETED, GameSession.duration_seconds),
+                (
+                    GameSession.status == SessionStatus.ONGOING,
+                    func.extract("epoch", func.now() - GameSession.start_time),
+                ),
+                else_=0,
+            )
+        ),
+        0,
+    ).cast(Integer).label("total_seconds")
+    last_played_expr = func.max(GameSession.start_time).label("last_played")
+
     count_q = (
         select(func.count(func.distinct(Game.id)))
         .join(GameSession, GameSession.game_id == Game.id)
@@ -115,16 +137,17 @@ async def list_games(
     total = (await db.execute(count_q)).scalar_one()
 
     items_q = (
-        select(Game)
+        select(Game, playtime_expr, last_played_expr)
         .join(GameSession, GameSession.game_id == Game.id)
         .outerjoin(UserGamePreference, pref_join)
         .where(*base_filters, visibility_filter)
-        .distinct()
-        .order_by(Game.primary_name)
+        .group_by(Game.id)
+        .order_by(Game.primary_name.asc(), Game.id.asc())
         .offset(skip)
         .limit(limit)
     )
-    games = (await db.execute(items_q)).scalars().all()
+    rows = (await db.execute(items_q)).all()
+    games = [row[0] for row in rows]
 
     pref_map: dict[int, UserGamePreference] = {}
     if games:
@@ -140,7 +163,15 @@ async def list_games(
 
     return GameListResponse(
         total=total,
-        items=[_game_response(g, pref_map.get(g.id)) for g in games],
+        items=[
+            _game_response(
+                row[0],
+                pref_map.get(row[0].id),
+                total_seconds=row.total_seconds,
+                last_played=row.last_played,
+            )
+            for row in rows
+        ],
     )
 
 

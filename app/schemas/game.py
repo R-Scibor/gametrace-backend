@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -13,6 +14,8 @@ class GameResponse(BaseModel):
     enrichment_status: EnrichmentStatus
     is_ignored: bool = False
     is_accepted: Optional[bool] = None
+    total_seconds: int = 0
+    last_played: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
