@@ -190,7 +190,7 @@ Both candidates scored **1.0** via `_confidence` (and the number guard does not 
 
 Current mitigation: any authenticated user can call `POST /games/match` (returns `IGDBCandidateOut` list with `year` + distinct covers), choose the correct `igdb_id`, and `POST /games {igdb_id: ...}` to get the right row created. If a bad stub already exists, cleaning it up requires an admin: `POST /api/v1/admin/games/{wrong}/merge/{correct}`.
 
-**Code paths:** `app/services/game_matching.py` (`_igdb_search`, `_igdb_search_candidates`, `_confidence`); `app/tasks/enrichment.py` (`_run_enrichment`); `app/api/v1/endpoints/games.py` (match + create + merge).
+**Code paths:** `app/services/game_matching.py` (`_igdb_search`, `_igdb_search_candidates`, `_confidence`); `app/tasks/enrichment.py` (`_run_enrichment`); `app/api/v1/endpoints/games.py` (match + create); `app/api/v1/endpoints/admin.py` (merge).
 
 ---
 
