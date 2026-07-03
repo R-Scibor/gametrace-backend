@@ -66,26 +66,40 @@ async def on_ready():
         await run_self_healing(db, bot.guilds)
 
 
-@tree.command(name="login", description="Zarejestruj się w GameTrace")
-async def login_command(interaction: discord.Interaction) -> None:
-    """Rejestruje użytkownika w bazie GameTrace na podstawie jego Discord ID i username."""
+@tree.command(name="register", description="Zarejestruj się w GameTrace")
+async def register_command(interaction: discord.Interaction) -> None:
     discord_id = str(interaction.user.id)
     username = interaction.user.name
 
     async with AsyncSessionLocal() as db:
-        from app.models.user import User
-        user = await db.get(User, discord_id)
-        if user is None:
-            user = User(discord_id=discord_id, username=username)
-            db.add(user)
-            await db.commit()
-            msg = "Zarejestrowano w GameTrace! Zaloguj się w aplikacji swoją nazwą Discord."
-            logger.info("New user registered via /login: %s (%s)", username, discord_id)
-        else:
-            user.username = username  # sync in case Discord username changed
-            await db.commit()
-            msg = "Już jesteś zarejestrowany. Zaloguj się w aplikacji swoją nazwą Discord."
-            logger.info("Existing user /login: %s (%s)", username, discord_id)
+        from app.bot.commands import register_user
+
+        msg = await register_user(db, discord_id, username)
+
+    await interaction.response.send_message(msg, ephemeral=True)
+
+
+@tree.command(name="login", description="Uzyskaj kod logowania do aplikacji GameTrace")
+async def login_command(interaction: discord.Interaction) -> None:
+    discord_id = str(interaction.user.id)
+    username = interaction.user.name
+
+    async with AsyncSessionLocal() as db:
+        from app.bot.commands import issue_login_code
+
+        msg = await issue_login_code(db, get_redis(), discord_id, username)
+
+    await interaction.response.send_message(msg, ephemeral=True)
+
+
+@tree.command(name="logout", description="Wyloguj się ze wszystkich sesji aplikacji GameTrace")
+async def logout_command(interaction: discord.Interaction) -> None:
+    discord_id = str(interaction.user.id)
+
+    async with AsyncSessionLocal() as db:
+        from app.bot.commands import logout_user
+
+        msg = await logout_user(db, get_redis(), discord_id)
 
     await interaction.response.send_message(msg, ephemeral=True)
 
