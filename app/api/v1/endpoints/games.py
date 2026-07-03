@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import Integer, and_, case, delete, func, or_, select, update
@@ -74,6 +75,11 @@ async def list_games(
     is_ignored: bool | None = Query(default=None),
     in_library: bool | None = Query(default=None),
     q: str | None = Query(default=None),
+    genre: str | None = Query(default=None),
+    theme: str | None = Query(default=None),
+    developer: str | None = Query(default=None),
+    publisher: str | None = Query(default=None),
+    release_decade: str | None = Query(default=None, pattern=r"^\d{3}0s$"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -96,6 +102,18 @@ async def list_games(
     ]
     if q:
         base_filters.append(Game.primary_name.ilike(f"%{q}%"))
+    if genre:
+        base_filters.append(Game.genres.contains([genre]))
+    if theme:
+        base_filters.append(Game.themes.contains([theme]))
+    if developer:
+        base_filters.append(Game.developers.contains([developer]))
+    if publisher:
+        base_filters.append(Game.publishers.contains([publisher]))
+    if release_decade:
+        start_year = int(release_decade[:-1])
+        base_filters.append(Game.first_release_date >= date(start_year, 1, 1))
+        base_filters.append(Game.first_release_date < date(start_year + 10, 1, 1))
 
     if is_ignored is True:
         visibility_filter = ignored_only_filter()

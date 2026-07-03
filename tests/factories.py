@@ -26,8 +26,21 @@ async def make_game(
     db,
     primary_name: str = "Test Game",
     enrichment_status: EnrichmentStatus = EnrichmentStatus.PENDING,
+    genres: list[str] | None = None,
+    themes: list[str] | None = None,
+    developers: list[str] | None = None,
+    publishers: list[str] | None = None,
+    first_release_date=None,
 ) -> Game:
-    game = Game(primary_name=primary_name, enrichment_status=enrichment_status)
+    game = Game(
+        primary_name=primary_name,
+        enrichment_status=enrichment_status,
+        genres=genres or [],
+        themes=themes or [],
+        developers=developers or [],
+        publishers=publishers or [],
+        first_release_date=first_release_date,
+    )
     db.add(game)
     await db.flush()
     return game

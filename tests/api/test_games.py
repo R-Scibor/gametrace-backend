@@ -1,5 +1,5 @@
 import base64
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from sqlalchemy import select
 
 from app.models.game import CoverSource, EnrichmentStatus, UserGamePreference
@@ -56,6 +56,64 @@ async def test_ongoing_session_counted_live(authed_client, db, user):
     item = next(g for g in resp.json()["items"] if g["primary_name"] == "Live")
     # ~2h live; allow a wide margin for clock/DB timing
     assert 7000 <= item["total_seconds"] <= 7400
+
+
+# ── GET /games — facet filters ───────────────────────────────────────────────
+
+async def test_filter_by_developer(authed_client, db, user):
+    fromsoft = await make_game(db, "Elden Ring", developers=["FromSoftware"])
+    valve = await make_game(db, "Half-Life", developers=["Valve"])
+    await make_session(db, user.discord_id, fromsoft.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_session(db, user.discord_id, valve.id, dt(hours_ago=5), dt(hours_ago=4))
+
+    resp = await authed_client.get("/api/v1/games?developer=FromSoftware")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["primary_name"] == "Elden Ring"
+
+
+async def test_filter_by_genre_multi_genre_game_matches(authed_client, db, user):
+    game = await make_game(db, "RPG Shooter", genres=["RPG", "Shooter"])
+    other = await make_game(db, "Pure Puzzle", genres=["Puzzle"])
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_session(db, user.discord_id, other.id, dt(hours_ago=5), dt(hours_ago=4))
+
+    resp = await authed_client.get("/api/v1/games?genre=Shooter")
+
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["primary_name"] == "RPG Shooter"
+
+
+async def test_filter_by_genre_is_case_sensitive(authed_client, db, user):
+    game = await make_game(db, "Caser", genres=["RPG"])
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+
+    resp = await authed_client.get("/api/v1/games?genre=rpg")
+
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 0
+
+
+async def test_filter_by_release_decade(authed_client, db, user):
+    in_2010s = await make_game(db, "Twenty-Fifteen", first_release_date=date(2015, 6, 1))
+    in_2000s = await make_game(db, "Oh-Five", first_release_date=date(2005, 6, 1))
+    no_date = await make_game(db, "Dateless")
+    for g in (in_2010s, in_2000s, no_date):
+        await make_session(db, user.discord_id, g.id, dt(hours_ago=3), dt(hours_ago=2))
+
+    resp = await authed_client.get("/api/v1/games?release_decade=2010s")
+
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["primary_name"] == "Twenty-Fifteen"
+
+
+async def test_invalid_release_decade_rejected(authed_client, db, user):
+    resp = await authed_client.get("/api/v1/games?release_decade=2013s")
+    assert resp.status_code == 422
 
 
 # ── GET /games ────────────────────────────────────────────────────────────────
