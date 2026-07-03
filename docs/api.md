@@ -65,7 +65,7 @@ Session state machine — see the [README session state machine](../README.md#se
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/v1/games` | List games the user has at least one session for. Main library excludes `is_ignored` games and unaccepted `NEEDS_REVIEW` stubs. `?in_library=false` returns the out-of-library tab (ignored ∪ unaccepted `NEEDS_REVIEW`). `?status=NEEDS_REVIEW` returns the Unrecognized inbox (`is_accepted` not true). `?is_ignored=true` returns hidden games only. Optional `?q=<string>` for server-side case-insensitive substring search on `primary_name`. Paginated (`?skip=`/`?limit=`, max 100). Response: `{"total": <int>, "items": [...]}` — each item includes `is_ignored` and `is_accepted`. |
+| `GET` | `/api/v1/games` | List games the user has at least one session for. Main library excludes `is_ignored` games and unaccepted `NEEDS_REVIEW` stubs. `?in_library=false` returns the out-of-library tab (ignored ∪ unaccepted `NEEDS_REVIEW`). `?status=NEEDS_REVIEW` returns the Unrecognized inbox (`is_accepted` not true). `?is_ignored=true` returns hidden games only. Optional `?q=<string>` for server-side case-insensitive substring search on `primary_name`. Filterable by facet — `?genre=`, `?theme=`, `?developer=`, `?publisher=` (exact, case-sensitive), `?release_decade=2010s`. Sortable via `?sort=name\|playtime\|last_played` + `?order=asc\|desc`. Paginated (`?skip=`/`?limit=`, max 100). Response: `{"total": <int>, "items": [...]}` — each item includes `is_ignored`, `is_accepted`, `total_seconds`, and `last_played`. |
 | `POST` | `/api/v1/games` | Create a new global `Game` row or link to an existing one. Two modes (exactly one): **igdb_id mode** — dedupes by `external_api_id` (returns `200` if already known with no IGDB call, else fetches IGDB metadata and creates an `ENRICHED` row → `201`; IGDB miss → `404`; rate-limited → `503`). **Unrecognized mode** (`unrecognized: true` + non-blank `name`) — inserts a `NEEDS_REVIEW` stub with `name` itself stored as a `GameAlias` → `201`. In igdb_id mode, optional `query` is stored as a `GameAlias` for future `/resolve` lookups (ignored in unrecognized mode). Both/neither mode active → `422`. |
 | `GET` | `/api/v1/games/resolve?name=<string>` | Map a free-text name to `{game_id, name}` from the user's library (games with at least one non-soft-deleted session — `ERROR` counts, ignored games still resolve). Exact case-insensitive match on `primary_name`, then on `game_aliases.discord_process_name`. Returns `200` with body `null` on miss. Voice-flow prefill. |
 | `GET` | `/api/v1/games/suggest?q=<string>` | Fuzzy-search the **global** games catalog (all users' games, not restricted to the caller's library). Pre-filters with ILIKE-any-token on `primary_name` and aliases, scores each candidate with `_confidence()` (max across name + aliases), drops score < 0.3, sorts descending, paginates. Returns `{"total": <int>, "items": [<GameSuggestItem>]}` — each item includes `game_id`, `primary_name`, `cover_image_url`, `enrichment_status`, `score`. `422` if `q` is blank or whitespace. |
@@ -77,7 +77,7 @@ Session state machine — see the [README session state machine](../README.md#se
 
 ### `GET /games` — library list
 
-Paginated library for the current user. Only games with at least one visible session (`ERROR` counts; flicker and soft-deleted sessions do not). Main list excludes `is_ignored` games and `NEEDS_REVIEW` stubs the user has not accepted (`is_accepted` not `true`). `?in_library=false` returns the out-of-library union (ignored games + unaccepted `NEEDS_REVIEW` stubs, deduped). `?status=NEEDS_REVIEW` returns the Unrecognized inbox only. `?is_ignored=true` returns hidden games only. Ordered by `primary_name` ascending.
+Paginated library for the current user. Only games with at least one visible session (`ERROR` counts; flicker and soft-deleted sessions do not). Main list excludes `is_ignored` games and `NEEDS_REVIEW` stubs the user has not accepted (`is_accepted` not `true`). `?in_library=false` returns the out-of-library union (ignored games + unaccepted `NEEDS_REVIEW` stubs, deduped). `?status=NEEDS_REVIEW` returns the Unrecognized inbox only. `?is_ignored=true` returns hidden games only. Default order is `primary_name` ascending (`sort=name`); also sortable by `playtime` and `last_played` (see below). Playtime is all-time — this endpoint has no time-window parameter.
 
 **Query parameters**
 
@@ -89,8 +89,17 @@ Paginated library for the current user. Only games with at least one visible ses
 | `in_library` | *(none)* | `false` — out-of-library tab (ignored ∪ unaccepted `NEEDS_REVIEW`). Omit or `true` — main library behaviour. |
 | `is_ignored` | *(none)* | `true` — hidden games only. Takes precedence over `in_library`. Omit or `false` — no extra ignore filter. |
 | `q` | *(none)* | Case-insensitive substring search on `primary_name`. Applied server-side before pagination. |
+| `genre` | *(none)* | Exact, case-sensitive match — games whose `genres` array contains this value |
+| `theme` | *(none)* | Exact, case-sensitive match on `themes` |
+| `developer` | *(none)* | Exact, case-sensitive match on `developers` |
+| `publisher` | *(none)* | Exact, case-sensitive match on `publishers` |
+| `release_decade` | *(none)* | Decade bucket like `2010s` (regex `^\d{3}0s$`; invalid → `422`). Matches `first_release_date` in `[YYYY-01-01, YYYY+10-01-01)`; games with a NULL release date are excluded |
+| `sort` | `name` | `name` \| `playtime` \| `last_played` (invalid → `422`) |
+| `order` | *(per sort)* | `asc` \| `desc`. Defaults: `name`→asc, `playtime`/`last_played`→desc |
 
-`status`, `in_library`, `is_ignored`, and `q` combine (AND). Reset `skip` to `0` when any filter changes.
+All filters combine (AND). Reset `skip` to `0` when any filter or sort changes.
+
+Tapping a stats bar drills into the library: e.g. `?developer=<name>&sort=playtime` or `?genre=<name>&sort=playtime` lists the caller's matching games, most-played first.
 
 **Response — `GameListResponse`**
 
@@ -99,7 +108,9 @@ Paginated library for the current user. Only games with at least one visible ses
 ```
 
 - `total` — count of games matching the current filters across all pages (use for the Library header, not `items.length`).
-- `items` — current page; each row is `GameResponse` (`id`, `primary_name`, `cover_image_url`, `cover_source`, `enrichment_status`, `is_ignored`, `is_accepted`).
+- `items` — current page; each row is `GameResponse` (`id`, `primary_name`, `cover_image_url`, `cover_source`, `enrichment_status`, `is_ignored`, `is_accepted`, `total_seconds`, `last_played`).
+- `total_seconds` — the caller's lifetime playtime for the game (seconds). `COMPLETED` sessions count their `duration_seconds`; the active `ONGOING` session counts live (`now() - start_time`); `ERROR` sessions count `0`. Soft-deleted and flicker sessions excluded.
+- `last_played` — ISO-8601 timestamp of the most recent session `start_time` for the game (`ERROR`/`ONGOING` included), or `null`.
 
 **Breaking change:** Previously returned a bare `GameResponse[]`. Mobile clients must read `items` and `total`.
 
