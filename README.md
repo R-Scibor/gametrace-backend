@@ -133,7 +133,7 @@ Before first run, in the [Discord Developer Portal](https://discord.com/develope
 1. **Bot → Privileged Gateway Intents:** enable `PRESENCE INTENT` and `SERVER MEMBERS INTENT`.
 2. **OAuth2 → URL Generator:** select scopes `bot` **and** `applications.commands` — both are required. Regenerate the invite URL and re-invite the bot if it was previously added without `applications.commands`.
 3. **OAuth2 → Redirects** (mobile "Sign in with Discord"): add every redirect URI the mobile app uses. These must match `DISCORD_OAUTH_REDIRECT_URIS` in `.env` exactly — e.g. `gametrace://oauth`. Custom URL schemes are valid; Discord does not require `https://` for app deep links. If either side is missing or the strings differ, `POST /auth/discord` returns `400` (`redirect_uri not allowed`).
-4. **OAuth2 → Client ID / Client Secret:** copy into `.env` as `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`. The mobile OAuth flow and the bot share this application.
+4. **OAuth2 → Client ID / Client Secret:** copy into `.env` as `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`. The mobile OAuth flow and the bot share this application, but these are **not** the same as `DISCORD_BOT_TOKEN` — the client secret is a separate credential under OAuth2. If it is blank or set to the bot token, `POST /auth/discord` fails with Discord's `invalid_client` and mobile login never completes.
 5. **Server IDs:** copy each guild id where the bot is installed into `DISCORD_GUILD_IDS` (comma-separated). Used to set `needs_server_join` on login — non-members can still authenticate but presence tracking stays empty until they join.
 
 ## Development commands
