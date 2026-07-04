@@ -46,7 +46,7 @@ flower        Celery monitor (port 5555, internal)
 Two login paths are available:
 
 - **Link code login (`POST /auth/link`)** — run `/login` on Discord to get a 6-digit code (valid 5 minutes, single-use). Enter the code in the mobile app. Re-running `/login` invalidates any previous pending code. Use `/logout` on Discord to revoke all app sessions and discard pending codes. Requires `LINK_CODE_SECRET` in `.env`.
-- **Discord OAuth2 (`POST /auth/discord`)** — self-provisioning. The mobile app completes the OAuth2 flow (code + PKCE) and the backend creates the user on first login. Requires `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_OAUTH_REDIRECT_URIS`, and `DISCORD_GUILD_IDS` in `.env`. Non-members of the configured bot servers can still log in but receive `needs_server_join: true` — presence tracking will not produce data until they join.
+- **Discord OAuth2 (`POST /auth/discord`)** — self-provisioning. The mobile app completes the OAuth2 flow (code + PKCE) and the backend creates the user on first login. Requires `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_OAUTH_REDIRECT_URIS`, and `DISCORD_GUILD_IDS` in `.env`, plus matching redirect URIs in the Discord Developer Portal (see below). Non-members of the configured bot servers can still log in but receive `needs_server_join: true` — presence tracking will not produce data until they join.
 
 The legacy username endpoint (`POST /auth/login`) is unchanged but no longer the primary mobile flow. Run `/register` on Discord to opt into presence tracking without logging into the app.
 
@@ -128,10 +128,13 @@ Two optional integrations, both off by default:
 
 ## Discord Developer Portal prerequisites
 
-Before first run, in the [Discord Developer Portal](https://discord.com/developers/applications):
+Before first run, in the [Discord Developer Portal](https://discord.com/developers/applications) (same application as the bot):
 
 1. **Bot → Privileged Gateway Intents:** enable `PRESENCE INTENT` and `SERVER MEMBERS INTENT`.
 2. **OAuth2 → URL Generator:** select scopes `bot` **and** `applications.commands` — both are required. Regenerate the invite URL and re-invite the bot if it was previously added without `applications.commands`.
+3. **OAuth2 → Redirects** (mobile "Sign in with Discord"): add every redirect URI the mobile app uses. These must match `DISCORD_OAUTH_REDIRECT_URIS` in `.env` exactly — e.g. `gametrace://oauth`. Custom URL schemes are valid; Discord does not require `https://` for app deep links. If either side is missing or the strings differ, `POST /auth/discord` returns `400` (`redirect_uri not allowed`).
+4. **OAuth2 → Client ID / Client Secret:** copy into `.env` as `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`. The mobile OAuth flow and the bot share this application.
+5. **Server IDs:** copy each guild id where the bot is installed into `DISCORD_GUILD_IDS` (comma-separated). Used to set `needs_server_join` on login — non-members can still authenticate but presence tracking stays empty until they join.
 
 ## Development commands
 

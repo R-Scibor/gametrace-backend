@@ -30,6 +30,17 @@ Grouped by code — see endpoint sections below for path-specific detail. Authed
 
 Three login paths exist: link code (`/auth/link` — primary mobile flow), legacy username (`/auth/login`), and Discord OAuth2 (`/auth/discord`). OAuth requires the user to be a member of a configured bot server for presence tracking to produce data; non-members can still log in but receive `needs_server_join: true`.
 
+### Discord OAuth2 setup
+
+`POST /auth/discord` exchanges an authorization code (with PKCE) for a session token. The mobile app supplies `redirect_uri` in the request body; the backend allowlists it against `DISCORD_OAUTH_REDIRECT_URIS` before calling Discord's token endpoint. **The same URI must be registered in two places** — missing either causes `400 redirect_uri not allowed`:
+
+| Where | What to set |
+|---|---|
+| `.env` | `DISCORD_OAUTH_REDIRECT_URIS` — comma-separated allowlist (e.g. `gametrace://oauth`). See `example.env`. |
+| Discord Developer Portal → OAuth2 → Redirects | Add every URI from the allowlist verbatim. Custom schemes such as `gametrace://oauth` are valid app deep links. |
+
+Also required in `.env`: `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET` (OAuth2 tab, same application as the bot), and `DISCORD_GUILD_IDS` (comma-separated guild ids for `needs_server_join`). The mobile client must use the **same** `redirect_uri` when opening the Discord authorize URL and when posting to `/auth/discord`.
+
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/v1/auth/link` | Redeem a one-time 6-digit code from the Discord `/login` slash command. Body `{code, timezone?}` — `code` must be exactly 6 digits (whitespace trimmed); `timezone` is optional IANA (default `UTC`, max 64 chars); non-`UTC` values are persisted on the user row. Issues a session token. Response: `token`, `discord_id`, `username`, `timezone`, `is_admin`. `401` if the code is invalid or expired (or the user row is missing — same opaque message). `422` if `code` is not exactly 6 digits. `429` after too many failed attempts (per-IP or global lockout) with `Retry-After` header (seconds). `503` if `LINK_CODE_SECRET` is unset or Redis is unreachable. |
