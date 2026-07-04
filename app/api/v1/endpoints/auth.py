@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -19,6 +20,8 @@ from app.schemas.auth import (
     LoginResponse,
 )
 from app.services import discord_oauth, link_codes
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 bearer_scheme = HTTPBearer()
@@ -153,11 +156,13 @@ async def discord_login(payload: DiscordCallbackRequest, db: AsyncSession = Depe
             )
             identity = await discord_oauth.fetch_identity(client, access_token)
             guilds = await discord_oauth.fetch_guilds(client, access_token)
-    except discord_oauth.DiscordAuthError:
+    except discord_oauth.DiscordAuthError as exc:
+        logger.warning("discord_login: authorization failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Discord authorization failed"
         )
-    except discord_oauth.DiscordUpstreamError:
+    except discord_oauth.DiscordUpstreamError as exc:
+        logger.warning("discord_login: upstream error: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail="Discord unavailable"
         )
