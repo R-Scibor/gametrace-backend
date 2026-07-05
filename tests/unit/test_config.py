@@ -53,6 +53,11 @@ def test_link_code_secret_defaults_empty():
     assert s.link_code_secret == ""
 
 
+def test_dev_login_secret_defaults_empty():
+    s = Settings(**_REQUIRED)
+    assert s.dev_login_secret == ""
+
+
 def test_trusted_proxy_ips_defaults_empty():
     s = Settings(**_REQUIRED)
     assert s.trusted_proxy_ips == ""

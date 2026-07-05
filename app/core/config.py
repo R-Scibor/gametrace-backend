@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     flower_basic_auth: str = ""
 
     link_code_secret: str = ""  # HMAC key for /login codes; empty disables the feature
+    dev_login_secret: str = ""  # shared secret gating name-only /auth/login; empty disables it
     trusted_proxy_ips: str = ""  # comma-separated IPs allowed to set X-Forwarded-For
 
     session_token_expire_days: int = 30

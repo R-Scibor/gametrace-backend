@@ -1,9 +1,10 @@
+import hmac
 import logging
 from datetime import datetime, timedelta, timezone
 
 import httpx
 import redis.exceptions
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -32,7 +33,21 @@ def _token_expiry() -> datetime:
 
 
 @router.post("/login", response_model=LoginResponse, status_code=status.HTTP_200_OK)
-async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(
+    payload: LoginRequest,
+    db: AsyncSession = Depends(get_db),
+    x_dev_login_secret: str | None = Header(default=None),
+):
+    # Name-only login proves no identity — it's a dev shortcut. It only exists when
+    # DEV_LOGIN_SECRET is set, and callers must present it. Both misses look like a
+    # missing route (404) so the endpoint gives nothing away when the API is exposed.
+    secret = settings.dev_login_secret
+    if not secret or not (
+        x_dev_login_secret is not None
+        and hmac.compare_digest(x_dev_login_secret, secret)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
     # User must be pre-registered via Discord /login slash command
     result = await db.execute(select(User).where(User.username == payload.username))
     user = result.scalar_one_or_none()
