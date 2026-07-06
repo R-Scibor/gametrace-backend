@@ -15,11 +15,14 @@ Discord OAuth2 (`POST /auth/discord`, authorization code + PKCE) is live: it ver
 the caller controls the Discord account, auto-provisions the user, and flags
 `needs_server_join` when they're not in the bot's server.
 
-The second path is a planned **OTP handshake**: the Discord `/login` slash command (or
-a bot DM) issues a short-lived one-time code, which the user enters in the app to
-receive a session token — Discord-verified identity without OAuth's redirect/deep-link
-plumbing. Once it lands, the original username-based `POST /auth/login` will be retired
-in favor of these two paths.
+The second path is the **link-code OTP handshake**, also live: the Discord `/login`
+slash command issues a short-lived, single-use code (delivered as an ephemeral reply),
+which the user enters in the app to exchange for a session token via `POST /auth/link`
+— Discord-verified identity without OAuth's redirect/deep-link plumbing.
+
+These two are the user-facing login paths. The username-only `POST /auth/login` remains
+as a development shortcut, disabled by default and enabled only when its dev secret is
+configured; it is not part of the production auth surface.
 
 ### Drop `users.username` uniqueness
 
