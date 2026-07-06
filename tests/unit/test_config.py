@@ -15,6 +15,15 @@ from app.core.config import Settings
 _REQUIRED = dict(database_url="postgresql+asyncpg://x:x@db/db", redis_url="redis://redis:6379/0")
 
 
+@pytest.fixture
+def no_env_overrides(monkeypatch):
+    """Defaults tests must not see the deployment's real config: the api container
+    injects .env via env_file, which otherwise overrides the tested defaults (and
+    prints the actual secrets in assertion output). Pair with _env_file=None."""
+    for var in ("LINK_CODE_SECRET", "DEV_LOGIN_SECRET", "TRUSTED_PROXY_IPS"):
+        monkeypatch.delenv(var, raising=False)
+
+
 def test_gc_margin_equal_to_stitch_window_raises():
     with pytest.raises(ValidationError):
         Settings(
@@ -48,18 +57,18 @@ def test_defaults_satisfy_invariant():
     assert s.session_flicker_gc_margin_seconds > s.session_stitch_window_seconds
 
 
-def test_link_code_secret_defaults_empty():
-    s = Settings(**_REQUIRED)
+def test_link_code_secret_defaults_empty(no_env_overrides):
+    s = Settings(_env_file=None, **_REQUIRED)
     assert s.link_code_secret == ""
 
 
-def test_dev_login_secret_defaults_empty():
-    s = Settings(**_REQUIRED)
+def test_dev_login_secret_defaults_empty(no_env_overrides):
+    s = Settings(_env_file=None, **_REQUIRED)
     assert s.dev_login_secret == ""
 
 
-def test_trusted_proxy_ips_defaults_empty():
-    s = Settings(**_REQUIRED)
+def test_trusted_proxy_ips_defaults_empty(no_env_overrides):
+    s = Settings(_env_file=None, **_REQUIRED)
     assert s.trusted_proxy_ips == ""
 
 
