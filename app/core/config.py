@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     session_token_expire_days: int = 30
     trash_retention_days: int = 7
 
+    # Debounce the per-request last_active / sliding-expiry write in get_current_user:
+    # only persist when last_active is older than this. 0 restores per-request writes.
+    token_activity_debounce_minutes: int = 10
+
     # App-side backstop cap on request body size (Content-Length). The primary
     # control is nginx client_max_body_size at the NPM edge; keep this in sync.
     # 10 MiB covers cover uploads (base64) and voice clips with headroom.

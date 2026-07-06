@@ -185,20 +185,50 @@ async def test_protected_endpoint_expired_token_returns_401(client, db):
 
 
 async def test_token_expiry_extended_on_use(client, db):
+    """A request outside the debounce window slides last_active + expiry forward."""
     user = await make_user(db)
-    token_value = await make_token(db, user.discord_id)
-
-    from sqlalchemy import select
-    from app.core.database import get_db  # noqa — just verifying DB state after request
+    raw = UserAuthToken.generate_token()
+    stale = datetime.now(timezone.utc) - timedelta(hours=1)  # past the debounce window
+    token = UserAuthToken(
+        user_id=user.discord_id,
+        token=UserAuthToken.hash_token(raw),
+        last_active=stale,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    db.add(token)
+    await db.flush()
 
     resp = await client.get(
-        "/api/v1/stats/summary", headers={"Authorization": f"Bearer {token_value}"}
+        "/api/v1/stats/summary", headers={"Authorization": f"Bearer {raw}"}
     )
     assert resp.status_code == 200
 
-    from sqlalchemy import select
-    from app.models.user import UserAuthToken as UAT
-    result = await db.execute(select(UAT).where(UAT.token == UAT.hash_token(token_value)))
-    token_row = result.scalar_one()
-    # expires_at should be roughly 30 days from now (not less)
-    assert token_row.expires_at > datetime.now(timezone.utc) + timedelta(days=29)
+    await db.refresh(token)
+    assert token.last_active > stale
+    assert token.expires_at > datetime.now(timezone.utc) + timedelta(days=29)
+
+
+async def test_token_activity_debounced_within_window(client, db, monkeypatch):
+    """A request within the debounce window skips the last_active/expiry write."""
+    monkeypatch.setattr(settings, "token_activity_debounce_minutes", 10)
+    user = await make_user(db)
+    raw = UserAuthToken.generate_token()
+    recent = datetime.now(timezone.utc) - timedelta(minutes=2)  # inside the window
+    expiry = datetime.now(timezone.utc) + timedelta(days=1)
+    token = UserAuthToken(
+        user_id=user.discord_id,
+        token=UserAuthToken.hash_token(raw),
+        last_active=recent,
+        expires_at=expiry,
+    )
+    db.add(token)
+    await db.flush()
+
+    resp = await client.get(
+        "/api/v1/stats/summary", headers={"Authorization": f"Bearer {raw}"}
+    )
+    assert resp.status_code == 200
+
+    await db.refresh(token)
+    assert token.last_active == recent
+    assert token.expires_at == expiry

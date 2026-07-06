@@ -258,9 +258,14 @@ async def get_current_user(
             await db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
-    token.last_active = now
-    token.expires_at = _token_expiry()
-    await db.commit()
+    # Debounce the write: refreshing last_active + sliding expiry on every request
+    # is one commit per authenticated call. The debounce window is tiny next to the
+    # token lifetime, so active tokens still keep sliding forward.
+    debounce = timedelta(minutes=settings.token_activity_debounce_minutes)
+    if now - token.last_active >= debounce:
+        token.last_active = now
+        token.expires_at = _token_expiry()
+        await db.commit()
 
     user = await db.get(User, token.user_id)
     return user
