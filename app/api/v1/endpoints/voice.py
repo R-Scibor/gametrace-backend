@@ -117,7 +117,7 @@ def _gemini_parse(
         ),
     )
     raw_json = response.text
-    logger.warning("voice/transcribe: gemini raw response=%r", raw_json)
+    logger.debug("voice/transcribe: gemini raw response=%r", raw_json)
     return json.loads(raw_json)
 
 
@@ -183,7 +183,8 @@ async def transcribe_audio(
         except OSError:
             pass
 
-    logger.warning(
+    # Transcript content is user speech — DEBUG only, keep it out of default logs.
+    logger.debug(
         "voice/transcribe: whisper transcript=%r language=%r",
         transcript,
         detected_language,
@@ -195,13 +196,13 @@ async def transcribe_audio(
     library = await fetch_user_library(db, user.discord_id)
     matches = match_candidates(transcript, library)
     candidate_block = build_candidate_block(matches)
-    logger.warning("voice/transcribe: library_size=%d matches=%r", len(library), matches)
+    logger.debug("voice/transcribe: library_size=%d matches=%r", len(library), matches)
 
     try:
         parsed = await asyncio.to_thread(
             _gemini_parse, transcript, datetime_block, detected_language, candidate_block
         )
-        logger.warning("voice/transcribe: parsed=%r", parsed)
+        logger.debug("voice/transcribe: parsed=%r", parsed)
     except Exception as exc:
         logger.exception("Gemini/Vertex AI parsing failed")
         raise HTTPException(status_code=502, detail="Parsing failed.") from exc
