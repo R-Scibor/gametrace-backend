@@ -174,7 +174,9 @@ async def transcribe_audio(
         detected_language: Optional[str] = getattr(transcription, "language", None)
     except Exception as exc:
         logger.exception("Whisper transcription failed")
-        raise HTTPException(status_code=502, detail=f"Transcription failed: {exc}") from exc
+        # Upstream exception text can carry internals (project ids, paths) — keep
+        # the client-facing detail generic; the log line has the real error.
+        raise HTTPException(status_code=502, detail="Transcription failed.") from exc
     finally:
         try:
             os.unlink(tmp_path)
@@ -202,7 +204,7 @@ async def transcribe_audio(
         logger.warning("voice/transcribe: parsed=%r", parsed)
     except Exception as exc:
         logger.exception("Gemini/Vertex AI parsing failed")
-        raise HTTPException(status_code=502, detail=f"Parsing failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail="Parsing failed.") from exc
 
     return TranscribeResponse(
         game=parsed.get("game"),
