@@ -65,7 +65,7 @@ async def login(
     token_value = UserAuthToken.generate_token()
     token = UserAuthToken(
         user_id=user.discord_id,
-        token=token_value,
+        token=UserAuthToken.hash_token(token_value),
         expires_at=_token_expiry(),
     )
     db.add(token)
@@ -141,7 +141,7 @@ async def link_login(
     token_value = UserAuthToken.generate_token()
     token = UserAuthToken(
         user_id=user.discord_id,
-        token=token_value,
+        token=UserAuthToken.hash_token(token_value),
         expires_at=_token_expiry(),
     )
     db.add(token)
@@ -197,7 +197,9 @@ async def discord_login(payload: DiscordCallbackRequest, db: AsyncSession = Depe
 
     token_value = UserAuthToken.generate_token()
     token = UserAuthToken(
-        user_id=discord_id, token=token_value, expires_at=_token_expiry()
+        user_id=discord_id,
+        token=UserAuthToken.hash_token(token_value),
+        expires_at=_token_expiry(),
     )
     db.add(token)
     try:
@@ -226,7 +228,9 @@ async def logout(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(UserAuthToken).where(UserAuthToken.token == credentials.credentials)
+        select(UserAuthToken).where(
+            UserAuthToken.token == UserAuthToken.hash_token(credentials.credentials)
+        )
     )
     token = result.scalar_one_or_none()
     if token is None:
@@ -241,7 +245,9 @@ async def get_current_user(
 ) -> User:
     """Dependency — resolves Bearer token to a User, refreshes last_active, raises 401 if invalid/expired."""
     result = await db.execute(
-        select(UserAuthToken).where(UserAuthToken.token == credentials.credentials)
+        select(UserAuthToken).where(
+            UserAuthToken.token == UserAuthToken.hash_token(credentials.credentials)
+        )
     )
     token = result.scalar_one_or_none()
 

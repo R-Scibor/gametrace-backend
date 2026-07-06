@@ -31,6 +31,38 @@ async def test_login_success(client, db, dev_login_enabled):
     assert data["is_admin"] is False
 
 
+async def test_login_persists_token_hashed(client, db, dev_login_enabled):
+    """The raw token is returned to the client but only its SHA-256 is stored."""
+    await make_user(db)
+
+    resp = await client.post(
+        "/api/v1/auth/login", json={"username": "testuser"}, headers=DEV_HEADERS
+    )
+    assert resp.status_code == 200
+    raw = resp.json()["token"]
+
+    from sqlalchemy import select
+
+    row = (await db.execute(select(UserAuthToken))).scalar_one()
+    assert row.token != raw
+    assert row.token == UserAuthToken.hash_token(raw)
+
+
+async def test_login_token_authenticates(client, db, dev_login_enabled):
+    """A raw token from login authenticates a protected endpoint — create/lookup hashing agree."""
+    await make_user(db)
+
+    login = await client.post(
+        "/api/v1/auth/login", json={"username": "testuser"}, headers=DEV_HEADERS
+    )
+    raw = login.json()["token"]
+
+    resp = await client.get(
+        "/api/v1/stats/summary", headers={"Authorization": f"Bearer {raw}"}
+    )
+    assert resp.status_code == 200
+
+
 async def test_login_updates_timezone(client, db, dev_login_enabled):
     await make_user(db)
 
@@ -136,16 +168,17 @@ async def test_protected_endpoint_bad_token_returns_401(client):
 
 async def test_protected_endpoint_expired_token_returns_401(client, db):
     user = await make_user(db)
+    raw = UserAuthToken.generate_token()
     expired = UserAuthToken(
         user_id=user.discord_id,
-        token=UserAuthToken.generate_token(),
+        token=UserAuthToken.hash_token(raw),
         expires_at=datetime.now(timezone.utc) - timedelta(days=1),
     )
     db.add(expired)
     await db.flush()
 
     resp = await client.get(
-        "/api/v1/stats/summary", headers={"Authorization": f"Bearer {expired.token}"}
+        "/api/v1/stats/summary", headers={"Authorization": f"Bearer {raw}"}
     )
 
     assert resp.status_code == 401
@@ -165,7 +198,7 @@ async def test_token_expiry_extended_on_use(client, db):
 
     from sqlalchemy import select
     from app.models.user import UserAuthToken as UAT
-    result = await db.execute(select(UAT).where(UAT.token == token_value))
+    result = await db.execute(select(UAT).where(UAT.token == UAT.hash_token(token_value)))
     token_row = result.scalar_one()
     # expires_at should be roughly 30 days from now (not less)
     assert token_row.expires_at > datetime.now(timezone.utc) + timedelta(days=29)

@@ -1,3 +1,4 @@
+import hashlib
 import secrets
 from datetime import datetime, timezone
 
@@ -48,7 +49,15 @@ class UserAuthToken(Base):
 
     @staticmethod
     def generate_token() -> str:
+        """Return a new raw token to hand to the client; never stored as-is."""
         return secrets.token_hex(32)
+
+    @staticmethod
+    def hash_token(raw: str) -> str:
+        """SHA-256 hex of a raw token — the value stored in and looked up from the
+        `token` column, so a DB dump never exposes usable session tokens. The token
+        is high-entropy (256-bit), so an unsalted digest is sufficient here."""
+        return hashlib.sha256(raw.encode()).hexdigest()
 
 
 class UserDevice(Base):

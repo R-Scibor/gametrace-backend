@@ -89,10 +89,11 @@ async def make_session(
 
 
 async def make_token(db, user_id: str) -> str:
+    """Issue a token like production does: store the hash, return the raw value."""
     token_value = UserAuthToken.generate_token()
     token = UserAuthToken(
         user_id=user_id,
-        token=token_value,
+        token=UserAuthToken.hash_token(token_value),
         expires_at=datetime.now(timezone.utc) + timedelta(days=30),
     )
     db.add(token)
