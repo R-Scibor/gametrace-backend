@@ -206,6 +206,17 @@ async def test_expire_set_once_per_window(r):
         ("10.0.0.1", "10.0.0.1", None, "10.0.0.1"),
         ("10.0.0.1", "203.0.113.5", "198.51.100.9", "203.0.113.5"),
         ("", "203.0.113.5", "198.51.100.9", "203.0.113.5"),
+        # Trusted internal hops appended to XFF (e.g. cloudflared behind NPM)
+        # are skipped right-to-left; the first untrusted entry is the client.
+        (
+            "10.0.0.1,172.18.0.5",
+            "10.0.0.1",
+            "6.6.6.6, 203.0.113.1, 172.18.0.5",
+            "203.0.113.1",
+        ),
+        ("10.0.0.1,172.18.0.5", "10.0.0.1", "203.0.113.1,172.18.0.5", "203.0.113.1"),
+        # Every XFF entry trusted → fall back to the peer address.
+        ("10.0.0.1,172.18.0.5", "10.0.0.1", "172.18.0.5, 10.0.0.1", "10.0.0.1"),
     ],
 )
 def test_get_client_ip_trust_matrix(monkeypatch, trusted_proxy_ips, client_host, xff, expected):

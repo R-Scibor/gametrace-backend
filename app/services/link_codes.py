@@ -113,10 +113,17 @@ async def record_failure(r, ip: str) -> None:
 
 def get_client_ip(request: Request) -> str:
     peer = request.client.host if request.client else ""
-    if peer in settings.trusted_proxy_ip_set:
+    trusted = settings.trusted_proxy_ip_set
+    if peer in trusted:
         xff = request.headers.get("x-forwarded-for")
         if xff:
-            return xff.split(",")[-1].strip()
+            # Walk right-to-left past trusted internal hops (each proxy appends
+            # its peer); the first untrusted entry is the real client. Entries
+            # further left are client-supplied and spoofable — never use them.
+            for entry in reversed(xff.split(",")):
+                ip = entry.strip()
+                if ip and ip not in trusted:
+                    return ip
         return peer
     return peer
 
