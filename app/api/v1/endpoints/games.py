@@ -44,6 +44,29 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _playtime_expr():
+    """Lifetime seconds for the joined GameSession rows: COMPLETED durations +
+    ONGOING counted live, else 0. Shared by the library list and single-game
+    fetch so a game's playtime is identical in both."""
+    return func.coalesce(
+        func.sum(
+            case(
+                (GameSession.status == SessionStatus.COMPLETED, GameSession.duration_seconds),
+                (
+                    GameSession.status == SessionStatus.ONGOING,
+                    func.extract("epoch", func.now() - GameSession.start_time),
+                ),
+                else_=0,
+            )
+        ),
+        0,
+    ).cast(Integer).label("total_seconds")
+
+
+def _last_played_expr():
+    return func.max(GameSession.start_time).label("last_played")
+
+
 def _game_response(
     game: Game,
     pref: UserGamePreference | None,
@@ -135,20 +158,8 @@ async def list_games(
             base_filters.append(Game.enrichment_status == status)
         visibility_filter = library_visible_filter()
 
-    playtime_expr = func.coalesce(
-        func.sum(
-            case(
-                (GameSession.status == SessionStatus.COMPLETED, GameSession.duration_seconds),
-                (
-                    GameSession.status == SessionStatus.ONGOING,
-                    func.extract("epoch", func.now() - GameSession.start_time),
-                ),
-                else_=0,
-            )
-        ),
-        0,
-    ).cast(Integer).label("total_seconds")
-    last_played_expr = func.max(GameSession.start_time).label("last_played")
+    playtime_expr = _playtime_expr()
+    last_played_expr = _last_played_expr()
 
     descending = (order == "desc") if order is not None else (sort != "name")
     if sort == "playtime":
@@ -536,3 +547,51 @@ async def get_game_stats(
     if stats is None:
         raise HTTPException(status_code=404, detail="Game not found")
     return stats
+
+
+# ---------------------------------------------------------------------------
+# GET /{game_id}
+# ---------------------------------------------------------------------------
+
+@router.get("/{game_id}", response_model=GameResponse)
+async def get_game(
+    game_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Single game by id, same shape as GET /games list items.
+
+    Access is session-derived: 404 unless the caller has at least one visible
+    session for the game (also covers a non-existent id). Deliberately does NOT
+    apply is_ignored / library-visibility filters — the caller navigated here by
+    id, so an ignored or NEEDS_REVIEW game still resolves (mirrors /{id}/stats).
+    total_seconds/last_played match the library card (COMPLETED + ONGOING-live).
+    """
+    row = (
+        await db.execute(
+            select(Game, _playtime_expr(), _last_played_expr())
+            .join(GameSession, GameSession.game_id == Game.id)
+            .where(
+                GameSession.user_id == user.discord_id,
+                GameSession.game_id == game_id,
+                *visible_session(),
+            )
+            .group_by(Game.id)
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    pref = (
+        await db.execute(
+            select(UserGamePreference).where(
+                UserGamePreference.user_id == user.discord_id,
+                UserGamePreference.game_id == game_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    return _game_response(
+        row[0], pref, total_seconds=row.total_seconds, last_played=row.last_played
+    )
