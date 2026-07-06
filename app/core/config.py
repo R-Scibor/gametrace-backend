@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     session_token_expire_days: int = 30
     trash_retention_days: int = 7
 
+    # App-side backstop cap on request body size (Content-Length). The primary
+    # control is nginx client_max_body_size at the NPM edge; keep this in sync.
+    # 10 MiB covers cover uploads (base64) and voice clips with headroom.
+    max_request_body_bytes: int = 10 * 1024 * 1024
+
     # How long a presence dropout can be (seconds) and still count as continuous play.
     session_stitch_window_seconds: int = 180
     # Sessions shorter than this (seconds) are treated as junk flickers.
