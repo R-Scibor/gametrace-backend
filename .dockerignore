@@ -1,0 +1,27 @@
+# The Dockerfile does `COPY . .` — everything not listed here ends up inside
+# the image. Secrets and private files must never be baked in: runtime config
+# arrives via env_file and the read-only credential mounts in docker-compose.yml.
+.env
+.env.*
+credentials/
+.git/
+.gitignore
+.github/
+.claude/
+.mcp.json
+.superpowers/
+CLAUDE.local.md
+docs/
+tests/
+covers/
+scripts/
+.pytest_cache/
+__pycache__/
+*.pyc
+.dockerignore
+Dockerfile
+docker-compose.yml
+example.env
+README.md
+LICENSE
+pytest.ini
