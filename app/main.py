@@ -12,7 +12,15 @@ COVERS_DIR = os.environ.get("COVERS_DIR", "/app/covers")
 
 init_sentry("api")
 
-app = FastAPI(title="GameTrace API", version="1.0.0")
+# Swagger/ReDoc/openapi.json document every route (including the dev-login
+# header, defeating its 404 masking) — keep them off on exposed deployments.
+app = FastAPI(
+    title="GameTrace API",
+    version="1.0.0",
+    docs_url="/docs" if settings.enable_api_docs else None,
+    redoc_url="/redoc" if settings.enable_api_docs else None,
+    openapi_url="/openapi.json" if settings.enable_api_docs else None,
+)
 
 app.include_router(api_router, prefix="/api/v1")
 

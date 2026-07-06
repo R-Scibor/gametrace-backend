@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     dev_login_secret: str = ""  # shared secret gating name-only /auth/login; empty disables it
     trusted_proxy_ips: str = ""  # comma-separated IPs allowed to set X-Forwarded-For
 
+    # Expose Swagger UI / ReDoc / openapi.json. Turn off when the API faces the
+    # internet: the schema documents every route (including the dev-login header,
+    # defeating its 404 masking).
+    enable_api_docs: bool = True
+
     session_token_expire_days: int = 30
     trash_retention_days: int = 7
 
