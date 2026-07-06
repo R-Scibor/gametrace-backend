@@ -30,6 +30,7 @@ from app.api.v1.endpoints.auth import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
+from app.services.upload_validation import looks_like_audio
 from app.services.voice_context import (
     build_candidate_block,
     build_datetime_block,
@@ -144,6 +145,12 @@ async def transcribe_audio(
     audio_bytes = await file.read()
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    # Reject obvious non-audio before paying for the Whisper request.
+    if not looks_like_audio(audio_bytes):
+        raise HTTPException(
+            status_code=422, detail="Uploaded file is not a recognized audio format."
+        )
 
     filename = file.filename or "audio.m4a"
     suffix = "." + filename.rsplit(".", 1)[-1] if "." in filename else ".m4a"

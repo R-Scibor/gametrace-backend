@@ -12,6 +12,7 @@ from app.models.game import CoverSource, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession
 from app.models.user import User
 from app.schemas.game import CoverUpload, GameResponse
+from app.services.upload_validation import sniff_image_extension
 
 router = APIRouter()
 
@@ -119,6 +120,13 @@ async def upload_cover(
         image_bytes = base64.b64decode(body.image_base64, validate=True)
     except Exception:
         raise HTTPException(status_code=422, detail="Malformed base64 image data.")
+
+    # Second layer over the extension allowlist: the bytes must actually be an
+    # image, so a mislabeled/polyglot file can't be stored and served same-origin.
+    if sniff_image_extension(image_bytes) is None:
+        raise HTTPException(
+            status_code=422, detail="Uploaded data is not a supported image (jpeg/png/webp)."
+        )
 
     game = await db.get(Game, game_id)
     if game is None:

@@ -10,6 +10,10 @@ to test the stripping logic inside the function itself.
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+# Minimal bytes that pass the audio magic-byte check (see upload_validation).
+WAV_BYTES = b"RIFF\x00\x00\x00\x00WAVEfmt "
+
+
 def _voice_settings(openai_key: str = "test-key", gcp_project: str = "test-project"):
     s = MagicMock()
     s.openai_api_key = openai_key
@@ -44,7 +48,7 @@ async def test_transcribe_happy_path(authed_client):
 
         resp = await authed_client.post(
             "/api/v1/voice/transcribe",
-            files={"file": ("session.m4a", b"fake_audio_data", "audio/m4a")},
+            files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
         )
 
     assert resp.status_code == 200
@@ -74,7 +78,7 @@ async def test_partial_fields_preserved(authed_client):
 
         resp = await authed_client.post(
             "/api/v1/voice/transcribe",
-            files={"file": ("session.m4a", b"data", "audio/m4a")},
+            files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
         )
 
     assert resp.status_code == 200
@@ -97,7 +101,7 @@ async def test_gemini_failure_returns_502(authed_client):
 
         resp = await authed_client.post(
             "/api/v1/voice/transcribe",
-            files={"file": ("session.m4a", b"data", "audio/m4a")},
+            files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
         )
 
     assert resp.status_code == 502
@@ -116,7 +120,7 @@ async def test_whisper_failure_returns_502(authed_client):
 
         resp = await authed_client.post(
             "/api/v1/voice/transcribe",
-            files={"file": ("session.m4a", b"data", "audio/m4a")},
+            files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
         )
 
     assert resp.status_code == 502
@@ -140,7 +144,7 @@ async def test_missing_openai_key_returns_503(authed_client):
     with patch("app.api.v1.endpoints.voice.settings", _voice_settings(openai_key="")):
         resp = await authed_client.post(
             "/api/v1/voice/transcribe",
-            files={"file": ("session.m4a", b"data", "audio/m4a")},
+            files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
         )
 
     assert resp.status_code == 503
@@ -150,7 +154,21 @@ async def test_missing_gcp_project_returns_503(authed_client):
     with patch("app.api.v1.endpoints.voice.settings", _voice_settings(gcp_project="")):
         resp = await authed_client.post(
             "/api/v1/voice/transcribe",
-            files={"file": ("session.m4a", b"data", "audio/m4a")},
+            files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
         )
 
     assert resp.status_code == 503
+
+
+async def test_non_audio_file_returns_422(authed_client):
+    """A file whose bytes aren't audio is rejected before the paid Whisper call."""
+    mock = _mock_openai("should not be called")
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
+         patch("app.api.v1.endpoints.voice.AsyncOpenAI", return_value=mock):
+        resp = await authed_client.post(
+            "/api/v1/voice/transcribe",
+            files={"file": ("evil.m4a", b"<html>not audio</html>", "audio/m4a")},
+        )
+
+    assert resp.status_code == 422
+    mock.audio.transcriptions.create.assert_not_called()

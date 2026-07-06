@@ -13,7 +13,8 @@ from tests.factories import (
     make_session,
 )
 
-TINY_IMAGE_B64 = base64.b64encode(b"fake_image_bytes").decode()
+# Minimal byte strings that pass magic-byte sniffing (see upload_validation).
+TINY_IMAGE_B64 = base64.b64encode(b"\xff\xd8\xff\xe0" + b"\x00" * 16).decode()  # JPEG
 
 
 # ── Auth gate ─────────────────────────────────────────────────────────────────
@@ -238,7 +239,7 @@ async def test_cover_upload_updates_existing_custom_cover(admin_client, db, admi
     )
     assert first.status_code == 200
 
-    new_b64 = base64.b64encode(b"different_bytes").decode()
+    new_b64 = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()  # PNG
     with caplog.at_level(logging.INFO, logger="app.core.observability"):
         second = await admin_client.put(
             f"/api/v1/admin/games/{game.id}/cover",
@@ -256,3 +257,17 @@ async def test_cover_upload_updates_existing_custom_cover(admin_client, db, admi
     assert "action=upload_cover" in record.message
     assert f"before=cover_image_url=/covers/{game.id}.jpg cover_source=CUSTOM" in record.message
     assert f"after=cover_image_url=/covers/{game.id}.png cover_source=CUSTOM" in record.message
+
+
+async def test_cover_upload_non_image_bytes_returns_422(admin_client, db, admin_user, tmp_path, monkeypatch):
+    """Bytes that aren't a real image are rejected even with an allowed extension."""
+    monkeypatch.setenv("COVERS_DIR", str(tmp_path))
+    game = await make_game(db)
+
+    not_image = base64.b64encode(b"this is definitely not an image").decode()
+    resp = await admin_client.put(
+        f"/api/v1/admin/games/{game.id}/cover",
+        json={"image_base64": not_image, "extension": "jpg"},
+    )
+
+    assert resp.status_code == 422
