@@ -1,3 +1,5 @@
+from ipaddress import IPv4Network, IPv6Network, ip_network
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -31,7 +33,10 @@ class Settings(BaseSettings):
 
     link_code_secret: str = ""  # HMAC key for /login codes; empty disables the feature
     dev_login_secret: str = ""  # shared secret gating name-only /auth/login; empty disables it
-    trusted_proxy_ips: str = ""  # comma-separated IPs allowed to set X-Forwarded-For
+    # Comma-separated IPs or CIDR blocks allowed to set X-Forwarded-For. Docker
+    # bridge addresses are dynamic, so a range (e.g. 172.16.0.0/12) survives
+    # re-ups where an exact container IP would silently stop matching.
+    trusted_proxy_ips: str = ""
 
     # Expose Swagger UI / ReDoc / openapi.json. Turn off when the API faces the
     # internet: the schema documents every route (including the dev-login header,
@@ -70,8 +75,19 @@ class Settings(BaseSettings):
         return {g.strip() for g in self.discord_guild_ids.split(",") if g.strip()}
 
     @property
-    def trusted_proxy_ip_set(self) -> set[str]:
-        return {ip.strip() for ip in self.trusted_proxy_ips.split(",") if ip.strip()}
+    def trusted_proxy_networks(self) -> tuple[IPv4Network | IPv6Network, ...]:
+        return tuple(
+            ip_network(entry.strip(), strict=False)
+            for entry in self.trusted_proxy_ips.split(",")
+            if entry.strip()
+        )
+
+    @model_validator(mode="after")
+    def _trusted_proxy_ips_must_parse(self) -> "Settings":
+        # Malformed entries must fail at boot, not silently untrust the proxy
+        # at request time (which would collapse per-IP lockouts into one bucket).
+        self.trusted_proxy_networks
+        return self
 
     @model_validator(mode="after")
     def _gc_margin_exceeds_stitch_window(self) -> "Settings":

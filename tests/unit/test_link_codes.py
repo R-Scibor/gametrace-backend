@@ -217,6 +217,17 @@ async def test_expire_set_once_per_window(r):
         ("10.0.0.1,172.18.0.5", "10.0.0.1", "203.0.113.1,172.18.0.5", "203.0.113.1"),
         # Every XFF entry trusted → fall back to the peer address.
         ("10.0.0.1,172.18.0.5", "10.0.0.1", "172.18.0.5, 10.0.0.1", "10.0.0.1"),
+        # CIDR block covers the peer: docker bridge IPs are dynamic, so trust
+        # the private range instead of an exact address.
+        ("172.16.0.0/12", "172.18.0.5", "203.0.113.1", "203.0.113.1"),
+        # Peer outside the CIDR block is not a trusted proxy — XFF ignored.
+        ("172.16.0.0/12", "192.168.1.5", "203.0.113.1", "192.168.1.5"),
+        # Internal XFF hops inside the CIDR block are skipped right-to-left.
+        ("172.16.0.0/12", "172.18.0.5", "203.0.113.1, 172.19.0.2", "203.0.113.1"),
+        # Plain IP + CIDR mix.
+        ("10.0.0.1,172.16.0.0/12", "10.0.0.1", "203.0.113.1, 172.18.0.5", "203.0.113.1"),
+        # Garbage XFF entry from a client never parses as trusted — returned as-is.
+        ("172.16.0.0/12", "172.18.0.5", "not-an-ip", "not-an-ip"),
     ],
 )
 def test_get_client_ip_trust_matrix(monkeypatch, trusted_proxy_ips, client_host, xff, expected):

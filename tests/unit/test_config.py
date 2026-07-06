@@ -6,6 +6,8 @@ Contracts:
      raises pydantic.ValidationError (invariant: GC margin must exceed stitch window).
   2. Constructing Settings with a valid margin (margin > window) succeeds.
 """
+from ipaddress import ip_network
+
 import pytest
 from pydantic import ValidationError
 
@@ -72,16 +74,36 @@ def test_trusted_proxy_ips_defaults_empty(no_env_overrides):
     assert s.trusted_proxy_ips == ""
 
 
-def test_trusted_proxy_ip_set_splits_and_strips():
+def test_trusted_proxy_networks_parses_plain_ips_and_strips():
     s = Settings(**_REQUIRED, trusted_proxy_ips="10.0.0.1, 10.0.0.2 , 10.0.0.3")
-    assert s.trusted_proxy_ip_set == {"10.0.0.1", "10.0.0.2", "10.0.0.3"}
+    assert set(s.trusted_proxy_networks) == {
+        ip_network("10.0.0.1/32"),
+        ip_network("10.0.0.2/32"),
+        ip_network("10.0.0.3/32"),
+    }
 
 
-def test_trusted_proxy_ip_set_ignores_blanks():
+def test_trusted_proxy_networks_parses_cidr_blocks():
+    s = Settings(**_REQUIRED, trusted_proxy_ips="172.16.0.0/12, 10.0.0.1")
+    assert set(s.trusted_proxy_networks) == {
+        ip_network("172.16.0.0/12"),
+        ip_network("10.0.0.1/32"),
+    }
+
+
+def test_trusted_proxy_networks_ignores_blanks():
     s = Settings(**_REQUIRED, trusted_proxy_ips="10.0.0.1,,  ,10.0.0.2")
-    assert s.trusted_proxy_ip_set == {"10.0.0.1", "10.0.0.2"}
+    assert set(s.trusted_proxy_networks) == {
+        ip_network("10.0.0.1/32"),
+        ip_network("10.0.0.2/32"),
+    }
 
 
-def test_empty_trusted_proxy_ips_yields_empty_set():
+def test_empty_trusted_proxy_ips_yields_no_networks():
     s = Settings(**_REQUIRED, trusted_proxy_ips="")
-    assert s.trusted_proxy_ip_set == set()
+    assert s.trusted_proxy_networks == ()
+
+
+def test_malformed_trusted_proxy_entry_raises_at_construction():
+    with pytest.raises(ValidationError):
+        Settings(**_REQUIRED, trusted_proxy_ips="10.0.0.1, not-an-ip")

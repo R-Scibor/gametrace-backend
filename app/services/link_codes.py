@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import secrets
+from ipaddress import ip_address
 
 from starlette.requests import Request
 
@@ -111,10 +112,18 @@ async def record_failure(r, ip: str) -> None:
         await r.expire(global_key, GLOBAL_FAIL_WINDOW_SECONDS)
 
 
+def _is_trusted_proxy(ip: str) -> bool:
+    try:
+        addr = ip_address(ip)
+    except ValueError:
+        # Not an IP at all (client-forged XFF junk) — never a trusted hop.
+        return False
+    return any(addr in net for net in settings.trusted_proxy_networks)
+
+
 def get_client_ip(request: Request) -> str:
     peer = request.client.host if request.client else ""
-    trusted = settings.trusted_proxy_ip_set
-    if peer in trusted:
+    if _is_trusted_proxy(peer):
         xff = request.headers.get("x-forwarded-for")
         if xff:
             # Walk right-to-left past trusted internal hops (each proxy appends
@@ -122,7 +131,7 @@ def get_client_ip(request: Request) -> str:
             # further left are client-supplied and spoofable — never use them.
             for entry in reversed(xff.split(",")):
                 ip = entry.strip()
-                if ip and ip not in trusted:
+                if ip and not _is_trusted_proxy(ip):
                     return ip
         return peer
     return peer
