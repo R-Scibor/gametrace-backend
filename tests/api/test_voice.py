@@ -10,6 +10,10 @@ to test the stripping logic inside the function itself.
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from tests.factories import make_token
+
 # Minimal bytes that pass the audio magic-byte check (see upload_validation).
 WAV_BYTES = b"RIFF\x00\x00\x00\x00WAVEfmt "
 
@@ -172,3 +176,68 @@ async def test_non_audio_file_returns_422(authed_client):
 
     assert resp.status_code == 422
     mock.audio.transcriptions.create.assert_not_called()
+
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def rate_limit_enabled():
+    """Enable the limiter for one test. authed_client mints a fresh random token
+    per test, so each test gets its own limiter bucket — no reset needed."""
+    from app.main import app
+    limiter = app.state.limiter
+    limiter.enabled = True
+    yield
+    limiter.enabled = False
+
+
+async def test_transcribe_rate_limited_after_10(authed_client, rate_limit_enabled):
+    gemini_result = {
+        "game": "Hades", "date": None, "start_time": None,
+        "end_time": None, "duration_minutes": None,
+    }
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
+         patch("app.api.v1.endpoints.voice.AsyncOpenAI",
+               return_value=_mock_openai("Grałem w Hades")), \
+         patch("app.api.v1.endpoints.voice._gemini_parse", return_value=gemini_result):
+
+        statuses = []
+        for _ in range(11):
+            resp = await authed_client.post(
+                "/api/v1/voice/transcribe",
+                files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
+            )
+            statuses.append(resp.status_code)
+
+    assert statuses[:10] == [200] * 10
+    assert statuses[10] == 429
+
+
+async def test_rate_limit_is_per_credential(
+    db, client, user, admin_user, rate_limit_enabled,
+):
+    """Exhausting one token's budget does not block a different token."""
+    user_token = await make_token(db, user.discord_id)
+    admin_token = await make_token(db, admin_user.discord_id)
+    gemini_result = {
+        "game": "Hades", "date": None, "start_time": None,
+        "end_time": None, "duration_minutes": None,
+    }
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
+         patch("app.api.v1.endpoints.voice.AsyncOpenAI",
+               return_value=_mock_openai("Grałem w Hades")), \
+         patch("app.api.v1.endpoints.voice._gemini_parse", return_value=gemini_result):
+
+        client.headers["Authorization"] = f"Bearer {user_token}"
+        for _ in range(11):
+            await client.post(
+                "/api/v1/voice/transcribe",
+                files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
+            )
+        client.headers["Authorization"] = f"Bearer {admin_token}"
+        resp = await client.post(
+            "/api/v1/voice/transcribe",
+            files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
+        )
+
+    assert resp.status_code == 200

@@ -21,7 +21,7 @@ import os
 import tempfile
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.endpoints.auth import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.rate_limit import limiter
 from app.models.user import User
 from app.services.upload_validation import looks_like_audio
 from app.services.voice_context import (
@@ -122,7 +123,9 @@ def _gemini_parse(
 
 
 @router.post("/transcribe", response_model=TranscribeResponse)
+@limiter.limit("10/hour")
 async def transcribe_audio(
+    request: Request,
     file: UploadFile,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
