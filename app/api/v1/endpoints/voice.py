@@ -31,6 +31,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.rate_limit import limiter
 from app.models.user import User
+from app.models.voice_usage import VoiceUsage
 from app.services.upload_validation import looks_like_audio
 from app.services.voice_context import (
     build_candidate_block,
@@ -209,6 +210,22 @@ async def transcribe_audio(
     except Exception as exc:
         logger.exception("Gemini/Vertex AI parsing failed")
         raise HTTPException(status_code=502, detail="Parsing failed.") from exc
+
+    # Best-effort usage capture — metadata only, must never fail the request.
+    try:
+        db.add(
+            VoiceUsage(
+                user_id=user.discord_id,
+                audio_seconds=getattr(transcription, "duration", None),
+                detected_language=detected_language,
+                game_resolved=parsed.get("game") is not None,
+                fields_extracted=sum(1 for v in parsed.values() if v is not None),
+            )
+        )
+        await db.commit()
+    except Exception:
+        logger.warning("voice/transcribe: failed to record usage", exc_info=True)
+        await db.rollback()
 
     return TranscribeResponse(
         game=parsed.get("game"),

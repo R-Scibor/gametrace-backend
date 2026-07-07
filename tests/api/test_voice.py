@@ -11,7 +11,9 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import func, select
 
+from app.models.voice_usage import VoiceUsage
 from tests.factories import make_token
 
 # Minimal bytes that pass the audio magic-byte check (see upload_validation).
@@ -26,9 +28,11 @@ def _voice_settings(openai_key: str = "test-key", gcp_project: str = "test-proje
     return s
 
 
-def _mock_openai(transcript_text: str) -> MagicMock:
+def _mock_openai(transcript_text: str, duration: float = 42.5, language: str = "pl") -> MagicMock:
     transcription = MagicMock()
     transcription.text = transcript_text
+    transcription.duration = duration
+    transcription.language = language
     client = MagicMock()
     client.audio.transcriptions.create = AsyncMock(return_value=transcription)
     return client
@@ -176,6 +180,85 @@ async def test_non_audio_file_returns_422(authed_client):
 
     assert resp.status_code == 422
     mock.audio.transcriptions.create.assert_not_called()
+
+
+# ── Usage capture ─────────────────────────────────────────────────────────────
+
+async def _voice_usage_count(db) -> int:
+    result = await db.execute(select(func.count()).select_from(VoiceUsage))
+    return result.scalar_one()
+
+
+async def test_usage_row_written_on_success(authed_client, db, user):
+    gemini_result = {
+        "game": "Hades", "date": "2024-01-15", "start_time": "20:00",
+        "end_time": "21:00", "duration_minutes": 60,
+    }
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
+         patch("app.api.v1.endpoints.voice.AsyncOpenAI",
+               return_value=_mock_openai("Grałem w Hades", duration=88.0, language="pl")), \
+         patch("app.api.v1.endpoints.voice._gemini_parse", return_value=gemini_result):
+
+        resp = await authed_client.post(
+            "/api/v1/voice/transcribe",
+            files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
+        )
+
+    assert resp.status_code == 200
+    row = (await db.execute(select(VoiceUsage))).scalars().one()
+    assert row.user_id == user.discord_id
+    assert float(row.audio_seconds) == 88.0
+    assert row.detected_language == "pl"
+    assert row.game_resolved is True
+    assert row.fields_extracted == 5
+
+
+async def test_no_usage_row_on_422(authed_client, db):
+    mock = _mock_openai("should not be called")
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
+         patch("app.api.v1.endpoints.voice.AsyncOpenAI", return_value=mock):
+        resp = await authed_client.post(
+            "/api/v1/voice/transcribe",
+            files={"file": ("evil.m4a", b"<html>not audio</html>", "audio/m4a")},
+        )
+
+    assert resp.status_code == 422
+    assert await _voice_usage_count(db) == 0
+
+
+async def test_no_usage_row_on_gemini_failure(authed_client, db):
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
+         patch("app.api.v1.endpoints.voice.AsyncOpenAI",
+               return_value=_mock_openai("some transcript")), \
+         patch("app.api.v1.endpoints.voice._gemini_parse",
+               side_effect=json.JSONDecodeError("msg", "doc", 0)):
+        resp = await authed_client.post(
+            "/api/v1/voice/transcribe",
+            files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
+        )
+
+    assert resp.status_code == 502
+    assert await _voice_usage_count(db) == 0
+
+
+async def test_usage_write_failure_is_non_fatal(authed_client, db):
+    gemini_result = {
+        "game": "Hades", "date": None, "start_time": None,
+        "end_time": None, "duration_minutes": None,
+    }
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
+         patch("app.api.v1.endpoints.voice.AsyncOpenAI",
+               return_value=_mock_openai("Grałem w Hades")), \
+         patch("app.api.v1.endpoints.voice._gemini_parse", return_value=gemini_result), \
+         patch("app.api.v1.endpoints.voice.VoiceUsage",
+               side_effect=Exception("db exploded")):
+
+        resp = await authed_client.post(
+            "/api/v1/voice/transcribe",
+            files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
+        )
+
+    assert resp.status_code == 200
 
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
