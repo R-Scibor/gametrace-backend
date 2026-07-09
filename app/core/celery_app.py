@@ -1,9 +1,10 @@
+import structlog
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import setup_logging
+from celery.signals import before_task_publish, setup_logging, task_postrun, task_prerun
 
 from app.core.config import settings
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, new_trace_id
 from app.core.observability import init_sentry
 
 configure_logging(settings.log_component or "celery", settings.log_level)
@@ -50,3 +51,28 @@ celery_app.conf.update(
         },
     },
 )
+
+
+@before_task_publish.connect
+def _attach_trace_header(headers=None, **_):
+    if headers is None:
+        return
+    ctx = structlog.contextvars.get_contextvars()
+    trace_id = ctx.get("trace_id") or ctx.get("request_id")
+    if trace_id:
+        headers["trace_id"] = trace_id
+
+
+@task_prerun.connect
+def _bind_task_trace(task=None, **_):
+    request = getattr(task, "request", None)
+    headers = getattr(request, "headers", None) or {}
+    trace_id = headers.get("trace_id")
+    if not trace_id:
+        trace_id = f"task-{getattr(request, 'id', new_trace_id())}"
+    structlog.contextvars.bind_contextvars(trace_id=trace_id)
+
+
+@task_postrun.connect
+def _clear_task_trace(**_):
+    structlog.contextvars.clear_contextvars()
