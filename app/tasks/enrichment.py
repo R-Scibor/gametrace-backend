@@ -185,7 +185,7 @@ async def _run_enrichment(game_id: int) -> tuple[EnrichmentStatus, str | None, s
         except _RateLimited:
             raise
         except Exception:
-            logger.exception("enrich_game: IGDB lookup failed for game_id=%d", game_id)
+            logger.exception("enrich_game.igdb_lookup_failed", extra={"game_id": game_id})
 
         if igdb_result.confidence >= CONFIDENCE_THRESHOLD:
             async with SessionLocal() as db:
@@ -207,7 +207,7 @@ async def _run_enrichment(game_id: int) -> tuple[EnrichmentStatus, str | None, s
         except _RateLimited:
             raise
         except Exception:
-            logger.exception("enrich_game: Steam lookup failed for game_id=%d", game_id)
+            logger.exception("enrich_game.steam_lookup_failed", extra={"game_id": game_id})
 
         if steam_id is not None:
             async with SessionLocal() as db:
@@ -284,21 +284,22 @@ def enrich_game(self, game_id: int) -> None:
         )
 
     except LookupError:
-        logger.warning("enrich_game: game_id=%d not found in DB", game_id)
+        logger.warning("enrich_game.not_found", extra={"game_id": game_id})
 
     except _RateLimited as exc:
         countdown = (2 ** self.request.retries) * 60
         logger.warning(
-            "enrich_game: %s 429 for game_id=%d, retrying in %ds", exc, game_id, countdown,
+            "enrich_game.rate_limited_retry",
+            extra={"game_id": game_id, "countdown": countdown},
         )
         raise self.retry(exc=exc, countdown=countdown)
 
     except MaxRetriesExceededError:
-        logger.error("enrich_game: game_id=%d max retries exceeded → NEEDS_REVIEW", game_id)
+        logger.error("enrich_game.max_retries_exceeded", extra={"game_id": game_id})
         asyncio.run(_save_needs_review(game_id))
 
     except Exception:
-        logger.exception("enrich_game: unexpected error for game_id=%d", game_id)
+        logger.exception("enrich_game.unexpected_error", extra={"game_id": game_id})
         asyncio.run(_save_needs_review(game_id))
 
 

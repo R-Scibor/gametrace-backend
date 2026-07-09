@@ -224,7 +224,7 @@ async def transcribe_audio(
         )
         await db.commit()
     except Exception:
-        logger.warning("voice/transcribe: failed to record usage", exc_info=True)
+        logger.warning("voice.transcribe.usage_record_failed", exc_info=True)
         await db.rollback()
 
     return TranscribeResponse(
