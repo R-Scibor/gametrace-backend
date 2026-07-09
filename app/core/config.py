@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     # defeating its 404 masking).
     enable_api_docs: bool = True
 
+    # Unified logging: level applied to the root logger; component labels each
+    # service in the JSON output. worker/beat share celery_app.py, so the
+    # component name comes from LOG_COMPONENT env per service in compose.
+    log_level: str = "INFO"
+    log_component: str = ""
+
     session_token_expire_days: int = 30
     trash_retention_days: int = 7
 
