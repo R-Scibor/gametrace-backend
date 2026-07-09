@@ -10,7 +10,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.api.v1.router import api_router
 from app.core.config import settings
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, new_trace_id
 from app.core.observability import init_sentry
 from app.core.rate_limit import limiter
 
@@ -69,6 +69,23 @@ async def limit_request_body_size(request: Request, call_next):
                 status_code=413, content={"detail": "Request body too large."}
             )
     return await call_next(request)
+
+
+@app.middleware("http")
+async def bind_request_id(request: Request, call_next):
+    """Bind a request_id into log context and echo it back as a header."""
+    request_id = request.headers.get("x-request-id") or new_trace_id()
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(request_id=request_id)
+    try:
+        import sentry_sdk
+
+        sentry_sdk.set_tag("request_id", request_id)
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        structlog.contextvars.clear_contextvars()
 
 
 @app.exception_handler(Exception)
