@@ -233,7 +233,7 @@ Auth semantics for these routes:
 - `401` — no bearer token, or an invalid/expired one (same as any other authed route).
 - `403` — a valid bearer token for a user whose `is_admin` is `false`.
 
-Every write is logged via `log_admin_action()` (`app/core/observability.py`) — one structured line per action: `admin_action admin_id=... action=... resource=... before=... after=...`. Plain stdlib logging, no dedicated audit table yet.
+Every write is logged via `log_admin_action()` (`app/core/observability.py`) — one JSON line per action with `event="admin_action"` and structured fields `admin_id`, `action`, `resource`, `before`, `after`. Plain stdlib logging, no dedicated audit table yet.
 
 | Method | Path | Description |
 |---|---|---|

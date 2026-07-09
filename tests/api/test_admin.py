@@ -76,11 +76,11 @@ async def test_merge_happy_path(admin_client, db, admin_user, caplog):
     await db.refresh(s)
     assert s.game_id == target.id
 
-    [record] = [r for r in caplog.records if "admin_action" in r.message]
-    assert f"admin_id={admin_user.discord_id}" in record.message
-    assert "action=merge_game" in record.message
-    assert f"resource=game:{source.id}" in record.message
-    assert f"after=target:{target.id}" in record.message
+    [record] = [r for r in caplog.records if r.getMessage() == "admin_action"]
+    assert record.admin_id == admin_user.discord_id
+    assert record.action == "merge_game"
+    assert record.resource == f"game:{source.id}"
+    assert record.after == f"target:{target.id}"
 
 
 async def test_aliases_reassigned(admin_client, db, admin_user):
@@ -159,12 +159,12 @@ async def test_cover_upload_happy_path(admin_client, db, admin_user, tmp_path, m
     assert game.cover_image_url == f"/covers/{game.id}.jpg"
     assert game.cover_source == CoverSource.CUSTOM
 
-    [record] = [r for r in caplog.records if "admin_action" in r.message]
-    assert f"admin_id={admin_user.discord_id}" in record.message
-    assert "action=upload_cover" in record.message
-    assert f"resource=game:{game.id}" in record.message
-    assert "before=cover_image_url=None cover_source=EXTERNAL" in record.message
-    assert f"after=cover_image_url=/covers/{game.id}.jpg cover_source=CUSTOM" in record.message
+    [record] = [r for r in caplog.records if r.getMessage() == "admin_action"]
+    assert record.admin_id == admin_user.discord_id
+    assert record.action == "upload_cover"
+    assert record.resource == f"game:{game.id}"
+    assert record.before == "cover_image_url=None cover_source=EXTERNAL"
+    assert record.after == f"cover_image_url=/covers/{game.id}.jpg cover_source=CUSTOM"
 
 
 async def test_cover_upload_non_admin_returns_403(authed_client, db, user, tmp_path, monkeypatch):
@@ -253,10 +253,10 @@ async def test_cover_upload_updates_existing_custom_cover(admin_client, db, admi
     written = tmp_path / f"{game.id}.png"
     assert written.read_bytes() == base64.b64decode(new_b64)
 
-    [record] = [r for r in caplog.records if "admin_action" in r.message]
-    assert "action=upload_cover" in record.message
-    assert f"before=cover_image_url=/covers/{game.id}.jpg cover_source=CUSTOM" in record.message
-    assert f"after=cover_image_url=/covers/{game.id}.png cover_source=CUSTOM" in record.message
+    record = [r for r in caplog.records if r.getMessage() == "admin_action"][-1]
+    assert record.action == "upload_cover"
+    assert record.before == f"cover_image_url=/covers/{game.id}.jpg cover_source=CUSTOM"
+    assert record.after == f"cover_image_url=/covers/{game.id}.png cover_source=CUSTOM"
 
 
 async def test_cover_upload_non_image_bytes_returns_422(admin_client, db, admin_user, tmp_path, monkeypatch):
