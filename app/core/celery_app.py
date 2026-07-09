@@ -1,10 +1,20 @@
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import setup_logging
 
 from app.core.config import settings
+from app.core.logging import configure_logging
 from app.core.observability import init_sentry
 
+configure_logging(settings.log_component or "celery", settings.log_level)
 init_sentry("celery")
+
+
+@setup_logging.connect
+def _on_setup_logging(**_kwargs):
+    # Own logging entirely: connecting to setup_logging disables Celery's
+    # default config so our JSON formatter is not overwritten on worker boot.
+    configure_logging(settings.log_component or "celery", settings.log_level)
 
 celery_app = Celery(
     "gametrace",
@@ -24,6 +34,7 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     broker_connection_retry_on_startup=True,
+    worker_hijack_root_logger=False,
     beat_schedule={
         "weekly_report": {
             "task": "tasks.weekly_report",

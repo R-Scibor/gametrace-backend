@@ -84,7 +84,9 @@ services:
         APP_VERSION: ${APP_VERSION:-dev}
     container_name: gametrace_celery_worker
     restart: always
-    command: celery -A app.core.celery_app worker --loglevel=info
+    command: celery -A app.core.celery_app worker
+    environment:
+      LOG_COMPONENT: worker
     volumes:
       - ./credentials/firebase-cred.json:/app/credentials/firebase-cred.json:ro
     env_file:
@@ -104,7 +106,9 @@ services:
         APP_VERSION: ${APP_VERSION:-dev}
     container_name: gametrace_celery_beat
     restart: always
-    command: celery -A app.core.celery_app beat --loglevel=info
+    command: celery -A app.core.celery_app beat
+    environment:
+      LOG_COMPONENT: beat
     volumes:
       - ./credentials/firebase-cred.json:/app/credentials/firebase-cred.json:ro
     env_file:

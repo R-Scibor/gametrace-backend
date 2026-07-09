@@ -1,5 +1,7 @@
 import os
+from contextlib import asynccontextmanager
 
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -8,12 +10,23 @@ from slowapi.errors import RateLimitExceeded
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.logging import configure_logging
 from app.core.observability import init_sentry
 from app.core.rate_limit import limiter
 
 COVERS_DIR = os.environ.get("COVERS_DIR", "/app/covers")
 
+configure_logging(settings.log_component or "api", settings.log_level)
 init_sentry("api")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # uvicorn installs its own logging config on server startup (we boot it
+    # without --log-config), so re-assert ours here to win the ordering.
+    configure_logging(settings.log_component or "api", settings.log_level)
+    yield
+
 
 # Swagger/ReDoc/openapi.json document every route (including the dev-login
 # header, defeating its 404 masking) — keep them off on exposed deployments.
@@ -23,6 +36,7 @@ app = FastAPI(
     docs_url="/docs" if settings.enable_api_docs else None,
     redoc_url="/redoc" if settings.enable_api_docs else None,
     openapi_url="/openapi.json" if settings.enable_api_docs else None,
+    lifespan=lifespan,
 )
 
 app.state.limiter = limiter
