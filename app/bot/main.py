@@ -8,13 +8,14 @@ import logging
 import time
 
 import discord
+import structlog
 from discord import app_commands
 from discord.ext import tasks
 
 from app.core.config import settings
 from app.core.redis import get_redis
 from app.core.database import AsyncSessionLocal
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, new_trace_id
 from app.core.observability import init_sentry
 
 logger = logging.getLogger(__name__)
@@ -120,49 +121,50 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
 
     discord_id = str(after.id)
 
-    async with AsyncSessionLocal() as db:
-        from app.bot.session_manager import (
-            complete_session,
-            error_session,
-            get_ongoing_session,
-            get_or_create_game,
-            get_user_if_tracked,
-            start_or_resume_session,
-        )
+    with structlog.contextvars.bound_contextvars(trace_id=new_trace_id()):
+        async with AsyncSessionLocal() as db:
+            from app.bot.session_manager import (
+                complete_session,
+                error_session,
+                get_ongoing_session,
+                get_or_create_game,
+                get_user_if_tracked,
+                start_or_resume_session,
+            )
 
-        user = await get_user_if_tracked(db, discord_id)
-        if user is None:
-            # User has never logged into the app — bot ignores them
-            return
+            user = await get_user_if_tracked(db, discord_id)
+            if user is None:
+                # User has never logged into the app — bot ignores them
+                return
 
-        ongoing = await get_ongoing_session(db, discord_id)
+            ongoing = await get_ongoing_session(db, discord_id)
 
-        if before_game and not after_game:
-            # Game closed — complete the ongoing session
-            if ongoing:
-                await complete_session(db, ongoing)
+            if before_game and not after_game:
+                # Game closed — complete the ongoing session
+                if ongoing:
+                    await complete_session(db, ongoing)
 
-        elif not before_game and after_game:
-            # Game started — close any stale session just in case, then start new
-            if ongoing:
-                await error_session(
-                    db,
-                    ongoing,
-                    f"Self-Healing: unexpected ONGOING session when new game {after_game!r} started.",
-                )
-            game, created = await get_or_create_game(db, after_game)
-            await start_or_resume_session(db, discord_id, game.id)
-            if created:
-                _queue_enrichment(game.id)
+            elif not before_game and after_game:
+                # Game started — close any stale session just in case, then start new
+                if ongoing:
+                    await error_session(
+                        db,
+                        ongoing,
+                        f"Self-Healing: unexpected ONGOING session when new game {after_game!r} started.",
+                    )
+                game, created = await get_or_create_game(db, after_game)
+                await start_or_resume_session(db, discord_id, game.id)
+                if created:
+                    _queue_enrichment(game.id)
 
-        elif before_game and after_game:
-            # Switched game — complete old, start new
-            if ongoing:
-                await complete_session(db, ongoing)
-            game, created = await get_or_create_game(db, after_game)
-            await start_or_resume_session(db, discord_id, game.id)
-            if created:
-                _queue_enrichment(game.id)
+            elif before_game and after_game:
+                # Switched game — complete old, start new
+                if ongoing:
+                    await complete_session(db, ongoing)
+                game, created = await get_or_create_game(db, after_game)
+                await start_or_resume_session(db, discord_id, game.id)
+                if created:
+                    _queue_enrichment(game.id)
 
 
 def _queue_enrichment(game_id: int) -> None:
