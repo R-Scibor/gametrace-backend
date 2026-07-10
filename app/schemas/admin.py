@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -11,3 +13,22 @@ class AdminOverviewResponse(BaseModel):
     needs_review_count: int
     pending_enrichment_count: int
     open_reports_count: int
+
+
+class AdminReportItem(BaseModel):
+    """A single row in the admin reports inbox."""
+
+    id: int
+    user_id: str
+    username: str | None
+    message: str
+    context: dict
+    status: str
+    created_at: datetime
+
+
+class AdminReportListResponse(BaseModel):
+    """Paginated admin reports inbox listing."""
+
+    total: int
+    items: list[AdminReportItem]

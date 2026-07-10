@@ -1,17 +1,19 @@
 import base64
 import os
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import delete, select, update
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.auth import require_admin
 from app.core.database import get_db
 from app.core.observability import log_admin_action
 from app.models.game import CoverSource, Game, GameAlias, UserGamePreference
+from app.models.report import Report
 from app.models.session import GameSession
 from app.models.user import User
-from app.schemas.admin import AdminOverviewResponse
+from app.schemas.admin import AdminOverviewResponse, AdminReportItem, AdminReportListResponse
 from app.schemas.game import CoverUpload, GameResponse
 from app.services import stats as stats_service
 from app.services.upload_validation import sniff_image_extension
@@ -171,3 +173,47 @@ async def stats_overview(
 ):
     """Homelab-wide aggregate totals for the admin panel hub (read-only)."""
     return await stats_service.admin_overview(db)
+
+
+# ---------------------------------------------------------------------------
+# GET /reports
+# ---------------------------------------------------------------------------
+
+@router.get("/reports", response_model=AdminReportListResponse)
+async def list_reports(
+    status: Literal["open", "triaged", "closed"] | None = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),  # admin gate (router-level too; explicit for clarity)
+):
+    """Admin reports inbox: paginated, newest-first, optionally filtered by status."""
+    base_filter = [Report.status == status] if status is not None else []
+
+    total = await db.scalar(
+        select(func.count()).select_from(Report).where(*base_filter)
+    )
+
+    result = await db.execute(
+        select(Report, User.username)
+        .outerjoin(User, Report.user_id == User.discord_id)
+        .where(*base_filter)
+        .order_by(Report.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+
+    items = [
+        AdminReportItem(
+            id=report.id,
+            user_id=report.user_id,
+            username=username,
+            message=report.message,
+            context=report.context,
+            status=report.status,
+            created_at=report.created_at,
+        )
+        for report, username in result.all()
+    ]
+
+    return AdminReportListResponse(total=total, items=items)

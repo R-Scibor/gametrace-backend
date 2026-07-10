@@ -6,6 +6,7 @@ so flushed-but-not-committed data is visible to all DB queries within a test.
 from datetime import datetime, timedelta, timezone
 
 from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
+from app.models.report import Report
 from app.models.session import GameSession, SessionSource, SessionStatus
 from app.models.user import User, UserAuthToken, UserDevice
 
@@ -129,6 +130,28 @@ async def make_device(
     db.add(device)
     await db.flush()
     return device
+
+
+async def make_report(
+    db,
+    user_id: str,
+    message: str = "bug",
+    context: dict | None = None,
+    status: str = "open",
+    created_at: datetime | None = None,
+) -> Report:
+    report = Report(
+        user_id=user_id,
+        message=message,
+        context=context
+        or {"screen": "Home", "platform": "android", "osVersion": "14", "appVersion": "1.0.0"},
+        status=status,
+    )
+    if created_at is not None:
+        report.created_at = created_at
+    db.add(report)
+    await db.flush()
+    return report
 
 
 def dt(hours_ago: float = 0, hours_from_now: float = 0) -> datetime:
