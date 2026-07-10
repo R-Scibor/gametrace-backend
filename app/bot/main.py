@@ -170,9 +170,9 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
 def _queue_enrichment(game_id: int) -> None:
     """Fire-and-forget enrichment task. Redis deduplication via fixed task ID."""
     try:
-        from app.tasks.enrichment import enrich_game
-        task_id = f"enrich_game_{game_id}"
-        enrich_game.apply_async(args=[game_id], task_id=task_id)
+        from app.services.enrichment_dispatch import queue_enrichment
+
+        queue_enrichment(game_id)
     except Exception:
         # Never crash the bot over a background task failure
         logger.exception("Failed to queue enrichment for game_id=%d", game_id)
