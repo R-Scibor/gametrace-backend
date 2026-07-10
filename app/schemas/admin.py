@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.models.game import CoverSource, EnrichmentStatus
+
 
 class AdminOverviewResponse(BaseModel):
     """Homelab-wide aggregate totals for the admin panel hub tiles."""
@@ -39,3 +41,23 @@ class AdminReportPatch(BaseModel):
     """Triage update for a single report. No reopen in v1."""
 
     status: Literal["triaged", "closed"]
+
+
+class AdminGameItem(BaseModel):
+    """A single row in the admin global catalog list."""
+
+    id: int
+    primary_name: str
+    enrichment_status: EnrichmentStatus
+    cover_image_url: str | None
+    cover_source: CoverSource
+    external_api_id: str | None
+    aliases: list[str]
+    session_count: int
+
+
+class AdminGameListResponse(BaseModel):
+    """Paginated admin global catalog listing."""
+
+    total: int
+    items: list[AdminGameItem]
