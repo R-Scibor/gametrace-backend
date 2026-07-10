@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -32,3 +33,9 @@ class AdminReportListResponse(BaseModel):
 
     total: int
     items: list[AdminReportItem]
+
+
+class AdminReportPatch(BaseModel):
+    """Triage update for a single report. No reopen in v1."""
+
+    status: Literal["triaged", "closed"]

@@ -80,3 +80,76 @@ async def test_skip_and_limit_paginate(admin_client, db, admin_user):
 async def test_invalid_status_returns_422(admin_client, db, admin_user):
     resp = await admin_client.get(URL, params={"status": "bogus"})
     assert resp.status_code == 422
+
+
+# ── PATCH /admin/reports/{id} ──────────────────────────────────────────────────
+
+async def test_patch_unauthenticated_returns_401(client, db):
+    resp = await client.patch(
+        f"{URL}/1", json={"status": "triaged"}, headers={"Authorization": "Bearer badtoken"}
+    )
+    assert resp.status_code == 401
+
+
+async def test_patch_non_admin_returns_403(authed_client, db, user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id)
+
+    resp = await authed_client.patch(f"{URL}/{report.id}", json={"status": "triaged"})
+    assert resp.status_code == 403
+
+
+async def test_patch_open_to_triaged_returns_updated_item(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="open")
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={"status": "triaged"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == report.id
+    assert body["status"] == "triaged"
+    assert body["username"] == "player"
+    assert body["user_id"] == player.discord_id
+
+    # Assert persisted: re-GET the list and confirm the status stuck.
+    list_resp = await admin_client.get(URL)
+    assert list_resp.status_code == 200
+    items = list_resp.json()["items"]
+    patched = next(item for item in items if item["id"] == report.id)
+    assert patched["status"] == "triaged"
+
+
+async def test_patch_open_to_closed_returns_updated_item(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="open")
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={"status": "closed"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "closed"
+
+    list_resp = await admin_client.get(URL)
+    items = list_resp.json()["items"]
+    patched = next(item for item in items if item["id"] == report.id)
+    assert patched["status"] == "closed"
+
+
+async def test_patch_missing_report_returns_404(admin_client, db, admin_user):
+    resp = await admin_client.patch(f"{URL}/999999", json={"status": "triaged"})
+    assert resp.status_code == 404
+
+
+async def test_patch_status_open_returns_422(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="triaged")
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={"status": "open"})
+    assert resp.status_code == 422
+
+
+async def test_patch_status_bogus_returns_422(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="open")
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={"status": "bogus"})
+    assert resp.status_code == 422

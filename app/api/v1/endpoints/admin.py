@@ -13,7 +13,12 @@ from app.models.game import CoverSource, Game, GameAlias, UserGamePreference
 from app.models.report import Report
 from app.models.session import GameSession
 from app.models.user import User
-from app.schemas.admin import AdminOverviewResponse, AdminReportItem, AdminReportListResponse
+from app.schemas.admin import (
+    AdminOverviewResponse,
+    AdminReportItem,
+    AdminReportListResponse,
+    AdminReportPatch,
+)
 from app.schemas.game import CoverUpload, GameResponse
 from app.services import stats as stats_service
 from app.services.upload_validation import sniff_image_extension
@@ -217,3 +222,45 @@ async def list_reports(
     ]
 
     return AdminReportListResponse(total=total, items=items)
+
+
+# ---------------------------------------------------------------------------
+# PATCH /reports/{report_id}
+# ---------------------------------------------------------------------------
+
+@router.patch("/reports/{report_id}", response_model=AdminReportItem)
+async def triage_report(
+    report_id: int,
+    body: AdminReportPatch,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),  # admin gate (router-level too; explicit for clarity)
+):
+    """Triage a single report: open -> triaged | closed. No reopen in v1."""
+    report = await db.get(Report, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail=f"Report {report_id} not found.")
+
+    before = report.status
+    report.status = body.status
+    await db.commit()
+
+    log_admin_action(
+        user.discord_id, "report_triage", f"report:{report_id}", before=before, after=body.status
+    )
+
+    result = await db.execute(
+        select(Report, User.username)
+        .outerjoin(User, Report.user_id == User.discord_id)
+        .where(Report.id == report_id)
+    )
+    updated_report, username = result.one()
+
+    return AdminReportItem(
+        id=updated_report.id,
+        user_id=updated_report.user_id,
+        username=username,
+        message=updated_report.message,
+        context=updated_report.context,
+        status=updated_report.status,
+        created_at=updated_report.created_at,
+    )
