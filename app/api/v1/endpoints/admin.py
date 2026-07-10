@@ -203,7 +203,7 @@ async def list_reports(
         select(Report, User.username)
         .outerjoin(User, Report.user_id == User.discord_id)
         .where(*base_filter)
-        .order_by(Report.created_at.desc())
+        .order_by(Report.created_at.desc(), Report.id.desc())
         .offset(skip)
         .limit(limit)
     )

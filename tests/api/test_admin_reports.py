@@ -77,6 +77,24 @@ async def test_skip_and_limit_paginate(admin_client, db, admin_user):
     assert body["items"][1]["message"] == "report-2"
 
 
+async def test_equal_timestamps_order_deterministically_by_id(
+    admin_client, db, admin_user
+):
+    # Same created_at for every row: without a tiebreaker, paging could skip or
+    # duplicate rows. The secondary sort (id DESC) must make ordering stable.
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    same = dt(hours_ago=1)
+    reports = [
+        await make_report(db, player.discord_id, message=f"r-{i}", created_at=same)
+        for i in range(5)
+    ]
+
+    resp = await admin_client.get(URL, params={"limit": 100})
+    assert resp.status_code == 200
+    ids = [item["id"] for item in resp.json()["items"]]
+    assert ids == sorted((r.id for r in reports), reverse=True)
+
+
 async def test_invalid_status_returns_422(admin_client, db, admin_user):
     resp = await admin_client.get(URL, params={"status": "bogus"})
     assert resp.status_code == 422
