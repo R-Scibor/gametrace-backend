@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,9 +15,16 @@ from app.core.observability import log_admin_action
 from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias
 from app.models.session import GameSession
 from app.models.user import User
-from app.schemas.admin import AdminGameItem, AdminGameListResponse, IgdbLinkRequest
+from app.schemas.admin import (
+    AdminAliasResponse,
+    AdminGameItem,
+    AdminGameListResponse,
+    AliasCreateRequest,
+    IgdbLinkRequest,
+)
 from app.schemas.game import GameMatchRequest, GameResponse, IGDBCandidateOut
 from app.services.enrichment_dispatch import queue_enrichment
+from app.services.game_aliases import AliasResult, add_alias
 from app.services.game_matching import (
     _igdb_fetch_by_id,
     _igdb_search_candidates,
@@ -253,3 +260,48 @@ async def igdb_link_game(
     )
 
     return game
+
+
+# ---------------------------------------------------------------------------
+# POST /games/{game_id}/aliases
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/games/{game_id}/aliases",
+    response_model=AdminAliasResponse,
+    status_code=201,
+)
+async def attach_game_alias(
+    game_id: int,
+    body: AliasCreateRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Attach an exact Discord process-name alias to an existing catalog row."""
+    name = body.discord_process_name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="discord_process_name must not be blank")
+
+    game = await db.get(Game, game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail=f"Game {game_id} not found.")
+
+    result, owner_id = await add_alias(db, game_id, name)
+
+    if result is AliasResult.CONFLICT:
+        raise HTTPException(
+            status_code=409,
+            detail={"conflicting_game_id": owner_id},
+        )
+
+    await db.commit()
+
+    payload = AdminAliasResponse(game_id=game_id, discord_process_name=name)
+
+    if result is AliasResult.EXISTS_SAME_GAME:
+        response.status_code = 200
+        return payload
+
+    log_admin_action(user.discord_id, "add_alias", f"game:{game_id}")
+    return payload

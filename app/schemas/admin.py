@@ -67,3 +67,16 @@ class IgdbLinkRequest(BaseModel):
     """Link an existing catalog row to a specific IGDB game id."""
 
     igdb_id: int
+
+
+class AliasCreateRequest(BaseModel):
+    """Attach a Discord process-name alias to an existing catalog row."""
+
+    discord_process_name: str
+
+
+class AdminAliasResponse(BaseModel):
+    """Alias attachment result."""
+
+    game_id: int
+    discord_process_name: str

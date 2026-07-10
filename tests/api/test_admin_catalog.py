@@ -465,3 +465,105 @@ async def test_igdb_link_non_admin_returns_403(authed_client, db, user):
         )
 
     assert resp.status_code == 403
+
+
+# ── POST /games/{id}/aliases ─────────────────────────────────────────────────
+
+from app.models.game import GameAlias
+
+ALIAS_URL = "/api/v1/admin/games/{game_id}/aliases"
+
+
+async def test_add_alias_creates_and_returns_201(admin_client, db, admin_user):
+    game = await make_game(db, "Alias Target", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    with patch("app.api.v1.endpoints.admin.catalog.log_admin_action") as mock_log:
+        resp = await admin_client.post(
+            ALIAS_URL.format(game_id=game.id),
+            json={"discord_process_name": "newgame.exe"},
+        )
+
+    assert resp.status_code == 201
+    assert resp.json() == {"game_id": game.id, "discord_process_name": "newgame.exe"}
+    count = await db.scalar(
+        select(func.count()).where(GameAlias.discord_process_name == "newgame.exe")
+    )
+    assert count == 1
+    mock_log.assert_called_once_with(admin_user.discord_id, "add_alias", f"game:{game.id}")
+
+
+async def test_add_alias_trims_whitespace(admin_client, db, admin_user):
+    game = await make_game(db, "Trim Target", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    resp = await admin_client.post(
+        ALIAS_URL.format(game_id=game.id),
+        json={"discord_process_name": "  trimmed.exe  "},
+    )
+
+    assert resp.status_code == 201
+    assert resp.json() == {"game_id": game.id, "discord_process_name": "trimmed.exe"}
+
+
+async def test_add_alias_same_name_same_game_returns_200_idempotent(admin_client, db, admin_user):
+    game = await make_game(db, "Idempotent", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    await make_alias(db, game.id, "existing.exe")
+
+    with patch("app.api.v1.endpoints.admin.catalog.log_admin_action") as mock_log:
+        resp = await admin_client.post(
+            ALIAS_URL.format(game_id=game.id),
+            json={"discord_process_name": "existing.exe"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"game_id": game.id, "discord_process_name": "existing.exe"}
+    count = await db.scalar(
+        select(func.count()).where(GameAlias.discord_process_name == "existing.exe")
+    )
+    assert count == 1
+    mock_log.assert_not_called()
+
+
+async def test_add_alias_conflict_when_owned_by_another_game(admin_client, db, admin_user):
+    holder = await make_game(db, "Alias Holder", enrichment_status=EnrichmentStatus.ENRICHED)
+    await make_alias(db, holder.id, "taken.exe")
+    other = await make_game(db, "Alias Requester", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    resp = await admin_client.post(
+        ALIAS_URL.format(game_id=other.id),
+        json={"discord_process_name": "taken.exe"},
+    )
+
+    assert resp.status_code == 409
+    assert resp.json() == {"detail": {"conflicting_game_id": holder.id}}
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+async def test_add_alias_blank_or_whitespace_returns_422(admin_client, db, admin_user, blank):
+    game = await make_game(db, "Blank Alias", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    resp = await admin_client.post(
+        ALIAS_URL.format(game_id=game.id),
+        json={"discord_process_name": blank},
+    )
+
+    assert resp.status_code == 422
+
+
+async def test_add_alias_missing_game_returns_404(admin_client, db, admin_user):
+    resp = await admin_client.post(
+        ALIAS_URL.format(game_id=999999),
+        json={"discord_process_name": "orphan.exe"},
+    )
+
+    assert resp.status_code == 404
+
+
+async def test_add_alias_non_admin_returns_403(authed_client, db, user):
+    game = await make_game(db, "Forbidden Alias", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    resp = await authed_client.post(
+        ALIAS_URL.format(game_id=game.id),
+        json={"discord_process_name": "nope.exe"},
+    )
+
+    assert resp.status_code == 403
