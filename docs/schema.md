@@ -141,7 +141,7 @@ Unique constraint on `(user_id, game_id)`. The merge endpoint (`POST /api/v1/adm
 
 ### `reports`
 
-In-app user feedback submitted via `POST /reports`. Store-only — no read/list endpoint yet.
+In-app user feedback submitted via `POST /reports`. Triaged by admins via `GET /admin/reports` / `PATCH /admin/reports/{id}` (see [api.md](api.md#admin)).
 
 | Column | Type | Notes |
 |---|---|---|
@@ -149,12 +149,14 @@ In-app user feedback submitted via `POST /reports`. Store-only — no read/list 
 | `user_id` | `VARCHAR(32)` | FK → `users.discord_id`, `ON DELETE CASCADE`, indexed |
 | `message` | `TEXT` | Free-text feedback, trimmed server-side. `NOT NULL`. |
 | `context` | `JSONB` | Diagnostic blob captured client-side — `screen`, `platform`, `osVersion`, `appVersion` (camelCase keys). `NOT NULL`. |
+| `status` | `VARCHAR(16)` | `open` \| `triaged` \| `closed`, `CHECK` constraint `ck_reports_status`. Default `'open'`. `NOT NULL`. No reopen path in v1 — `PATCH /admin/reports/{id}` only accepts `triaged`/`closed`. |
 | `created_at` | `TIMESTAMPTZ` | Default `NOW()`, indexed. |
 
 **Indexes:**
 
 - `ix_reports_user_id` — btree on `user_id`. Migration `0010`.
 - `ix_reports_created_at` — btree on `created_at`. Migration `0010`.
+- `ix_reports_status_created_at` — btree on `(status, created_at DESC)`, for the admin triage inbox's filter + sort. Migration `0014`.
 
 `ON DELETE CASCADE` on `user_id` — deleting a user removes their reports along with them.
 
@@ -185,6 +187,7 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 | `0006_drop_daily_user_stats.py` | Removed an earlier rollup table — sessions are kept raw indefinitely. Range-partitioning by month is on the [roadmap](roadmap.md#scale) for when the table grows past ~10M rows. |
 | `0007_game_metadata.py` | Adds `first_release_date` + `genres`/`themes`/`developers`/`publishers` JSONB columns to `games` with GIN indexes. |
 | `0010_reports_table.py` | Adds the `reports` table (`user_id` FK cascade, `message`, `context` JSONB, `created_at`) with `ix_reports_user_id` and `ix_reports_created_at` indexes. |
+| `0014_reports_status.py` | Adds `reports.status` (`String(16)`, default `'open'`, `NOT NULL`) with `ck_reports_status` (`open`/`triaged`/`closed`) and the `ix_reports_status_created_at` index for the admin triage inbox. |
 
 ## Scheduled tasks (Celery Beat)
 

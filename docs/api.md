@@ -16,9 +16,9 @@ Grouped by code — see endpoint sections below for path-specific detail. Authed
 | `400` | Client input rejected — e.g. self-merge (`POST /admin/games/{id}/merge/{target_id}`), empty audio upload (`POST /voice/transcribe`), `redirect_uri` not allowlisted (`POST /auth/discord`). |
 | `401` | Invalid or expired bearer token (`get_current_user`), or unknown token on `POST /auth/logout`, invalid or expired link code (`POST /auth/link`), or bad/expired Discord code (`POST /auth/discord`). |
 | `403` | A valid but non-admin bearer token on any `/admin/*` route (`require_admin`), including `PUT /admin/games/{id}/cover`. Also `PATCH` or soft `DELETE` on an `ONGOING` session (bot-managed row). Also missing bearer token on any authed route (e.g. `POST /reports`) — `HTTPBearer` raises `403` when the `Authorization` header itself is absent, distinct from `401` for an invalid/expired token. |
-| `404` | Resource not found or not owned by the caller — user not registered (`POST /auth/login`), session/game missing, game missing on preference upsert. Soft-deleting an already-trashed session also returns `404` (same as not found). |
+| `404` | Resource not found or not owned by the caller — user not registered (`POST /auth/login`), session/game missing, game missing on preference upsert, report missing on triage (`PATCH /admin/reports/{id}`). Soft-deleting an already-trashed session also returns `404` (same as not found). |
 | `409` | Session time overlap — `POST /sessions`, `PATCH /sessions/{id}`, `POST /sessions/{id}/restore` (body: `{detail: {detail, conflicting_session}}`). |
-| `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone on `PUT /profile/settings` (Pydantic). Link `code` not exactly 6 digits (`POST /auth/link`, Pydantic). Blank/whitespace-only or over-4000-char `message`, or a missing `context` field, on `POST /reports` (Pydantic). Unsupported/invalid `extension` or malformed `image_base64` on `PUT /admin/games/{id}/cover`. |
+| `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone on `PUT /profile/settings` (Pydantic). Link `code` not exactly 6 digits (`POST /auth/link`, Pydantic). Blank/whitespace-only or over-4000-char `message`, or a missing `context` field, on `POST /reports` (Pydantic). Unsupported/invalid `extension` or malformed `image_base64` on `PUT /admin/games/{id}/cover`. Invalid `status` query value on `GET /admin/reports`, or a body `status` other than `"triaged"`/`"closed"` (including `"open"` — no reopen in v1) on `PATCH /admin/reports/{id}` (Pydantic). |
 | `500` | Unhandled server error (global handler in `app/main.py`). |
 | `502` | Upstream voice failure — OpenAI Whisper or Vertex Gemini error (`POST /voice/transcribe`). Discord OAuth upstream failure (`POST /auth/discord`). IGDB upstream error — non-rate-limit failure (`POST /games/match`). |
 | `429` | Too many failed link-code attempts (`POST /auth/link`) — per-IP or global lockout; response includes `Retry-After` (seconds). |
@@ -240,6 +240,29 @@ Every write is logged via `log_admin_action()` (`app/core/observability.py`) —
 | `POST` | `/api/v1/admin/games/{id}/merge/{target_id}` | Transactional merge — reassigns aliases + sessions + preferences from `id` to `target_id`, deletes the source row. `400` on self-merge, `404` if either game is missing. Returns `204`. Replaces the old public `POST /games/{id}/merge/{target_id}`, which is now `404`. |
 | `PUT` | `/api/v1/admin/games/{id}/cover` | Uploads a custom cover for `id`. Body: `CoverUpload` (`image_base64`, `extension`, default `"jpg"`). `extension` (case-insensitive) must be one of `jpg`, `jpeg`, `png`, `webp` → `422` otherwise (also rejects path-like values, e.g. `../../etc/x`). `image_base64` is decoded with strict validation → `422` on malformed input. Writes the decoded bytes to `COVERS_DIR` (env var, default `/app/covers`) as `{id}.{extension}`, and sets `cover_image_url="/covers/{id}.{extension}"` (relative — see the `cover_image_url` contract under Games) and `cover_source=CUSTOM` on the `Game` row. Re-uploading overwrites the file and row in place. `404` if the game is missing. Returns `200` with the updated `GameResponse`. Replaces the old public `PUT /games/{id}/cover`, which is now `404`. The enrichment worker never overwrites a `CUSTOM` cover. |
 | `GET` | `/api/v1/admin/stats/overview` | Homelab-wide aggregate totals for the admin panel hub (read-only, no caching). Returns `AdminOverviewResponse` — see below. |
+| `GET` | `/api/v1/admin/reports` | Admin reports inbox — paginated, newest-first. Query params: `status` (optional, one of `open`/`triaged`/`closed`; `422` if any other value), `skip` (int ≥ 0, default `0`), `limit` (int 1–100, default `50`). Returns `{"total": <int>, "items": [<report item>]}` — see below. |
+| `PATCH` | `/api/v1/admin/reports/{id}` | Triage a single report. Body: `{"status": "triaged" \| "closed"}` — no reopen in v1, so `"open"` (or any other value) is rejected with `422`. Returns `200` with the updated report item (same shape as a list item). `404` if `id` does not exist. |
+
+`GET /admin/reports` response — each item in `items`:
+
+```json
+{
+  "id": 42,
+  "user_id": "111111111111111111",
+  "username": "player",
+  "message": "The dashboard tile is showing the wrong total.",
+  "context": {
+    "screen": "Dashboard",
+    "platform": "android",
+    "osVersion": "14",
+    "appVersion": "1.4.2"
+  },
+  "status": "open",
+  "created_at": "2026-07-09T18:22:00Z"
+}
+```
+
+`username` comes from a `LEFT JOIN` to `users` on `user_id` (`null` if the reporting user was since deleted). `context` is the same diagnostic blob stored by `POST /reports` (camelCase keys). Results are ordered by `created_at DESC`; `total` is the unfiltered-by-pagination count matching the `status` filter (if given).
 
 `GET /admin/stats/overview` response — all fields non-negative integers:
 
@@ -263,7 +286,7 @@ Every write is logged via `log_admin_action()` (`app/core/observability.py`) —
 | `game_count` | `COUNT(*)` on `games` — full catalog size, including unenriched stubs. |
 | `needs_review_count` | `games` where `enrichment_status = NEEDS_REVIEW`. |
 | `pending_enrichment_count` | `games` where `enrichment_status = PENDING`. |
-| `open_reports_count` | `COUNT(*)` on `reports` — currently counts **all** reports (no triage yet); will narrow to `status = 'open'` once report triage ships (see Reports). No contract change when that lands. |
+| `open_reports_count` | `COUNT(*)` on `reports` where `status = 'open'` — see [Reports](#reports) and `GET /admin/reports` for the full triage inbox. |
 
 `session_count` and `total_seconds` intentionally differ on which statuses they count — the former counts every visible session ever logged (live `ONGOING` and unresolved `ERROR` included), the latter sums only completed playtime. This is deliberate, not a bug.
 
@@ -324,7 +347,7 @@ Gemini uses `response_mime_type="application/json"` + `response_schema` — no m
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/reports` | Store an in-app feedback report. Body: `{"message": "<string, 1–4000 chars>", "context": {"screen": "<string>", "platform": "<string>", "osVersion": "<string\|int>", "appVersion": "<string>"}}` — `message` is trimmed server-side and rejected (`422`) if blank after trimming or over 4000 chars; `context` is rejected (`422`) if any field is missing. Returns `201` `{"id": <int>, "created_at": <datetime>}`. Store-only — no list/read endpoint exists yet. |
+| `POST` | `/api/v1/reports` | Store an in-app feedback report. Body: `{"message": "<string, 1–4000 chars>", "context": {"screen": "<string>", "platform": "<string>", "osVersion": "<string\|int>", "appVersion": "<string>"}}` — `message` is trimmed server-side and rejected (`422`) if blank after trimming or over 4000 chars; `context` is rejected (`422`) if any field is missing. Returns `201` `{"id": <int>, "created_at": <datetime>}`. New reports start in `open` status. No self-service list/read endpoint — see [Admin](#admin) → `GET /admin/reports` / `PATCH /admin/reports/{id}` for the triage inbox. |
 
 ## Health
 
