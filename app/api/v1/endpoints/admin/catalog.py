@@ -2,17 +2,19 @@
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.auth import require_admin
 from app.core.database import get_db
+from app.core.observability import log_admin_action
 from app.models.game import EnrichmentStatus, Game, GameAlias
 from app.models.session import GameSession
 from app.models.user import User
 from app.schemas.admin import AdminGameItem, AdminGameListResponse
+from app.services.enrichment_dispatch import queue_enrichment
 from app.services.session_visibility import visible_session
 
 router = APIRouter()
@@ -104,3 +106,25 @@ async def list_games(
     ]
 
     return AdminGameListResponse(total=total, items=items)
+
+
+# ---------------------------------------------------------------------------
+# POST /games/{game_id}/enrich
+# ---------------------------------------------------------------------------
+
+@router.post("/games/{game_id}/enrich", status_code=202)
+async def requeue_enrichment(
+    game_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Re-queue the Celery enrichment task for an existing game (no row reset)."""
+    game = await db.get(Game, game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail=f"Game {game_id} not found.")
+
+    queue_enrichment(game_id)
+
+    log_admin_action(user.discord_id, "enrich_requeue", f"game:{game_id}")
+
+    return {"queued": True}

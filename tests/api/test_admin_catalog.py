@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from app.models.game import EnrichmentStatus
 from tests.factories import dt, make_alias, make_game, make_session, make_user
 
@@ -218,3 +220,37 @@ async def test_sort_name_asc(admin_client, db, admin_user):
     names = [item["primary_name"] for item in resp.json()["items"]]
     assert names == ["Alpha", "Zebra"]
     assert names[0] != zebra.primary_name
+
+
+# ── POST /games/{id}/enrich ──────────────────────────────────────────────────
+
+ENRICH_URL = "/api/v1/admin/games/{game_id}/enrich"
+
+
+async def test_enrich_existing_game_queues_and_returns_202(admin_client, db, admin_user):
+    game = await make_game(db, "Re-queue Me", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    with patch("app.api.v1.endpoints.admin.catalog.queue_enrichment") as mock_queue:
+        resp = await admin_client.post(ENRICH_URL.format(game_id=game.id))
+
+    assert resp.status_code == 202
+    assert resp.json() == {"queued": True}
+    mock_queue.assert_called_once_with(game.id)
+
+
+async def test_enrich_missing_game_returns_404(admin_client, db, admin_user):
+    with patch("app.api.v1.endpoints.admin.catalog.queue_enrichment") as mock_queue:
+        resp = await admin_client.post(ENRICH_URL.format(game_id=999999))
+
+    assert resp.status_code == 404
+    mock_queue.assert_not_called()
+
+
+async def test_enrich_non_admin_returns_403(authed_client, db, user):
+    game = await make_game(db, "Forbidden Enrich", enrichment_status=EnrichmentStatus.PENDING)
+
+    with patch("app.api.v1.endpoints.admin.catalog.queue_enrichment") as mock_queue:
+        resp = await authed_client.post(ENRICH_URL.format(game_id=game.id))
+
+    assert resp.status_code == 403
+    mock_queue.assert_not_called()
