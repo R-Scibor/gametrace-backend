@@ -832,9 +832,9 @@ async def admin_overview(db: AsyncSession) -> AdminOverviewResponse:
         .where(Game.enrichment_status == EnrichmentStatus.PENDING)
     )
 
-    # Pre-triage every report is effectively open. Swap to
-    # .where(Report.status == "open") when the reports-status migration lands.
-    open_reports_count = await db.scalar(select(func.count()).select_from(Report))
+    open_reports_count = await db.scalar(
+        select(func.count()).select_from(Report).where(Report.status == "open")
+    )
 
     return AdminOverviewResponse(
         user_count=user_count,

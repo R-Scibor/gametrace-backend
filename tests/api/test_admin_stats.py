@@ -54,6 +54,14 @@ async def test_overview_aggregates(admin_client, db, admin_user):
     )
 
     db.add(Report(user_id=player.discord_id, message="bug", context={"screen": "Home"}))
+    db.add(
+        Report(
+            user_id=player.discord_id,
+            message="already handled",
+            context={"screen": "Home"},
+            status="closed",
+        )
+    )
     await db.flush()
 
     resp = await admin_client.get(URL)
