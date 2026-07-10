@@ -1,6 +1,9 @@
 from unittest.mock import patch
 
+import pytest
+
 from app.models.game import EnrichmentStatus
+from app.services.game_matching import IGDBCandidate
 from tests.factories import dt, make_alias, make_game, make_session, make_user
 
 URL = "/api/v1/admin/games"
@@ -254,3 +257,63 @@ async def test_enrich_non_admin_returns_403(authed_client, db, user):
 
     assert resp.status_code == 403
     mock_queue.assert_not_called()
+
+
+# ── POST /games/match ────────────────────────────────────────────────────────
+
+MATCH_URL = "/api/v1/admin/games/match"
+MATCH_PATCH_TARGET = "app.api.v1.endpoints.admin.catalog._igdb_search_candidates"
+
+_CANDIDATE_A = IGDBCandidate(
+    igdb_id=1234,
+    name="Hades",
+    year=2020,
+    cover_url="https://images.igdb.com/igdb/image/upload/t_cover_big/abc.jpg",
+    score=0.97,
+)
+_CANDIDATE_B = IGDBCandidate(
+    igdb_id=5678,
+    name="Hades II",
+    year=2024,
+    cover_url=None,
+    score=0.72,
+)
+
+
+async def test_match_returns_igdb_candidates(admin_client, db, admin_user):
+    with patch(MATCH_PATCH_TARGET, return_value=[_CANDIDATE_A, _CANDIDATE_B]):
+        resp = await admin_client.post(MATCH_URL, json={"query": "hades"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+
+    first = data[0]
+    assert first["igdb_id"] == 1234
+    assert first["name"] == "Hades"
+    assert first["year"] == 2020
+    assert first["cover_url"] == "https://images.igdb.com/igdb/image/upload/t_cover_big/abc.jpg"
+    assert first["score"] == pytest.approx(0.97, abs=1e-6)
+
+    second = data[1]
+    assert second["igdb_id"] == 5678
+    assert second["name"] == "Hades II"
+    assert second["year"] == 2024
+    assert second["cover_url"] is None
+    assert second["score"] == pytest.approx(0.72, abs=1e-6)
+
+
+async def test_match_rate_limited_returns_503(admin_client, db, admin_user):
+    from app.services.game_matching import _RateLimited
+
+    with patch(MATCH_PATCH_TARGET, side_effect=_RateLimited("IGDB")):
+        resp = await admin_client.post(MATCH_URL, json={"query": "hades"})
+
+    assert resp.status_code == 503
+
+
+async def test_match_non_admin_returns_403(authed_client, db, user):
+    with patch(MATCH_PATCH_TARGET, return_value=[_CANDIDATE_A]):
+        resp = await authed_client.post(MATCH_URL, json={"query": "hades"})
+
+    assert resp.status_code == 403

@@ -1,5 +1,7 @@
 """Admin catalog operations."""
 
+import asyncio
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,10 +16,13 @@ from app.models.game import EnrichmentStatus, Game, GameAlias
 from app.models.session import GameSession
 from app.models.user import User
 from app.schemas.admin import AdminGameItem, AdminGameListResponse
+from app.schemas.game import GameMatchRequest, IGDBCandidateOut
 from app.services.enrichment_dispatch import queue_enrichment
+from app.services.game_matching import _igdb_search_candidates, _RateLimited
 from app.services.session_visibility import visible_session
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 session_count_expr = func.count(func.distinct(GameSession.id))
 aliases_expr = func.array_remove(
@@ -128,3 +133,43 @@ async def requeue_enrichment(
     log_admin_action(user.discord_id, "enrich_requeue", f"game:{game_id}")
 
     return {"queued": True}
+
+
+# ---------------------------------------------------------------------------
+# POST /games/match
+# ---------------------------------------------------------------------------
+
+@router.post("/games/match", response_model=list[IGDBCandidateOut])
+async def match_game(
+    body: GameMatchRequest,
+    user: User = Depends(require_admin),
+):
+    """
+    Search IGDB synchronously and return ranked candidates for *body.query*.
+
+    Admin mirror of POST /games/match — read-only, no DB write, no audit log.
+    """
+    try:
+        candidates = await asyncio.to_thread(_igdb_search_candidates, body.query)
+    except _RateLimited:
+        raise HTTPException(
+            status_code=503,
+            detail="Game database temporarily unavailable",
+        )
+    except Exception:
+        logger.exception("match_game: IGDB error for query=%r", body.query)
+        raise HTTPException(
+            status_code=502,
+            detail="Upstream game database error",
+        )
+
+    return [
+        IGDBCandidateOut(
+            igdb_id=c.igdb_id,
+            name=c.name,
+            year=c.year,
+            cover_url=c.cover_url,
+            score=c.score,
+        )
+        for c in candidates
+    ]
