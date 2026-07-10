@@ -239,6 +239,33 @@ Every write is logged via `log_admin_action()` (`app/core/observability.py`) —
 |---|---|---|
 | `POST` | `/api/v1/admin/games/{id}/merge/{target_id}` | Transactional merge — reassigns aliases + sessions + preferences from `id` to `target_id`, deletes the source row. `400` on self-merge, `404` if either game is missing. Returns `204`. Replaces the old public `POST /games/{id}/merge/{target_id}`, which is now `404`. |
 | `PUT` | `/api/v1/admin/games/{id}/cover` | Uploads a custom cover for `id`. Body: `CoverUpload` (`image_base64`, `extension`, default `"jpg"`). `extension` (case-insensitive) must be one of `jpg`, `jpeg`, `png`, `webp` → `422` otherwise (also rejects path-like values, e.g. `../../etc/x`). `image_base64` is decoded with strict validation → `422` on malformed input. Writes the decoded bytes to `COVERS_DIR` (env var, default `/app/covers`) as `{id}.{extension}`, and sets `cover_image_url="/covers/{id}.{extension}"` (relative — see the `cover_image_url` contract under Games) and `cover_source=CUSTOM` on the `Game` row. Re-uploading overwrites the file and row in place. `404` if the game is missing. Returns `200` with the updated `GameResponse`. Replaces the old public `PUT /games/{id}/cover`, which is now `404`. The enrichment worker never overwrites a `CUSTOM` cover. |
+| `GET` | `/api/v1/admin/stats/overview` | Homelab-wide aggregate totals for the admin panel hub (read-only, no caching). Returns `AdminOverviewResponse` — see below. |
+
+`GET /admin/stats/overview` response — all fields non-negative integers:
+
+```json
+{
+  "user_count": 3,
+  "session_count": 1240,
+  "total_seconds": 4823100,
+  "game_count": 87,
+  "needs_review_count": 4,
+  "pending_enrichment_count": 1,
+  "open_reports_count": 2
+}
+```
+
+| Field | Rule |
+|---|---|
+| `user_count` | `COUNT(*)` on `users`. |
+| `session_count` | Visible sessions (excludes soft-deleted + flicker) — **includes** `ONGOING` and `ERROR`; total sessions ever logged. |
+| `total_seconds` | `COALESCE(SUM(duration_seconds), 0)` over visible sessions with `status = COMPLETED` only — **excludes** `ONGOING` (no live end time) and `ERROR` (unknown end time). Matches the `/stats/summary` COMPLETED convention. |
+| `game_count` | `COUNT(*)` on `games` — full catalog size, including unenriched stubs. |
+| `needs_review_count` | `games` where `enrichment_status = NEEDS_REVIEW`. |
+| `pending_enrichment_count` | `games` where `enrichment_status = PENDING`. |
+| `open_reports_count` | `COUNT(*)` on `reports` — currently counts **all** reports (no triage yet); will narrow to `status = 'open'` once report triage ships (see Reports). No contract change when that lands. |
+
+`session_count` and `total_seconds` intentionally differ on which statuses they count — the former counts every visible session ever logged (live `ONGOING` and unresolved `ERROR` included), the latter sums only completed playtime. This is deliberate, not a bug.
 
 ## Stats
 
