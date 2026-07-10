@@ -37,11 +37,20 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 session_count_expr = func.count(func.distinct(GameSession.id))
-aliases_expr = func.array_remove(
-    func.array_agg(
-        aggregate_order_by(GameAlias.discord_process_name, GameAlias.discord_process_name.asc())
-    ),
-    None,
+aliases_expr = (
+    select(
+        func.array_remove(
+            func.array_agg(
+                aggregate_order_by(
+                    GameAlias.discord_process_name, GameAlias.discord_process_name.asc()
+                )
+            ),
+            None,
+        )
+    )
+    .where(GameAlias.game_id == Game.id)
+    .correlate(Game)
+    .scalar_subquery()
 )
 
 
@@ -100,7 +109,6 @@ async def list_games(
             GameSession,
             and_(GameSession.game_id == Game.id, *visible_session()),
         )
-        .outerjoin(GameAlias, GameAlias.game_id == Game.id)
         .where(*filters)
         .group_by(Game.id)
         .order_by(*sort_map[sort])

@@ -94,6 +94,22 @@ async def test_aliases_populated_sorted(admin_client, db, admin_user):
     assert item["aliases"] == ["alpha.exe", "zebra.exe"]
 
 
+async def test_aliases_not_duplicated_when_sessions_exist(admin_client, db, admin_user):
+    game = await make_game(db, "Alias Session Game", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    await make_alias(db, game.id, "alpha.exe")
+    await make_alias(db, game.id, "zebra.exe")
+    user_a = await make_user(db, discord_id="333333333333333333", username="user_a")
+    user_b = await make_user(db, discord_id="444444444444444444", username="user_b")
+    await make_session(db, user_a.discord_id, game.id, dt(hours_ago=2), dt(hours_ago=1))
+    await make_session(db, user_b.discord_id, game.id, dt(hours_ago=4), dt(hours_ago=3))
+
+    resp = await admin_client.get(URL)
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["session_count"] == 2
+    assert item["aliases"] == ["alpha.exe", "zebra.exe"]
+
+
 async def test_zero_alias_game_returns_empty_aliases(admin_client, db, admin_user):
     game = await make_game(db, "No Aliases", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
 
