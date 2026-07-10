@@ -12,13 +12,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.endpoints.auth import require_admin
 from app.core.database import get_db
 from app.core.observability import log_admin_action
-from app.models.game import EnrichmentStatus, Game, GameAlias
+from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias
 from app.models.session import GameSession
 from app.models.user import User
-from app.schemas.admin import AdminGameItem, AdminGameListResponse
-from app.schemas.game import GameMatchRequest, IGDBCandidateOut
+from app.schemas.admin import AdminGameItem, AdminGameListResponse, IgdbLinkRequest
+from app.schemas.game import GameMatchRequest, GameResponse, IGDBCandidateOut
 from app.services.enrichment_dispatch import queue_enrichment
-from app.services.game_matching import _igdb_search_candidates, _RateLimited
+from app.services.game_matching import (
+    _igdb_fetch_by_id,
+    _igdb_search_candidates,
+    _RateLimited,
+    apply_igdb_metadata,
+)
 from app.services.session_visibility import visible_session
 
 router = APIRouter()
@@ -173,3 +178,78 @@ async def match_game(
         )
         for c in candidates
     ]
+
+
+# ---------------------------------------------------------------------------
+# POST /games/{game_id}/igdb-link
+# ---------------------------------------------------------------------------
+
+def _igdb_link_audit_snapshot(game: Game) -> str:
+    return (
+        f"primary_name={game.primary_name!r} "
+        f"enrichment_status={EnrichmentStatus(game.enrichment_status).value} "
+        f"external_api_id={game.external_api_id!r} "
+        f"cover_source={CoverSource(game.cover_source).value}"
+    )
+
+
+@router.post("/games/{game_id}/igdb-link", response_model=GameResponse)
+async def igdb_link_game(
+    game_id: int,
+    body: IgdbLinkRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Link an existing catalog row to a chosen IGDB game and apply its metadata."""
+    game = await db.get(Game, game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail=f"Game {game_id} not found.")
+
+    other = await db.scalar(
+        select(Game.id).where(
+            Game.external_api_id == str(body.igdb_id),
+            Game.id != game_id,
+        )
+    )
+    if other is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "IGDB id already linked to another game",
+                "conflicting_game_id": other,
+            },
+        )
+
+    try:
+        fetched = await asyncio.to_thread(_igdb_fetch_by_id, body.igdb_id)
+    except _RateLimited:
+        raise HTTPException(
+            status_code=503,
+            detail="Game database temporarily unavailable",
+        )
+
+    if fetched is None:
+        raise HTTPException(status_code=404, detail="IGDB game not found")
+
+    canonical_name, meta = fetched
+
+    before = _igdb_link_audit_snapshot(game)
+    await apply_igdb_metadata(
+        db,
+        game,
+        canonical_name,
+        meta,
+        igdb_id=body.igdb_id,
+    )
+    await db.commit()
+    await db.refresh(game)
+
+    log_admin_action(
+        user.discord_id,
+        "igdb_link",
+        f"game:{game_id}",
+        before=before,
+        after=_igdb_link_audit_snapshot(game),
+    )
+
+    return game

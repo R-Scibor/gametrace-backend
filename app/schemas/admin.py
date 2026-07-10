@@ -61,3 +61,9 @@ class AdminGameListResponse(BaseModel):
 
     total: int
     items: list[AdminGameItem]
+
+
+class IgdbLinkRequest(BaseModel):
+    """Link an existing catalog row to a specific IGDB game id."""
+
+    igdb_id: int

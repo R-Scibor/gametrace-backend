@@ -317,3 +317,151 @@ async def test_match_non_admin_returns_403(authed_client, db, user):
         resp = await authed_client.post(MATCH_URL, json={"query": "hades"})
 
     assert resp.status_code == 403
+
+
+# ── POST /games/{id}/igdb-link ───────────────────────────────────────────────
+
+from datetime import date
+
+from sqlalchemy import func, select
+
+from app.models.game import CoverSource, Game
+from app.services.game_matching import IGDBResult
+
+IGDB_LINK_URL = "/api/v1/admin/games/{game_id}/igdb-link"
+IGDB_LINK_PATCH_TARGET = "app.api.v1.endpoints.admin.catalog._igdb_fetch_by_id"
+
+_IGDB_ID = 1234
+_FETCH_RESULT = (
+    "Hades",
+    IGDBResult(
+        cover_url="https://images.igdb.com/igdb/image/upload/t_cover_big/abc.jpg",
+        confidence=1.0,
+        genres=["Role-playing (RPG)"],
+        themes=["Action"],
+        developers=["Supergiant Games"],
+        publishers=["Supergiant Games"],
+        first_release_date=date(2020, 9, 17),
+    ),
+)
+
+
+async def test_igdb_link_happy_path_enriches_existing_stub(admin_client, db, admin_user):
+    game = await make_game(db, "hades.exe", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    game_id = game.id
+    total_before = await db.scalar(select(func.count()).select_from(Game))
+
+    with patch(IGDB_LINK_PATCH_TARGET, return_value=_FETCH_RESULT):
+        resp = await admin_client.post(
+            IGDB_LINK_URL.format(game_id=game_id),
+            json={"igdb_id": _IGDB_ID},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["id"] == game_id
+    assert data["primary_name"] == "Hades"
+    assert data["enrichment_status"] == "ENRICHED"
+    assert data["cover_source"] == "EXTERNAL"
+    assert data["cover_image_url"] == _FETCH_RESULT[1].cover_url
+
+    await db.refresh(game)
+    assert game.external_api_id == str(_IGDB_ID)
+    assert game.genres == ["Role-playing (RPG)"]
+    assert game.developers == ["Supergiant Games"]
+
+    total_after = await db.scalar(select(func.count()).select_from(Game))
+    assert total_after == total_before
+
+
+async def test_igdb_link_idempotent_same_game_same_igdb_id(admin_client, db, admin_user):
+    game = await make_game(
+        db,
+        "Hades",
+        enrichment_status=EnrichmentStatus.ENRICHED,
+    )
+    game.external_api_id = str(_IGDB_ID)
+    game.cover_source = CoverSource.EXTERNAL
+    await db.flush()
+
+    with patch(IGDB_LINK_PATCH_TARGET, return_value=_FETCH_RESULT) as mock_fetch:
+        resp = await admin_client.post(
+            IGDB_LINK_URL.format(game_id=game.id),
+            json={"igdb_id": _IGDB_ID},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["id"] == game.id
+    mock_fetch.assert_called_once_with(_IGDB_ID)
+
+
+async def test_igdb_link_conflict_when_other_game_has_external_api_id(admin_client, db, admin_user):
+    holder = await make_game(db, "Already Linked", enrichment_status=EnrichmentStatus.ENRICHED)
+    holder.external_api_id = str(_IGDB_ID)
+    await db.flush()
+    stub = await make_game(db, "Unlinked Stub", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    with patch(IGDB_LINK_PATCH_TARGET, return_value=_FETCH_RESULT) as mock_fetch:
+        resp = await admin_client.post(
+            IGDB_LINK_URL.format(game_id=stub.id),
+            json={"igdb_id": _IGDB_ID},
+        )
+
+    assert resp.status_code == 409
+    assert resp.json() == {
+        "detail": {
+            "message": "IGDB id already linked to another game",
+            "conflicting_game_id": holder.id,
+        }
+    }
+    mock_fetch.assert_not_called()
+
+
+async def test_igdb_link_missing_game_returns_404(admin_client, db, admin_user):
+    with patch(IGDB_LINK_PATCH_TARGET, return_value=_FETCH_RESULT) as mock_fetch:
+        resp = await admin_client.post(
+            IGDB_LINK_URL.format(game_id=999999),
+            json={"igdb_id": _IGDB_ID},
+        )
+
+    assert resp.status_code == 404
+    mock_fetch.assert_not_called()
+
+
+async def test_igdb_link_igdb_not_found_returns_404(admin_client, db, admin_user):
+    game = await make_game(db, "Unknown IGDB", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    with patch(IGDB_LINK_PATCH_TARGET, return_value=None):
+        resp = await admin_client.post(
+            IGDB_LINK_URL.format(game_id=game.id),
+            json={"igdb_id": _IGDB_ID},
+        )
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "IGDB game not found"
+
+
+async def test_igdb_link_rate_limited_returns_503(admin_client, db, admin_user):
+    from app.services.game_matching import _RateLimited
+
+    game = await make_game(db, "Rate Limited", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    with patch(IGDB_LINK_PATCH_TARGET, side_effect=_RateLimited("IGDB")):
+        resp = await admin_client.post(
+            IGDB_LINK_URL.format(game_id=game.id),
+            json={"igdb_id": _IGDB_ID},
+        )
+
+    assert resp.status_code == 503
+
+
+async def test_igdb_link_non_admin_returns_403(authed_client, db, user):
+    game = await make_game(db, "Forbidden Link", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    with patch(IGDB_LINK_PATCH_TARGET, return_value=_FETCH_RESULT):
+        resp = await authed_client.post(
+            IGDB_LINK_URL.format(game_id=game.id),
+            json={"igdb_id": _IGDB_ID},
+        )
+
+    assert resp.status_code == 403

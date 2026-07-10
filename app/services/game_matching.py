@@ -14,9 +14,12 @@ from typing import NamedTuple
 
 import httpx
 from rapidfuzz import fuzz
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.models.game import CoverSource, EnrichmentStatus, Game
 from app.services.company_resolution import resolve_companies
+from app.services.game_review import sync_review_preferences
 from app.tasks.igdb_auth import get_igdb_token, invalidate_igdb_token
 
 logger = logging.getLogger(__name__)
@@ -83,6 +86,35 @@ class IGDBResult(NamedTuple):
     developers: list[str]
     publishers: list[str]
     first_release_date: date | None
+
+
+async def apply_igdb_metadata(
+    db: AsyncSession,
+    game: Game,
+    canonical_name: str,
+    meta: IGDBResult,
+    *,
+    igdb_id: int,
+) -> None:
+    """Apply IGDB lookup results to an existing Game row (no commit)."""
+    previous_status = game.enrichment_status
+    game.primary_name = canonical_name
+    game.external_api_id = str(igdb_id)
+    game.enrichment_status = EnrichmentStatus.ENRICHED
+    if game.cover_source != CoverSource.CUSTOM:
+        game.cover_image_url = meta.cover_url
+        game.cover_source = CoverSource.EXTERNAL
+        game.genres = meta.genres
+        game.themes = meta.themes
+        game.developers = meta.developers
+        game.publishers = meta.publishers
+        game.first_release_date = meta.first_release_date
+    await sync_review_preferences(
+        db,
+        game.id,
+        previous_status=previous_status,
+        new_status=EnrichmentStatus.ENRICHED,
+    )
 
 
 def _empty_igdb_result() -> IGDBResult:
