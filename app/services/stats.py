@@ -4,11 +4,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import Date, Integer, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.game import Game, UserGamePreference
+from app.models.game import Game, EnrichmentStatus, UserGamePreference
+from app.models.report import Report
 from app.services.library_visibility import library_visible_filter
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
 from app.services.session_visibility import visible_session
+from app.schemas.admin import AdminOverviewResponse
 from app.schemas.stats import (
     CompaniesResponse,
     CompanyEntry,
@@ -794,4 +796,52 @@ async def game_stats_for_user(
         session_count=row.session_count,
         first_played=row.first_played,
         last_played=row.last_played,
+    )
+
+
+async def admin_overview(db: AsyncSession) -> AdminOverviewResponse:
+    """Homelab-wide aggregates for the admin panel. NOT user-scoped.
+
+    session_count includes ONGOING/ERROR (all visible sessions); total_seconds
+    sums only COMPLETED visible sessions — the asymmetry is intentional.
+    """
+    user_count = await db.scalar(select(func.count()).select_from(User))
+
+    session_count = await db.scalar(
+        select(func.count()).select_from(GameSession).where(*visible_session())
+    )
+
+    total_seconds = await db.scalar(
+        select(func.coalesce(func.sum(GameSession.duration_seconds), 0)).where(
+            GameSession.status == SessionStatus.COMPLETED,
+            *visible_session(),
+        )
+    )
+
+    game_count = await db.scalar(select(func.count()).select_from(Game))
+
+    needs_review_count = await db.scalar(
+        select(func.count())
+        .select_from(Game)
+        .where(Game.enrichment_status == EnrichmentStatus.NEEDS_REVIEW)
+    )
+
+    pending_enrichment_count = await db.scalar(
+        select(func.count())
+        .select_from(Game)
+        .where(Game.enrichment_status == EnrichmentStatus.PENDING)
+    )
+
+    # Pre-triage every report is effectively open. Swap to
+    # .where(Report.status == "open") when the reports-status migration lands.
+    open_reports_count = await db.scalar(select(func.count()).select_from(Report))
+
+    return AdminOverviewResponse(
+        user_count=user_count,
+        session_count=session_count,
+        total_seconds=total_seconds,
+        game_count=game_count,
+        needs_review_count=needs_review_count,
+        pending_enrichment_count=pending_enrichment_count,
+        open_reports_count=open_reports_count,
     )

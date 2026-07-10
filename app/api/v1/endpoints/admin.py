@@ -11,7 +11,9 @@ from app.core.observability import log_admin_action
 from app.models.game import CoverSource, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession
 from app.models.user import User
+from app.schemas.admin import AdminOverviewResponse
 from app.schemas.game import CoverUpload, GameResponse
+from app.services import stats as stats_service
 from app.services.upload_validation import sniff_image_extension
 
 router = APIRouter()
@@ -156,3 +158,16 @@ async def upload_cover(
     )
 
     return game
+
+
+# ---------------------------------------------------------------------------
+# GET /stats/overview
+# ---------------------------------------------------------------------------
+
+@router.get("/stats/overview", response_model=AdminOverviewResponse)
+async def stats_overview(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),  # admin gate (router-level too; explicit for clarity)
+):
+    """Homelab-wide aggregate totals for the admin panel hub (read-only)."""
+    return await stats_service.admin_overview(db)
