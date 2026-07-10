@@ -13,6 +13,7 @@ from app.core.database import get_db
 from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
+from app.services.game_aliases import add_alias
 from app.schemas.game import (
     GameCreateRequest,
     GameListResponse,
@@ -308,14 +309,7 @@ async def create_or_link_game(
 
 async def _add_alias_if_absent(db: AsyncSession, game_id: int, value: str) -> None:
     """Insert a GameAlias only if no row with that discord_process_name exists."""
-    existing = (
-        await db.execute(
-            select(GameAlias).where(GameAlias.discord_process_name == value)
-        )
-    ).scalar_one_or_none()
-    if existing is None:
-        db.add(GameAlias(game_id=game_id, discord_process_name=value))
-        await db.flush()
+    await add_alias(db, game_id, value)
 
 
 # ---------------------------------------------------------------------------
