@@ -116,21 +116,21 @@ Revisit only if cross-device covers become a real user need.
 
 A thin admin surface, built in slices behind the shipped RBAC gate rather than as a
 monolithic console. The **core is live**: `users.is_admin`, a `require_admin`
-dependency gating everything under `/api/v1/admin/*`, game merge and cover curation as
-the first admin operations, and an audit log line on every admin write. The frontend
-will be a separate route on the web client (`/admin`), using the `is_admin` field the
-API already returns at login; enforcement stays server-side.
+dependency gating everything under `/api/v1/admin/*`, game merge and cover curation,
+catalog housekeeping endpoints, reports triage, and an audit log line on every admin
+write. The frontend will be a separate route on the web client (`/admin`), using the
+`is_admin` field the API already returns at login; enforcement stays server-side.
 
-### Next slice — catalog ops
+### Catalog ops — live
 
-Admin endpoints for the game-catalog housekeeping that's currently done by hand
-(see [tech-debt.md](tech-debt.md) for the motivating cases):
+Admin catalog housekeeping is shipped (see [api.md → Admin](api.md#admin) and
+[tech-debt.md](tech-debt.md) for motivating cases):
 
-| Endpoint (sketch) | Purpose |
+| Endpoint | Purpose |
 |---|---|
-| `GET /admin/games?status=NEEDS_REVIEW&q=` | Global catalog review queue |
-| `POST /admin/games/{id}/enrich` | Re-queue the enrichment task |
-| `POST /admin/games/match` + `POST /admin/games/{id}/igdb-link` | IGDB search; admin picks the candidate → set metadata |
+| `GET /admin/games?status=NEEDS_REVIEW&q=` | Global catalog review queue — filter, search, sort by session count |
+| `POST /admin/games/{id}/enrich` | Re-queue the Celery enrichment task |
+| `POST /admin/games/match` + `POST /admin/games/{id}/igdb-link` | IGDB search; admin picks the candidate → apply metadata to the row |
 | `POST /admin/games/{id}/aliases` | Add exact Discord process-name variants |
 
 UI v1 can be minimal — a table with action buttons. Admin ops are global and don't
@@ -141,10 +141,9 @@ require the caller to have sessions on the game.
 - **Server errors:** lean on Sentry rather than rebuilding it — the panel links or
   embeds Sentry issues. Optionally a thin feed of 5xx + selected upstream failures
   (with request id, route, user) for a "Recent failures" tab.
-- **In-app bug reports:** `POST /api/v1/reports` (any authenticated user) already
-  exists; the admin side adds `GET /admin/reports` and `PATCH /admin/reports/{id}`
-  for triage (open | triaged | closed). Subjective user feedback stays separate from
-  server stack traces.
+- **In-app bug reports:** `POST /api/v1/reports` (any authenticated user) and admin
+  triage (`GET /admin/reports`, `PATCH /admin/reports/{id}`) are live. Subjective user
+  feedback stays separate from server stack traces.
 - **Logs:** container logs and Flower cover Celery/process visibility; no log tail
   inside the panel unless volume ever warrants it.
 - **Audit table:** admin writes currently emit structured log lines; a dedicated

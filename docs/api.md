@@ -10,19 +10,20 @@ Grouped by code — see endpoint sections below for path-specific detail. Authed
 
 | Code | When |
 |---|---|
-| `200` | Successful read or update (`GET`, `PATCH`, `PUT`, `POST /auth/link`, `POST /auth/login`, `POST /sessions/{id}/restore`). `GET /games/resolve` also returns `200` with body `null` on miss. `POST /games` returns `200` when the game already exists (deduplication by `igdb_id`). |
-| `201` | `POST /sessions` — manual session created. `POST /games` — new game row created (either mode). `POST /reports` — feedback report stored. |
+| `200` | Successful read or update (`GET`, `PATCH`, `PUT`, `POST /auth/link`, `POST /auth/login`, `POST /sessions/{id}/restore`). `GET /games/resolve` also returns `200` with body `null` on miss. `POST /games` returns `200` when the game already exists (deduplication by `igdb_id`). `POST /admin/games/{id}/aliases` returns `200` when the alias already exists on the same game (idempotent, no audit log). |
+| `201` | `POST /sessions` — manual session created. `POST /games` — new game row created (either mode). `POST /reports` — feedback report stored. `POST /admin/games/{id}/aliases` — new alias attached. |
+| `202` | `POST /admin/games/{id}/enrich` — Celery enrichment task re-queued (no row reset). |
 | `204` | Successful delete with no body (`POST /auth/logout`, `DELETE /sessions/{id}`, `DELETE /user/preferences/{game_id}`, `DELETE /notifications/register-token`, `POST /admin/games/{id}/merge/{target_id}`). |
 | `400` | Client input rejected — e.g. self-merge (`POST /admin/games/{id}/merge/{target_id}`), empty audio upload (`POST /voice/transcribe`), `redirect_uri` not allowlisted (`POST /auth/discord`). |
 | `401` | Invalid or expired bearer token (`get_current_user`), or unknown token on `POST /auth/logout`, invalid or expired link code (`POST /auth/link`), or bad/expired Discord code (`POST /auth/discord`). |
 | `403` | A valid but non-admin bearer token on any `/admin/*` route (`require_admin`), including `PUT /admin/games/{id}/cover`. Also `PATCH` or soft `DELETE` on an `ONGOING` session (bot-managed row). Also missing bearer token on any authed route (e.g. `POST /reports`) — `HTTPBearer` raises `403` when the `Authorization` header itself is absent, distinct from `401` for an invalid/expired token. |
-| `404` | Resource not found or not owned by the caller — user not registered (`POST /auth/login`), session/game missing, game missing on preference upsert, report missing on triage (`PATCH /admin/reports/{id}`). Soft-deleting an already-trashed session also returns `404` (same as not found). |
-| `409` | Session time overlap — `POST /sessions`, `PATCH /sessions/{id}`, `POST /sessions/{id}/restore` (body: `{detail: {detail, conflicting_session}}`). |
-| `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone on `PUT /profile/settings` (Pydantic). Link `code` not exactly 6 digits (`POST /auth/link`, Pydantic). Blank/whitespace-only or over-4000-char `message`, or a missing `context` field, on `POST /reports` (Pydantic). Unsupported/invalid `extension` or malformed `image_base64` on `PUT /admin/games/{id}/cover`. Invalid `status` query value on `GET /admin/reports`, or a body `status` other than `"triaged"`/`"closed"` (including `"open"` — no reopen in v1) on `PATCH /admin/reports/{id}` (Pydantic). |
+| `404` | Resource not found or not owned by the caller — user not registered (`POST /auth/login`), session/game missing, game missing on preference upsert, report missing on triage (`PATCH /admin/reports/{id}`), game missing on admin catalog writes (`POST /admin/games/{id}/enrich`, `POST /admin/games/{id}/igdb-link`, `POST /admin/games/{id}/aliases`), or IGDB id not found on `POST /admin/games/{id}/igdb-link`. Soft-deleting an already-trashed session also returns `404` (same as not found). |
+| `409` | Session time overlap — `POST /sessions`, `PATCH /sessions/{id}`, `POST /sessions/{id}/restore` (body: `{detail: {detail, conflicting_session}}`). IGDB id already linked to another game on `POST /admin/games/{id}/igdb-link` (body: `{detail: {message, conflicting_game_id}}`). Discord process name already owned by another game on `POST /admin/games/{id}/aliases` (body: `{detail: {conflicting_game_id}}`). |
+| `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone on `PUT /profile/settings` (Pydantic). Link `code` not exactly 6 digits (`POST /auth/link`, Pydantic). Blank/whitespace-only or over-4000-char `message`, or a missing `context` field, on `POST /reports` (Pydantic). Unsupported/invalid `extension` or malformed `image_base64` on `PUT /admin/games/{id}/cover`. Invalid `status` query value on `GET /admin/reports` or `GET /admin/games`, or a body `status` other than `"triaged"`/`"closed"` (including `"open"` — no reopen in v1) on `PATCH /admin/reports/{id}` (Pydantic). Blank/whitespace-only `discord_process_name` on `POST /admin/games/{id}/aliases`. |
 | `500` | Unhandled server error (global handler in `app/main.py`). |
-| `502` | Upstream voice failure — OpenAI Whisper or Vertex Gemini error (`POST /voice/transcribe`). Discord OAuth upstream failure (`POST /auth/discord`). IGDB upstream error — non-rate-limit failure (`POST /games/match`). |
+| `502` | Upstream voice failure — OpenAI Whisper or Vertex Gemini error (`POST /voice/transcribe`). Discord OAuth upstream failure (`POST /auth/discord`). IGDB upstream error — non-rate-limit failure (`POST /games/match`, `POST /admin/games/match`). |
 | `429` | Too many failed link-code attempts (`POST /auth/link`) — per-IP or global lockout; response includes `Retry-After` (seconds). |
-| `503` | Voice pipeline not configured — `OPENAI_API_KEY` or `GCP_PROJECT` unset (`POST /voice/transcribe`). Link codes not configured (`LINK_CODE_SECRET` unset) or Redis unreachable (`POST /auth/link`). IGDB rate-limited or auth expired (`POST /games/match`, `POST /games` with `igdb_id`). |
+| `503` | Voice pipeline not configured — `OPENAI_API_KEY` or `GCP_PROJECT` unset (`POST /voice/transcribe`). Link codes not configured (`LINK_CODE_SECRET` unset) or Redis unreachable (`POST /auth/link`). IGDB rate-limited or auth expired (`POST /games/match`, `POST /games` with `igdb_id`, `POST /admin/games/match`, `POST /admin/games/{id}/igdb-link`). |
 
 `GET /health` and `GET /api/v1/health` always return `200`; bot offline or Redis loss is reflected in the JSON payload (`bot.status`: `offline` / `unknown`), not the HTTP status.
 
@@ -239,9 +240,39 @@ Every write is logged via `log_admin_action()` (`app/core/observability.py`) —
 |---|---|---|
 | `POST` | `/api/v1/admin/games/{id}/merge/{target_id}` | Transactional merge — reassigns aliases + sessions + preferences from `id` to `target_id`, deletes the source row. `400` on self-merge, `404` if either game is missing. Returns `204`. Replaces the old public `POST /games/{id}/merge/{target_id}`, which is now `404`. |
 | `PUT` | `/api/v1/admin/games/{id}/cover` | Uploads a custom cover for `id`. Body: `CoverUpload` (`image_base64`, `extension`, default `"jpg"`). `extension` (case-insensitive) must be one of `jpg`, `jpeg`, `png`, `webp` → `422` otherwise (also rejects path-like values, e.g. `../../etc/x`). `image_base64` is decoded with strict validation → `422` on malformed input. Writes the decoded bytes to `COVERS_DIR` (env var, default `/app/covers`) as `{id}.{extension}`, and sets `cover_image_url="/covers/{id}.{extension}"` (relative — see the `cover_image_url` contract under Games) and `cover_source=CUSTOM` on the `Game` row. Re-uploading overwrites the file and row in place. `404` if the game is missing. Returns `200` with the updated `GameResponse`. Replaces the old public `PUT /games/{id}/cover`, which is now `404`. The enrichment worker never overwrites a `CUSTOM` cover. |
+| `GET` | `/api/v1/admin/games` | Global catalog review queue — paginated, filterable, searchable. Query params: `status` (one of `PENDING`/`ENRICHED`/`NEEDS_REVIEW`, default `NEEDS_REVIEW`; `422` if any other value), `q` (optional case-insensitive substring on `primary_name` or any alias — blank/whitespace is ignored), `skip` (int ≥ 0, default `0`), `limit` (int 1–100, default `50`), `sort` (`sessions_desc` \| `id_asc` \| `name_asc`, default `sessions_desc`). Returns `{"total": <int>, "items": [<catalog item>]}` — see below. Read-only, no audit log. |
+| `POST` | `/api/v1/admin/games/{id}/enrich` | Re-queue the Celery enrichment task for an existing game (no row reset). `404` if the game is missing. Returns `202` `{"queued": true}`. Audit action: `enrich_requeue`, resource `game:{id}`. |
+| `POST` | `/api/v1/admin/games/match` | Synchronous IGDB candidate search — admin mirror of `POST /games/match`. Body: `{"query": "<string>"}` (min length 1). Returns `list[IGDBCandidateOut]` (`igdb_id`, `name`, `year\|null`, `cover_url\|null`, `score`). Read-only, no DB write, no audit log. `503` rate-limited; `502` other IGDB error. |
+| `POST` | `/api/v1/admin/games/{id}/igdb-link` | Link an existing catalog row to a chosen IGDB game and apply its metadata (`primary_name`, cover, genres, themes, developers, publishers, `first_release_date`, `external_api_id`, `enrichment_status=ENRICHED`). Body: `{"igdb_id": <int>}`. `404` if the game is missing or IGDB returns no row for the id. `409` if another game already has that `external_api_id` — body `{detail: {message: "IGDB id already linked to another game", conflicting_game_id: <int>}}`. `503` rate-limited. Returns `200` with the updated `GameResponse`. Audit action: `igdb_link`, resource `game:{id}`, with `before`/`after` snapshots of `primary_name`, `enrichment_status`, `external_api_id`, `cover_source`. |
+| `POST` | `/api/v1/admin/games/{id}/aliases` | Attach an exact Discord process-name alias to an existing catalog row. Body: `{"discord_process_name": "<string>"}` — trimmed server-side; `422` if blank after trimming. `404` if the game is missing. `409` if the name is already owned by another game — body `{detail: {conflicting_game_id: <int>}}`. Returns `201` `{"game_id": <int>, "discord_process_name": "<string>"}` on create; `200` with the same body when the alias already exists on this game (idempotent, no audit log). Audit action on create only: `add_alias`, resource `game:{id}`. |
 | `GET` | `/api/v1/admin/stats/overview` | Homelab-wide aggregate totals for the admin panel hub (read-only, no caching). Returns `AdminOverviewResponse` — see below. |
 | `GET` | `/api/v1/admin/reports` | Admin reports inbox — paginated, newest-first. Query params: `status` (optional, one of `open`/`triaged`/`closed`; `422` if any other value), `skip` (int ≥ 0, default `0`), `limit` (int 1–100, default `50`). Returns `{"total": <int>, "items": [<report item>]}` — see below. |
-| `PATCH` | `/api/v1/admin/reports/{id}` | Triage a single report. Body: `{"status": "triaged" \| "closed"}` — no reopen in v1, so `"open"` (or any other value) is rejected with `422`. Returns `200` with the updated report item (same shape as a list item). `404` if `id` does not exist. |
+| `PATCH` | `/api/v1/admin/reports/{id}` | Triage a single report. Body: `{"status": "triaged" \| "closed"}` — no reopen in v1, so `"open"` (or any other value) is rejected with `422`. Returns `200` with the updated report item (same shape as a list item). `404` if `id` does not exist. Audit action: `report_triage`, resource `report:{id}`, with `before`/`after` status. |
+
+`GET /admin/games` response — each item in `items`:
+
+```json
+{
+  "id": 87,
+  "primary_name": "hades.exe",
+  "enrichment_status": "NEEDS_REVIEW",
+  "cover_image_url": null,
+  "cover_source": "EXTERNAL",
+  "external_api_id": null,
+  "aliases": ["hades.exe", "Hades"],
+  "session_count": 12
+}
+```
+
+| Field | Rule |
+|---|---|
+| `enrichment_status` | `PENDING`, `ENRICHED`, or `NEEDS_REVIEW`. |
+| `cover_source` | `EXTERNAL` or `CUSTOM` — same contract as user-facing `GameResponse` (`cover_image_url` relative vs absolute). |
+| `external_api_id` | IGDB id as a string when linked; `null` on unlinked stubs. |
+| `aliases` | All `game_aliases.discord_process_name` values for the row, sorted ascending. Empty array when none. |
+| `session_count` | Distinct visible sessions across all users (excludes soft-deleted and flicker; includes `ONGOING` and `ERROR`). |
+
+`sort=sessions_desc` orders by `session_count` descending, then `id` ascending (tie-break). `sort=id_asc` and `sort=name_asc` order by `games.id` or `primary_name` respectively. `total` is the unfiltered-by-pagination count matching the `status` and `q` filters.
 
 `GET /admin/reports` response — each item in `items`:
 
