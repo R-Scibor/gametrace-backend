@@ -55,13 +55,22 @@ async def get_or_create_game(db: AsyncSession, process_name: str) -> tuple[Game,
 async def get_ongoing_session(db: AsyncSession, user_id: str) -> GameSession | None:
     """Return the current ONGOING session for a user, or None."""
     result = await db.execute(
-        select(GameSession).where(
+        select(GameSession)
+        .where(
             GameSession.user_id == user_id,
             GameSession.status == SessionStatus.ONGOING,
             GameSession.deleted_at.is_(None),
         )
+        .order_by(GameSession.start_time.desc(), GameSession.id.desc())
     )
-    return result.scalar_one_or_none()
+    sessions = list(result.scalars().all())
+    if len(sessions) > 1:
+        logger.warning(
+            "Duplicate ONGOING sessions for user=%s: %s",
+            user_id,
+            [session.id for session in sessions],
+        )
+    return sessions[0] if sessions else None
 
 
 async def start_session(db: AsyncSession, user_id: str, game_id: int) -> GameSession:

@@ -4,7 +4,8 @@ tests/bot/test_session_manager.py
 Phase 2 — DB-layer functions used by the Discord bot.
 Called directly with the test `db` fixture — no HTTP client, no Discord connection.
 """
-from datetime import timedelta, timezone, datetime
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy import select
 
@@ -158,6 +159,39 @@ async def test_get_ongoing_session_none_when_all_completed(db):
 
     result = await get_ongoing_session(db, user.discord_id)
     assert result is None
+
+
+async def test_get_ongoing_session_returns_newest_when_duplicates(caplog):
+    newer = MagicMock(id=2)
+    older = MagicMock(id=1)
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [newer, older]
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    result = await get_ongoing_session(mock_db, "user-a")
+
+    assert result is newer
+    assert "duplicate ongoing" in caplog.text.lower()
+
+
+async def test_start_session_returns_existing_on_unique_index_race(db):
+    user = await make_user(db)
+    game = await make_game(db)
+    existing = await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        start_time=dt(hours_ago=1),
+        status=SessionStatus.ONGOING,
+        source=SessionSource.BOT,
+    )
+    await db.commit()
+
+    other_game = await make_game(db, "Other Game")
+    result = await start_session(db, user.discord_id, other_game.id)
+
+    assert result.id == existing.id
 
 
 # ── complete_session flicker flagging ─────────────────────────────────────────

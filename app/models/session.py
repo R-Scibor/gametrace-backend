@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -20,6 +20,14 @@ class SessionSource(str, enum.Enum):
 
 class GameSession(Base):
     __tablename__ = "game_sessions"
+    __table_args__ = (
+        Index(
+            "uq_game_sessions_user_ongoing",
+            "user_id",
+            unique=True,
+            postgresql_where="status = 'ONGOING' AND deleted_at IS NULL",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.discord_id", ondelete="CASCADE"))
