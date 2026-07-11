@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.flicker_policy import find_stitch_candidate, is_short_flicker
@@ -86,7 +87,19 @@ async def start_session(db: AsyncSession, user_id: str, game_id: int) -> GameSes
     db.add(session)
     if game is not None and game.enrichment_status == EnrichmentStatus.NEEDS_REVIEW:
         await ensure_inbox_for_user(db, game_id, user_id)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = await get_ongoing_session(db, user_id)
+        if existing is None:
+            raise
+        logger.warning(
+            "ONGOING insert raced for user=%s; returning session_id=%d",
+            user_id,
+            existing.id,
+        )
+        return existing
     await db.refresh(session)
     logger.info("Session STARTED user=%s game_id=%d session_id=%d", user_id, game_id, session.id)
     return session
