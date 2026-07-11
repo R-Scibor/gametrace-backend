@@ -117,7 +117,7 @@ The core table. State machine described in the [README](../README.md#session-sta
 
 **Invariants:**
 
-- Only one `ONGOING` session per user at any time. Enforced by bot logic, not a DB constraint.
+- Only one `ONGOING` session per user at any time. Enforced by partial unique index `uq_game_sessions_user_ongoing` plus per-user Postgres advisory locks in the bot.
 - `ERROR` sessions are excluded from all aggregates (`/stats/*`, weekly report) until resolved.
 - `ONGOING` sessions cannot be soft-deleted directly — only the bot owns those rows.
 - `is_flicker=true` rows are excluded at every SELECT layer (sessions, stats, games, resolve, voice context, overlap validation) — they never surface to the user or cause 409s.
