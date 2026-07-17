@@ -29,6 +29,9 @@ async def test_heatmap_empty_user_returns_168_zero_cells(authed_client):
 
 
 # ── Bucketing & timezone ──────────────────────────────────────────────────────
+# Fixed calendar anchors (known weekday) sit outside the default 90-day window
+# once "today" drifts past them. Use days=0 (all-time) so these tests only
+# assert cell math, not the rolling window (covered separately below).
 
 async def test_heatmap_session_split_across_spanned_hours(authed_client, db, user):
     # 2026-04-15 is a Wednesday → Mon=0 spec → dow=2.
@@ -39,7 +42,7 @@ async def test_heatmap_session_split_across_spanned_hours(authed_client, db, use
     end = start + timedelta(seconds=3600)
     await make_session(db, user.discord_id, game.id, start, end)
 
-    resp = await authed_client.get("/api/v1/stats/heatmap")
+    resp = await authed_client.get("/api/v1/stats/heatmap?days=0")
 
     assert resp.status_code == 200
     cells = _cells_by_key(resp.json()["cells"])
@@ -56,7 +59,7 @@ async def test_heatmap_within_single_hour_stays_in_one_cell(authed_client, db, u
     end = start + timedelta(seconds=600)
     await make_session(db, user.discord_id, game.id, start, end)
 
-    resp = await authed_client.get("/api/v1/stats/heatmap")
+    resp = await authed_client.get("/api/v1/stats/heatmap?days=0")
 
     assert resp.status_code == 200
     cells = _cells_by_key(resp.json()["cells"])
@@ -71,7 +74,7 @@ async def test_heatmap_session_crosses_midnight_splits_dow(authed_client, db, us
     end = start + timedelta(seconds=3 * 3600)
     await make_session(db, user.discord_id, game.id, start, end)
 
-    resp = await authed_client.get("/api/v1/stats/heatmap")
+    resp = await authed_client.get("/api/v1/stats/heatmap?days=0")
 
     assert resp.status_code == 200
     cells = _cells_by_key(resp.json()["cells"])
@@ -93,7 +96,7 @@ async def test_heatmap_respects_user_timezone(authed_client, db, user):
     end = start + timedelta(seconds=3600)
     await make_session(db, user.discord_id, game.id, start, end)
 
-    resp = await authed_client.get("/api/v1/stats/heatmap")
+    resp = await authed_client.get("/api/v1/stats/heatmap?days=0")
 
     assert resp.status_code == 200
     cells = _cells_by_key(resp.json()["cells"])
@@ -167,7 +170,7 @@ async def test_heatmap_includes_ongoing(authed_client, db, user):
 # ── DOW mapping ───────────────────────────────────────────────────────────────
 
 async def test_heatmap_dow_mapping_monday_is_zero(authed_client, db, user):
-    # 2026-04-13 is a Monday
+    # 2026-04-13 is a Monday; days=0 so fixed anchors stay in-window forever.
     game = await make_game(db)
     mon = datetime(2026, 4, 13, 12, 0, tzinfo=timezone.utc)
     await make_session(
@@ -179,7 +182,7 @@ async def test_heatmap_dow_mapping_monday_is_zero(authed_client, db, user):
         db, user.discord_id, game.id, sun, sun + timedelta(seconds=900)
     )
 
-    resp = await authed_client.get("/api/v1/stats/heatmap")
+    resp = await authed_client.get("/api/v1/stats/heatmap?days=0")
 
     assert resp.status_code == 200
     cells = _cells_by_key(resp.json()["cells"])
