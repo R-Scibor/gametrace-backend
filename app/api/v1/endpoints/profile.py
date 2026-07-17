@@ -14,6 +14,7 @@ def _to_response(user: User) -> ProfileResponse:
         discord_id=user.discord_id,
         username=user.username,
         timezone=user.timezone,
+        language=user.language,
         weekly_report_enabled=user.weekly_report_enabled,
         push_enabled=user.push_enabled,
         is_admin=user.is_admin,

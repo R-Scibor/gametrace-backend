@@ -26,6 +26,29 @@ async def test_get_me_returns_defaults(authed_client, user):
     assert body["weekly_report_enabled"] is True
     assert body["push_enabled"] is True
     assert body["is_admin"] is False
+    assert body["language"] == "pl"
+
+
+async def test_put_settings_language_persists(authed_client):
+    resp = await authed_client.put(
+        "/api/v1/profile/settings",
+        json={"language": "en"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["language"] == "en"
+
+    me = await authed_client.get("/api/v1/profile/me")
+    assert me.json()["language"] == "en"
+
+
+async def test_put_settings_invalid_language_rejected(authed_client):
+    resp = await authed_client.put(
+        "/api/v1/profile/settings",
+        json={"language": "de"},
+    )
+
+    assert resp.status_code == 422
 
 
 async def test_get_me_reflects_is_admin_true(admin_client, admin_user):
