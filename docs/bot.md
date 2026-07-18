@@ -69,7 +69,7 @@ Reply: `Wylogowano. Unieważniono N sesji w aplikacji.` (or `Nie jesteś zarejes
 | `before` activity | `after` activity | Action |
 |---|---|---|
 | game | none | `complete_session` — set `end_time = NOW()`, `status = COMPLETED` |
-| none | game | `start_session` for the new game (after erroring any unexpected stale ONGOING) |
+| none | game | if the current `ONGOING` is already this game, leave it running (spurious repeat event); otherwise `start_session` for the new game, erroring any stale ONGOING for a *different* game first |
 | game A | game B | `complete_session` for A, `start_session` for B |
 | same | same | no-op (filtered before reaching the handler) |
 
@@ -84,6 +84,8 @@ Discord rich-presence is occasionally flaky: a single continuous play session ca
 **Stitch on resume:** when `start_session` would create a new row for game G, the bot first looks back for the most recent `source=BOT, status=COMPLETED` session for that game. If its `end_time` is within `SESSION_STITCH_WINDOW_SECONDS` (default 180s), the bot reopens that row instead of inserting a new one: `status → ONGOING`, `end_time → NULL`, `duration_seconds → NULL`, `is_flicker → false`. The session continues seamlessly; when it finally closes, `duration_seconds` spans the entire range including the dropout gap.
 
 **Config invariant:** `SESSION_FLICKER_GC_MARGIN_SECONDS` (default 86400s) must exceed `SESSION_STITCH_WINDOW_SECONDS` at startup. This is enforced at boot and guarantees the daily GC task (`tasks.purge_flicker_sessions`) never removes a row that could still be a stitch target.
+
+**Repeat start of the same game.** Discord sometimes redelivers a game-start presence update with an empty `before`, so the handler sees `none → game` while that same game is already `ONGOING`. The handler resolves the game first and, when it matches the live session, treats the event as a spurious repeat and leaves the session untouched — no ERROR, no new row. Without this guard the live session was errored and reopened, producing same-second same-game `ERROR` churn. Only a stale `ONGOING` for a *different* game is treated as an orphan and errored.
 
 **Self-Healing is unaffected.** Self-Healing's ERROR path sets no clean `end_time` and never triggers the stitch check. ERROR sessions remain unaffected by flicker logic.
 

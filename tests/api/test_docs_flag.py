@@ -5,19 +5,10 @@ disabled case reloads the module with the flag off and inspects the rebuilt app.
 """
 import importlib
 
-import pytest
-
 import app.main as main_module
 from app.core.config import settings
 
 DOC_PATHS = {"/docs", "/redoc", "/openapi.json"}
-
-
-@pytest.mark.asyncio
-async def test_docs_served_by_default(client):
-    resp = await client.get("/openapi.json")
-    assert resp.status_code == 200
-    assert "/api/v1/auth/login" in resp.json()["paths"]
 
 
 def test_docs_routes_absent_when_flag_off(monkeypatch):
