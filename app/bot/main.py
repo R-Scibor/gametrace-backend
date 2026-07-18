@@ -148,17 +148,25 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
                         await complete_session(db, ongoing)
 
                 elif not before_game and after_game:
-                    # Game started — close any stale session just in case, then start new
-                    if ongoing:
-                        await error_session(
-                            db,
-                            ongoing,
-                            f"Self-Healing: unexpected ONGOING session when new game {after_game!r} started.",
-                        )
+                    # Game started. Discord sometimes redelivers a start with an
+                    # empty `before`, so this fires while the same game is still
+                    # ONGOING — the equality guard above misses it. Resolve the
+                    # game first: if it matches the ONGOING session, this is a
+                    # spurious repeat, leave the session running. Only a stale
+                    # ONGOING for a *different* game is an orphan worth erroring.
                     game, created = await get_or_create_game(db, after_game)
-                    await start_or_resume_session(db, discord_id, game.id)
-                    if created:
-                        _queue_enrichment(game.id)
+                    if ongoing and ongoing.game_id == game.id:
+                        pass
+                    else:
+                        if ongoing:
+                            await error_session(
+                                db,
+                                ongoing,
+                                f"Self-Healing: unexpected ONGOING session when new game {after_game!r} started.",
+                            )
+                        await start_or_resume_session(db, discord_id, game.id)
+                        if created:
+                            _queue_enrichment(game.id)
 
                 elif before_game and after_game:
                     # Switched game — complete old, start new
