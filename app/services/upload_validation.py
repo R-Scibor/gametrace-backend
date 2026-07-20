@@ -20,7 +20,7 @@ def sniff_image_extension(data: bytes) -> str | None:
 def looks_like_audio(data: bytes) -> bool:
     """True if `data` starts with a recognized audio-container signature.
 
-    Covers the formats the voice endpoint accepts (m4a/wav/mp3/ogg)."""
+    Covers the formats the voice endpoint accepts (m4a/wav/mp3/ogg/webm)."""
     if data[:4] == b"RIFF" and data[8:12] == b"WAVE":  # WAV
         return True
     if data[:3] == b"ID3":  # MP3 with an ID3v2 tag
@@ -30,5 +30,7 @@ def looks_like_audio(data: bytes) -> bool:
     if data[4:8] == b"ftyp":  # MP4 / M4A container
         return True
     if data[:4] == b"OggS":  # Ogg
+        return True
+    if data[:4] == b"\x1a\x45\xdf\xa3":  # EBML (WebM / Matroska) — Chrome MediaRecorder
         return True
     return False

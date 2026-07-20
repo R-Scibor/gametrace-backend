@@ -21,6 +21,7 @@ def test_looks_like_audio_recognizes_supported_signatures():
     assert looks_like_audio(b"\xff\xfbrest")  # MP3 frame sync
     assert looks_like_audio(b"\x00\x00\x00\x18ftypM4A ")  # M4A
     assert looks_like_audio(b"OggS\x00\x02rest")  # Ogg
+    assert looks_like_audio(b"\x1a\x45\xdf\xa3rest")  # WebM / Matroska (EBML)
 
 
 def test_looks_like_audio_rejects_non_audio():
