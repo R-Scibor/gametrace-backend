@@ -199,7 +199,7 @@ Pre-filters candidates with ILIKE-any-token (a game is included if any whitespac
 | `game_id` | `int` | Internal game identifier |
 | `primary_name` | `string` | Canonical game title |
 | `cover_image_url` | `string\|null` | Cover art URL (IGDB-sourced or null) |
-| `enrichment_status` | `string` | `ENRICHED`, `NEEDS_REVIEW`, `PENDING`, or `ERROR` |
+| `enrichment_status` | `string` | `ENRICHED`, `NEEDS_REVIEW`, or `PENDING` |
 | `score` | `float` | Relevance score (0.3–1.0) |
 
 Returns `401` without a valid bearer token. Returns `422` if `q` is blank or whitespace.
