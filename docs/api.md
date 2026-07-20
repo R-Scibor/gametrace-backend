@@ -19,7 +19,7 @@ Grouped by code — see endpoint sections below for path-specific detail. Authed
 | `403` | A valid but non-admin bearer token on any `/admin/*` route (`require_admin`), including `PUT /admin/games/{id}/cover`. Also `PATCH` or soft `DELETE` on an `ONGOING` session (bot-managed row). Also missing bearer token on any authed route (e.g. `POST /reports`) — `HTTPBearer` raises `403` when the `Authorization` header itself is absent, distinct from `401` for an invalid/expired token. |
 | `404` | Resource not found or not owned by the caller — user not registered (`POST /auth/login`), session/game missing, game missing on preference upsert, report missing on triage (`PATCH /admin/reports/{id}`), game missing on admin catalog writes (`POST /admin/games/{id}/enrich`, `POST /admin/games/{id}/igdb-link`, `POST /admin/games/{id}/aliases`), or IGDB id not found on `POST /admin/games/{id}/igdb-link`. Soft-deleting an already-trashed session also returns `404` (same as not found). |
 | `409` | Session time overlap — `POST /sessions`, `PATCH /sessions/{id}`, `POST /sessions/{id}/restore` (body: `{detail: {detail, conflicting_session}}`). IGDB id already linked to another game on `POST /admin/games/{id}/igdb-link` (body: `{detail: {message, conflicting_game_id}}`). Discord process name already owned by another game on `POST /admin/games/{id}/aliases` (body: `{detail: {conflicting_game_id}}`). |
-| `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone on `PUT /profile/settings` (Pydantic). Link `code` not exactly 6 digits (`POST /auth/link`, Pydantic). Blank/whitespace-only or over-4000-char `message`, or a missing `context` field, on `POST /reports` (Pydantic). Unsupported/invalid `extension` or malformed `image_base64` on `PUT /admin/games/{id}/cover`. Invalid `status` query value on `GET /admin/reports` or `GET /admin/games`, or a body `status` other than `"triaged"`/`"closed"` (including `"open"` — no reopen in v1) on `PATCH /admin/reports/{id}` (Pydantic). Blank/whitespace-only `discord_process_name` on `POST /admin/games/{id}/aliases`. |
+| `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone or unsupported `language` (not `"pl"`/`"en"`) on `PUT /profile/settings` (Pydantic). Link `code` not exactly 6 digits (`POST /auth/link`, Pydantic). Blank/whitespace-only or over-4000-char `message`, or a missing `context` field, on `POST /reports` (Pydantic). Unsupported/invalid `extension` or malformed `image_base64` on `PUT /admin/games/{id}/cover`. Invalid `status` query value on `GET /admin/reports` or `GET /admin/games`, or a body `status` other than `"triaged"`/`"closed"` (including `"open"` — no reopen in v1) on `PATCH /admin/reports/{id}` (Pydantic). Blank/whitespace-only `discord_process_name` on `POST /admin/games/{id}/aliases`. |
 | `500` | Unhandled server error (global handler in `app/main.py`). |
 | `502` | Upstream voice failure — OpenAI Whisper or Vertex Gemini error (`POST /voice/transcribe`). Discord OAuth upstream failure (`POST /auth/discord`). IGDB upstream error — non-rate-limit failure (`POST /games/match`, `POST /admin/games/match`). |
 | `429` | Too many failed link-code attempts (`POST /auth/link`) — per-IP or global lockout; response includes `Retry-After` (seconds). |
@@ -55,8 +55,8 @@ Tokens expire after `SESSION_TOKEN_EXPIRE_DAYS` of inactivity (sliding window �
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/v1/profile/me` | Current user's profile (`discord_id`, `username`, `timezone`, notification toggles, `is_admin`). |
-| `PUT` | `/api/v1/profile/settings` | Update timezone and/or notification toggles (`weekly_report_enabled`, `push_enabled`). Partial update — unset fields are left alone. |
+| `GET` | `/api/v1/profile/me` | Current user's profile (`discord_id`, `username`, `timezone`, `language`, notification toggles, `is_admin`). `language` is the mobile UI language (`"pl"`/`"en"`, default `"pl"`). |
+| `PUT` | `/api/v1/profile/settings` | Update `timezone`, `language`, and/or notification toggles (`weekly_report_enabled`, `push_enabled`). Partial update — unset fields are left alone. `language` must be one of `"pl"`/`"en"` (else `422`). |
 
 ## Sessions
 
@@ -343,7 +343,7 @@ All stats endpoints exclude soft-deleted sessions, `ERROR` sessions, `is_flicker
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/voice/transcribe` | Multipart audio upload (m4a/wav/mp3/ogg). See pipeline below. Unknown fields come back as `null`. The user always confirms before saving — this endpoint only suggests values. After transcription, the frontend typically calls `GET /games/resolve?name=` to map the spoken game name to a library entry. `503` if `OPENAI_API_KEY` or `GCP_PROJECT` is unset. |
+| `POST` | `/api/v1/voice/transcribe` | Multipart audio upload (m4a/wav/mp3/ogg/webm). See pipeline below. Unknown fields come back as `null`. The user always confirms before saving — this endpoint only suggests values. After transcription, the frontend typically calls `GET /games/resolve?name=` to map the spoken game name to a library entry. `503` if `OPENAI_API_KEY` or `GCP_PROJECT` is unset. |
 
 ### Transcribe pipeline
 
