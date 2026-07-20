@@ -23,12 +23,49 @@ async def test_non_admin_returns_403(authed_client, db, user):
 
 # ── Status filter ────────────────────────────────────────────────────────────
 
-async def test_default_status_filter_needs_review_only(admin_client, db, admin_user):
+async def test_omitted_status_returns_all_statuses(admin_client, db, admin_user):
+    review = await make_game(db, "Needs Review Game", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    enriched = await make_game(db, "Enriched Game", enrichment_status=EnrichmentStatus.ENRICHED)
+    pending = await make_game(db, "Pending Game", enrichment_status=EnrichmentStatus.PENDING)
+
+    resp = await admin_client.get(URL)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 3
+    assert {item["id"] for item in body["items"]} == {review.id, enriched.id, pending.id}
+    assert {item["enrichment_status"] for item in body["items"]} == {
+        "NEEDS_REVIEW",
+        "ENRICHED",
+        "PENDING",
+    }
+
+
+async def test_omitted_status_applies_q_sort_and_pagination(admin_client, db, admin_user):
+    await make_game(db, "Alpha Match", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    await make_game(db, "Beta Match", enrichment_status=EnrichmentStatus.ENRICHED)
+    await make_game(db, "Gamma Match", enrichment_status=EnrichmentStatus.PENDING)
+    await make_game(db, "Excluded", enrichment_status=EnrichmentStatus.ENRICHED)
+
+    resp = await admin_client.get(URL, params={"q": "Match", "sort": "name_asc", "limit": 2})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 3  # narrowed by q, unfiltered by status
+    assert [item["primary_name"] for item in body["items"]] == ["Alpha Match", "Beta Match"]
+
+    resp = await admin_client.get(
+        URL, params={"q": "Match", "sort": "name_asc", "skip": 2, "limit": 2}
+    )
+    body = resp.json()
+    assert body["total"] == 3
+    assert [item["primary_name"] for item in body["items"]] == ["Gamma Match"]
+
+
+async def test_explicit_status_still_narrows(admin_client, db, admin_user):
     review = await make_game(db, "Needs Review Game", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
     await make_game(db, "Enriched Game", enrichment_status=EnrichmentStatus.ENRICHED)
     await make_game(db, "Pending Game", enrichment_status=EnrichmentStatus.PENDING)
 
-    resp = await admin_client.get(URL)
+    resp = await admin_client.get(URL, params={"status": "NEEDS_REVIEW"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["total"] == 1

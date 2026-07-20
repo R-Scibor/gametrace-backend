@@ -60,7 +60,7 @@ aliases_expr = (
 
 @router.get("/games", response_model=AdminGameListResponse)
 async def list_games(
-    status: EnrichmentStatus = Query(EnrichmentStatus.NEEDS_REVIEW),
+    status: EnrichmentStatus | None = Query(None),
     q: str | None = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
@@ -68,8 +68,11 @@ async def list_games(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),  # admin gate (router-level too; explicit for clarity)
 ):
-    """Global catalog list for admin review: filterable, searchable, paginated."""
-    filters = [Game.enrichment_status == status]
+    """Global catalog list for admin review: filterable, searchable, paginated.
+
+    Omitting `status` spans every enrichment status — the merge target picker
+    searches the whole catalog, not one status bucket."""
+    filters = [Game.enrichment_status == status] if status else []
 
     q_stripped = q.strip() if q else None
     if q_stripped:
