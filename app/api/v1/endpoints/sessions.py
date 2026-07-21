@@ -1,14 +1,14 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.v1.endpoints.auth import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.game import Game
+from app.models.game import Game, UserGamePreference
 from app.models.session import GameSession, SessionSource, SessionStatus
 from app.models.user import User
 from app.schemas.session import (
@@ -18,6 +18,7 @@ from app.schemas.session import (
     SessionResponse,
     TrashedSessionResponse,
 )
+from app.services.library_visibility import library_visible_filter
 from app.services.session_visibility import visible_session
 
 router = APIRouter()
@@ -53,6 +54,7 @@ async def _check_overlap(
 @router.get("", response_model=list[SessionResponse])
 async def list_sessions(
     status_filter: list[SessionStatus] | None = Query(default=None, alias="status"),
+    library_only: bool = Query(default=False),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
@@ -62,6 +64,11 @@ async def list_sessions(
     List the caller's sessions across all games — primarily for the Dashboard
     "Recents" tile. Excludes soft-deleted rows. Optional `?status=` filter
     accepts multiple values (e.g. `?status=COMPLETED&status=ERROR`).
+
+    `?library_only=true` additionally applies `library_visible_filter()` —
+    the same visibility rules `/stats` uses — hiding sessions on ignored
+    games and unaccepted NEEDS_REVIEW stubs. Defaults to `false` so existing
+    web/mobile consumers are unaffected.
     """
     stmt = (
         select(GameSession)
@@ -76,6 +83,18 @@ async def list_sessions(
     )
     if status_filter:
         stmt = stmt.where(GameSession.status.in_(status_filter))
+    if library_only:
+        stmt = (
+            stmt.join(Game, GameSession.game_id == Game.id)
+            .outerjoin(
+                UserGamePreference,
+                and_(
+                    UserGamePreference.game_id == GameSession.game_id,
+                    UserGamePreference.user_id == user.discord_id,
+                ),
+            )
+            .where(library_visible_filter())
+        )
     result = await db.execute(stmt)
     return result.scalars().all()
 
