@@ -135,6 +135,16 @@ async def recent_command_handler(interaction: discord.Interaction) -> None:
     await interaction.followup.send(msg, ephemeral=True)
 
 
+@tree.command(name="help", description="Dowiedz się, czym jest GameTrace")
+async def help_command_handler(interaction: discord.Interaction) -> None:
+    # No I/O — no defer, no registration check, unlike /stats and /recent.
+    from app.bot.commands import help_command
+
+    msg = help_command()
+
+    await interaction.response.send_message(msg, ephemeral=True)
+
+
 @bot.event
 async def on_presence_update(before: discord.Member, after: discord.Member):
     # Ignore bots

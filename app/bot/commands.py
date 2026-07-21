@@ -93,6 +93,11 @@ async def stats_command(db, discord_id: str) -> str:
     )
 
 
+def help_command() -> str:
+    """Build the /help reply. No HTTP call, no DB lookup — reply directly."""
+    return replies.help_reply()
+
+
 async def recent_command(db, discord_id: str) -> str:
     """Build the /recent reply. Read-only — never creates a users row.
 

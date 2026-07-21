@@ -119,6 +119,28 @@ def recent_empty() -> str:
     )
 
 
+def help_reply() -> str:
+    """Orientation for someone who noticed the bot and has no idea what it is.
+
+    Discord's own slash-command picker already lists every command with its
+    description, so this is prose about *why the bot exists*, not an index.
+    The web-app pointer is only appended when a URL is configured — a
+    dangling "see the app" with nothing to point at reads as broken.
+    """
+    intro = (
+        "GameTrace obserwuje Twoją aktywność na Discordzie i automatycznie "
+        "zapisuje, w co grasz — bez żadnej pracy z Twojej strony. Wystarczy, "
+        "że grasz, a sesje same się tu pojawiają."
+    )
+    if not settings.gametrace_web_url:
+        return intro
+    return (
+        f"{intro}\n\n"
+        f"Pełny obraz — statystyki, historia, biblioteka gier — czeka w "
+        f"aplikacji webowej: {settings.gametrace_web_url}"
+    )
+
+
 def recent_reply(*, sessions: list[dict], user_timezone: str | None) -> str:
     # Defensive: the API request already excludes ONGOING (status=COMPLETED,ERROR),
     # but a command whose whole purpose is "is this recording me correctly?" must
