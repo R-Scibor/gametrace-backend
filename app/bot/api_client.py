@@ -47,7 +47,10 @@ async def _get(path: str, discord_id: str, params=None):
     if not response.is_success:
         raise BotApiError(f"{path} returned {response.status_code}")
 
-    return response.json()
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise BotApiError(f"{path} returned a non-JSON body") from exc
 
 
 async def get_summary(discord_id: str) -> dict:
@@ -71,4 +74,7 @@ async def get_review_count(discord_id: str) -> int:
     data = await _get(
         "/api/v1/games", discord_id, params={"status": "NEEDS_REVIEW", "limit": 1}
     )
-    return data["total"]
+    try:
+        return data["total"]
+    except (KeyError, TypeError) as exc:
+        raise BotApiError("/api/v1/games response missing 'total' field") from exc

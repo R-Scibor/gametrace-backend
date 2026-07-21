@@ -138,3 +138,23 @@ async def test_error_message_never_includes_secret():
         await api_client.get_summary(DISCORD_ID)
 
     assert "test-bot-secret" not in str(exc_info.value)
+
+
+async def test_2xx_non_json_body_raises_bot_api_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="not json")
+
+    _install_transport(handler)
+
+    with pytest.raises(api_client.BotApiError):
+        await api_client.get_summary(DISCORD_ID)
+
+
+async def test_2xx_missing_total_field_raises_bot_api_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"items": []})
+
+    _install_transport(handler)
+
+    with pytest.raises(api_client.BotApiError):
+        await api_client.get_review_count(DISCORD_ID)
