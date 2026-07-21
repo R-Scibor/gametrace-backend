@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     link_code_secret: str = ""  # HMAC key for /login codes; empty disables the feature
     dev_login_secret: str = ""  # shared secret gating name-only /auth/login; empty disables it
     bot_service_secret: str = ""  # shared secret letting the Discord bot read-as-any-user; empty disables it
+    api_base_url: str = "http://api:8010"  # bot → API base URL for read commands (/stats, /recent)
+    gametrace_web_url: str = ""  # public web app URL, for links in bot embeds
     # Comma-separated IPs or CIDR blocks allowed to set X-Forwarded-For. Docker
     # bridge addresses are dynamic, so a range (e.g. 172.16.0.0/12) survives
     # re-ups where an exact container IP would silently stop matching.

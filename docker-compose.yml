@@ -69,6 +69,12 @@ services:
     container_name: gametrace_bot
     restart: always
     command: python -m app.bot.main
+    environment:
+      # Read commands (/stats, /recent) call the API over the compose network
+      # instead of querying Postgres directly. Deliberately NOT a depends_on:
+      # presence writes go straight to Postgres and must keep working when the
+      # API is down; only the read commands should degrade.
+      API_BASE_URL: http://api:8010
     env_file:
       - .env
     depends_on:
