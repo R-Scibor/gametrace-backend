@@ -26,6 +26,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 bearer_scheme = HTTPBearer()
+# auto_error=False so a missing Authorization header falls through to the bot
+# credential check in get_current_or_bot_user, instead of HTTPBearer raising
+# 403 on its own before that check ever runs.
+_bearer_scheme_optional = HTTPBearer(auto_error=False)
 
 
 def _token_expiry() -> datetime:
@@ -300,6 +304,30 @@ async def get_bot_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     return user
+
+
+async def get_current_or_bot_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme_optional),
+    x_bot_service_secret: str | None = Header(default=None),
+    x_discord_id: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Dependency — resolves EITHER a bearer token OR bot-service headers to a User.
+
+    Same route, two credential paths — not a parallel bot-only endpoint. The
+    bearer-token path (web/mobile) behaves exactly as get_current_user always
+    has; presenting an Authorization header always takes that path, so an
+    invalid/expired token still 401s rather than silently falling through to
+    the bot check. Only when no Authorization header is present at all does
+    this fall through to get_bot_user. Deliberately built from plain Header()
+    params (not a fastapi.security scheme) so it does not register as a public
+    auth option in the OpenAPI schema — see get_bot_user's docstring.
+    """
+    if credentials is not None:
+        return await get_current_user(credentials=credentials, db=db)
+    return await get_bot_user(
+        x_bot_service_secret=x_bot_service_secret, x_discord_id=x_discord_id, db=db
+    )
 
 
 async def require_admin(user: User = Depends(get_current_user)) -> User:

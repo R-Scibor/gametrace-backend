@@ -152,8 +152,12 @@ async def test_logout_invalid_token_returns_401(client):
 
 
 async def test_protected_endpoint_no_credentials_returns_403(client):
-    # HTTPBearer returns 403 when the Authorization header is missing entirely
-    resp = await client.get("/api/v1/stats/summary")
+    # HTTPBearer returns 403 when the Authorization header is missing entirely.
+    # /stats/summary no longer demonstrates this: it also accepts a bot-service
+    # credential (see test_bot_auth_endpoints.py), so a missing Authorization
+    # header there now falls through to a 401. /stats/heatmap is untouched and
+    # still uses plain get_current_user, so it still exhibits bare-HTTPBearer 403.
+    resp = await client.get("/api/v1/stats/heatmap")
 
     assert resp.status_code == 403
 

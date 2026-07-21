@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.endpoints.auth import get_current_user
+from app.api.v1.endpoints.auth import get_current_or_bot_user, get_current_user
 from app.core.database import get_db
 from app.models.game import Game, UserGamePreference
 from app.models.session import GameSession, SessionStatus
@@ -44,8 +44,11 @@ router = APIRouter()
 async def get_stats_summary(
     days: int = Query(default=7, ge=0, le=365, description="0 = all-time"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_or_bot_user),
 ):
+    """Also reachable via the bot-service credential (X-Bot-Service-Secret +
+    X-Discord-Id) for the Discord bot's read-only /stats command — see
+    get_current_or_bot_user."""
     return await summary_for_user(db, user, days)
 
 

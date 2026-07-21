@@ -5,7 +5,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.v1.endpoints.auth import get_current_user
+from app.api.v1.endpoints.auth import get_current_or_bot_user, get_current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.game import Game, UserGamePreference
@@ -58,7 +58,7 @@ async def list_sessions(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_or_bot_user),
 ):
     """
     List the caller's sessions across all games — primarily for the Dashboard
@@ -69,6 +69,10 @@ async def list_sessions(
     the same visibility rules `/stats` uses — hiding sessions on ignored
     games and unaccepted NEEDS_REVIEW stubs. Defaults to `false` so existing
     web/mobile consumers are unaffected.
+
+    Also reachable via the bot-service credential (X-Bot-Service-Secret +
+    X-Discord-Id) for the Discord bot's read-only /recent command — see
+    get_current_or_bot_user.
     """
     stmt = (
         select(GameSession)
