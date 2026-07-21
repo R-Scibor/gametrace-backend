@@ -121,6 +121,20 @@ async def stats_command_handler(interaction: discord.Interaction) -> None:
     await interaction.followup.send(msg, ephemeral=True)
 
 
+@tree.command(name="recent", description="Pokaż swoje ostatnie sesje")
+async def recent_command_handler(interaction: discord.Interaction) -> None:
+    # Defer before any I/O — same rationale as /stats.
+    await interaction.response.defer(ephemeral=True)
+    discord_id = str(interaction.user.id)
+
+    async with AsyncSessionLocal() as db:
+        from app.bot.commands import recent_command
+
+        msg = await recent_command(db, discord_id)
+
+    await interaction.followup.send(msg, ephemeral=True)
+
+
 @bot.event
 async def on_presence_update(before: discord.Member, after: discord.Member):
     # Ignore bots

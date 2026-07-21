@@ -4,11 +4,16 @@ Kept separate from command handlers (app/bot/commands.py) so tone and
 wording can be reviewed in one place, independent of the API-calling logic
 around them. Every string here ends up as an ephemeral Discord reply.
 """
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from app.core.config import settings
 
 NOT_REGISTERED = "Nie jesteś zarejestrowany. Użyj `/register` lub `/login`, aby zacząć."
 
 STATS_FAILURE = "Nie udało się pobrać statystyk. Spróbuj ponownie za chwilę."
+
+RECENT_FAILURE = "Nie udało się pobrać ostatnich sesji. Spróbuj ponownie za chwilę."
 
 
 def _web_hint() -> str:
@@ -68,4 +73,65 @@ def stats_reply(
             f"{review_count} gier czeka na potwierdzenie w aplikacji.{_web_hint()}"
         )
 
+    return "\n".join(lines)
+
+
+def _resolve_tz(tz_name: str | None) -> ZoneInfo:
+    """Literal per-user timezone. Falls back to UTC on missing/invalid data —
+    unlike the voice pipeline's resolver, `/recent` has no reason to treat a
+    literal "UTC" as "unset"."""
+    try:
+        return ZoneInfo(tz_name) if tz_name else ZoneInfo("UTC")
+    except (ZoneInfoNotFoundError, ValueError):
+        return ZoneInfo("UTC")
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _format_session_line(entry: dict, tz: ZoneInfo) -> str:
+    game_name = (entry.get("game") or {}).get("primary_name", "?")
+    start = _parse_iso(entry.get("start_time"))
+    time_str = start.astimezone(tz).strftime("%d.%m %H:%M") if start else "?"
+
+    duration_seconds = entry.get("duration_seconds")
+    if duration_seconds is not None:
+        detail = _format_duration(duration_seconds)
+    elif entry.get("status") == "ERROR":
+        detail = "błąd, brak czasu trwania"
+    else:
+        detail = "brak czasu trwania"
+
+    return f"- **{game_name}** — {time_str} ({detail})"
+
+
+def recent_empty() -> str:
+    """First-run / quiet-history state. Same promise-not-dead-end bar as /stats."""
+    return (
+        "Jeszcze nie mam żadnych zarejestrowanych sesji, ale już Cię obserwuję — "
+        f"zagraj w cokolwiek, a pojawi się tutaj po zakończeniu.{_web_hint()}"
+    )
+
+
+def recent_reply(*, sessions: list[dict], user_timezone: str | None) -> str:
+    # Defensive: the API request already excludes ONGOING (status=COMPLETED,ERROR),
+    # but a command whose whole purpose is "is this recording me correctly?" must
+    # never show an in-progress session as if it were done.
+    visible = [s for s in sessions if s.get("status") != "ONGOING"]
+    if not visible:
+        return recent_empty()
+
+    tz = _resolve_tz(user_timezone)
+    lines = ["Ostatnie sesje:", ""]
+    for entry in visible[:5]:
+        lines.append(_format_session_line(entry, tz))
+
+    lines.append("")
+    lines.append(f"Zobacz więcej w aplikacji.{_web_hint()}")
     return "\n".join(lines)

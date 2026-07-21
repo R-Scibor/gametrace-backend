@@ -91,3 +91,23 @@ async def stats_command(db, discord_id: str) -> str:
         pending_errors_count=len(summary.get("pending_errors", [])),
         review_count=review_count,
     )
+
+
+async def recent_command(db, discord_id: str) -> str:
+    """Build the /recent reply. Read-only — never creates a users row.
+
+    Caller (app/bot/main.py) is responsible for deferring the interaction
+    before invoking this, since the API round-trip can exceed Discord's
+    ~3s ack deadline.
+    """
+    user = await db.get(User, discord_id)
+    if user is None:
+        return replies.NOT_REGISTERED
+
+    try:
+        sessions = await api_client.get_recent_sessions(discord_id)
+    except BotApiError:
+        logger.warning("Failed to fetch /recent data for %s", discord_id, exc_info=True)
+        return replies.RECENT_FAILURE
+
+    return replies.recent_reply(sessions=sessions, user_timezone=user.timezone)
