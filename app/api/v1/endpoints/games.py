@@ -8,7 +8,7 @@ from sqlalchemy import Integer, and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.v1.endpoints.auth import get_current_user
+from app.api.v1.endpoints.auth import get_current_or_bot_user, get_current_user
 from app.core.database import get_db
 from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession, SessionStatus
@@ -107,7 +107,7 @@ async def list_games(
     sort: Literal["name", "playtime", "last_played"] = Query(default="name"),
     order: Literal["asc", "desc"] | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_or_bot_user),
 ):
     """
     Return games that the current user has at least one session for.
@@ -116,6 +116,10 @@ async def list_games(
     Optional ?is_ignored=true for the hidden-games tab.
     Optional ?in_library=false for the out-of-library tab (ignored + unaccepted NEEDS_REVIEW).
     Optional ?q= for server-side name search (case-insensitive substring match).
+
+    Also reachable via the bot-service credential (X-Bot-Service-Secret +
+    X-Discord-Id) for the Discord bot's read-only /recent-review-count check —
+    see get_current_or_bot_user.
     """
     pref_join = and_(
         UserGamePreference.game_id == Game.id,

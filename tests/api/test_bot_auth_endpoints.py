@@ -1,5 +1,5 @@
 """
-GET /stats/summary and GET /sessions must accept EITHER credential:
+GET /stats/summary, GET /sessions, and GET /games must accept EITHER credential:
 - Authorization: Bearer <token>  (existing web/mobile path, untouched)
 - X-Bot-Service-Secret + X-Discord-Id  (bot-service path, Task 4)
 
@@ -58,6 +58,24 @@ async def test_sessions_list_accepts_bot_headers(client, db, bot_auth_enabled):
 
 async def test_sessions_list_401_without_any_credential(client, bot_auth_enabled):
     resp = await client.get("/api/v1/sessions")
+    assert resp.status_code == 401
+
+
+# ── GET /games ────────────────────────────────────────────────────────────────
+
+async def test_games_list_accepts_bearer_token(authed_client):
+    resp = await authed_client.get("/api/v1/games")
+    assert resp.status_code == 200
+
+
+async def test_games_list_accepts_bot_headers(client, db, bot_auth_enabled):
+    user = await make_user(db, discord_id="333333333333333333", username="botcaller")
+    resp = await client.get("/api/v1/games", headers=_bot_headers(user.discord_id))
+    assert resp.status_code == 200
+
+
+async def test_games_list_401_without_any_credential(client, bot_auth_enabled):
+    resp = await client.get("/api/v1/games")
     assert resp.status_code == 401
 
 
