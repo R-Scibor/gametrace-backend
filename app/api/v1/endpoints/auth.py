@@ -271,6 +271,37 @@ async def get_current_user(
     return user
 
 
+async def get_bot_user(
+    x_bot_service_secret: str | None = Header(default=None),
+    x_discord_id: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Dependency — resolves a trusted bot-service secret + X-Discord-Id header to a User.
+
+    This is a SEPARATE auth path from get_current_user (bearer tokens), for the
+    Discord bot to read the API as a named user over the compose network. It is
+    read-as-any-user by design: presenting the secret grants access to ANY
+    discord_id, with no token or session tied to that user. Never expose this
+    header pair outside the bot's own service-to-service calls, and never add
+    it to the OpenAPI security schemes.
+    """
+    secret = settings.bot_service_secret
+    if not secret or not (
+        x_bot_service_secret is not None
+        and hmac.compare_digest(x_bot_service_secret, secret)
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+    if not x_discord_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+    user = await db.get(User, x_discord_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    return user
+
+
 async def require_admin(user: User = Depends(get_current_user)) -> User:
     """Dependency — passes through the current user if admin, raises 403 otherwise."""
     if not user.is_admin:
