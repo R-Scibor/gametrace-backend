@@ -3,6 +3,8 @@ import logging
 
 from sqlalchemy import select
 
+from app.bot import api_client, replies
+from app.bot.api_client import BotApiError
 from app.core.config import settings
 from app.models.user import User, UserAuthToken
 from app.services import link_codes
@@ -63,3 +65,29 @@ async def logout_user(db, r, discord_id: str) -> str:
 
     await link_codes.discard_pending_code(r, discord_id)
     return f"Wylogowano. Unieważniono {count} sesji w aplikacji."
+
+
+async def stats_command(db, discord_id: str) -> str:
+    """Build the /stats reply. Read-only — never creates a users row.
+
+    Caller (app/bot/main.py) is responsible for deferring the interaction
+    before invoking this, since the API round-trip can exceed Discord's
+    ~3s ack deadline.
+    """
+    user = await db.get(User, discord_id)
+    if user is None:
+        return replies.NOT_REGISTERED
+
+    try:
+        summary = await api_client.get_summary(discord_id)
+        review_count = await api_client.get_review_count(discord_id)
+    except BotApiError:
+        logger.warning("Failed to fetch /stats data for %s", discord_id, exc_info=True)
+        return replies.STATS_FAILURE
+
+    return replies.stats_reply(
+        total_seconds=summary.get("total_seconds", 0),
+        per_game=summary.get("per_game", []),
+        pending_errors_count=len(summary.get("pending_errors", [])),
+        review_count=review_count,
+    )

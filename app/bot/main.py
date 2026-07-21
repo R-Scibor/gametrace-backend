@@ -106,6 +106,21 @@ async def logout_command(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(msg, ephemeral=True)
 
 
+@tree.command(name="stats", description="Pokaż swoje statystyki z ostatnich 7 dni")
+async def stats_command_handler(interaction: discord.Interaction) -> None:
+    # Defer before any I/O — a cold container's DB query + API round-trip can
+    # exceed Discord's ~3s ack deadline, otherwise showing a false failure.
+    await interaction.response.defer(ephemeral=True)
+    discord_id = str(interaction.user.id)
+
+    async with AsyncSessionLocal() as db:
+        from app.bot.commands import stats_command
+
+        msg = await stats_command(db, discord_id)
+
+    await interaction.followup.send(msg, ephemeral=True)
+
+
 @bot.event
 async def on_presence_update(before: discord.Member, after: discord.Member):
     # Ignore bots
