@@ -32,8 +32,15 @@ async def test_register_creates_user(db):
     user = await db.get(User, _DISCORD_ID)
     assert user is not None
     assert user.username == _USERNAME
-    assert msg == "Zarejestrowano w GameTrace!"
+    assert msg.startswith("Zarejestrowano w GameTrace!")
     assert "nazwą Discord" not in msg
+
+
+async def test_register_first_time_includes_orientation(db):
+    msg = await register_user(db, _DISCORD_ID, _USERNAME)
+
+    assert "Zarejestrowano w GameTrace!" in msg
+    assert "obserwuje Twoją aktywność" in msg
 
 
 async def test_register_creates_user_with_default_timezone(db):
@@ -74,6 +81,26 @@ async def test_issue_login_code_creates_user_and_redeemable_code(db, r, monkeypa
     assert "493 072" in msg
     assert "5 minut" in msg
     assert await link_codes.redeem_code(r, "493072") == _DISCORD_ID
+
+
+async def test_issue_login_code_first_time_includes_onboarding_and_code(db, r, monkeypatch):
+    monkeypatch.setattr(secrets, "randbelow", lambda n: 493_072)
+
+    msg = await issue_login_code(db, r, _DISCORD_ID, _USERNAME)
+
+    assert "obserwuje Twoją aktywność" in msg
+    assert "493 072" in msg
+    assert "5 minut" in msg
+
+
+async def test_issue_login_code_returning_user_gets_terse_reply(db, r, monkeypatch):
+    await make_user(db, discord_id=_DISCORD_ID, username=_USERNAME)
+    monkeypatch.setattr(secrets, "randbelow", lambda n: 493_072)
+
+    msg = await issue_login_code(db, r, _DISCORD_ID, _USERNAME)
+
+    assert msg == "Twój kod logowania: **493 072**. Wpisz go w aplikacji w ciągu 5 minut."
+    assert "obserwuje Twoją aktywność" not in msg
 
 
 async def test_issue_login_code_unconfigured_secret_returns_friendly_message(db, r, monkeypatch):

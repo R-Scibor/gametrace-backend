@@ -33,20 +33,20 @@ async def register_user(db, discord_id: str, username: str) -> str:
     created = await _upsert_user(db, discord_id, username)
     if created:
         logger.info("New user registered via /register: %s (%s)", username, discord_id)
-        return "Zarejestrowano w GameTrace!"
-    logger.info("Existing user /register: %s (%s)", username, discord_id)
-    return "Już jesteś zarejestrowany."
+    else:
+        logger.info("Existing user /register: %s (%s)", username, discord_id)
+    return replies.register_reply(created=created)
 
 
 async def issue_login_code(db, r, discord_id: str, username: str) -> str:
     try:
-        await _upsert_user(db, discord_id, username)
+        created = await _upsert_user(db, discord_id, username)
         code = await link_codes.issue_code(r, discord_id)
     except link_codes.LinkCodesNotConfigured:
         return "Kody logowania nie są skonfigurowane."
 
     spaced = _format_code(code)
-    return f"Twój kod logowania: **{spaced}**. Wpisz go w aplikacji w ciągu 5 minut."
+    return replies.login_reply(code=spaced, created=created)
 
 
 async def logout_user(db, r, discord_id: str) -> str:

@@ -20,6 +20,13 @@ def _web_hint() -> str:
     return f" {settings.gametrace_web_url}" if settings.gametrace_web_url else ""
 
 
+_BOT_INTRO = (
+    "GameTrace obserwuje Twoją aktywność na Discordzie i automatycznie "
+    "zapisuje, w co grasz — bez żadnej pracy z Twojej strony. Wystarczy, "
+    "że grasz, a sesje same się tu pojawiają."
+)
+
+
 def _format_duration(total_seconds: int) -> str:
     hours = total_seconds // 3600
     minutes = (total_seconds % 3600) // 60
@@ -127,18 +134,29 @@ def help_reply() -> str:
     The web-app pointer is only appended when a URL is configured — a
     dangling "see the app" with nothing to point at reads as broken.
     """
-    intro = (
-        "GameTrace obserwuje Twoją aktywność na Discordzie i automatycznie "
-        "zapisuje, w co grasz — bez żadnej pracy z Twojej strony. Wystarczy, "
-        "że grasz, a sesje same się tu pojawiają."
-    )
     if not settings.gametrace_web_url:
-        return intro
+        return _BOT_INTRO
     return (
-        f"{intro}\n\n"
+        f"{_BOT_INTRO}\n\n"
         f"Pełny obraz — statystyki, historia, biblioteka gier — czeka w "
         f"aplikacji webowej: {settings.gametrace_web_url}"
     )
+
+
+def register_reply(*, created: bool) -> str:
+    """First-time /register gets orientation; returning users keep the terse ack."""
+    if not created:
+        return "Już jesteś zarejestrowany."
+    return f"Zarejestrowano w GameTrace! {_BOT_INTRO}"
+
+
+def login_reply(*, code: str, created: bool) -> str:
+    """First-time /login gets onboarding context before the code; returning
+    users keep today's terse reply. The code itself is never dropped."""
+    terse = f"Twój kod logowania: **{code}**. Wpisz go w aplikacji w ciągu 5 minut."
+    if not created:
+        return terse
+    return f"{_BOT_INTRO}\n\n{terse}"
 
 
 def recent_reply(*, sessions: list[dict], user_timezone: str | None) -> str:
