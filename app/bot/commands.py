@@ -3,6 +3,7 @@ import logging
 
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.models.user import User, UserAuthToken
 from app.services import link_codes
 
@@ -13,7 +14,7 @@ async def _upsert_user(db, discord_id: str, username: str) -> bool:
     """Create or sync username. Returns True if a new user was created."""
     user = await db.get(User, discord_id)
     if user is None:
-        user = User(discord_id=discord_id, username=username)
+        user = User(discord_id=discord_id, username=username, timezone=settings.default_timezone)
         db.add(user)
         await db.commit()
         return True

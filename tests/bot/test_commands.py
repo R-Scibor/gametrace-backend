@@ -36,6 +36,13 @@ async def test_register_creates_user(db):
     assert "nazwą Discord" not in msg
 
 
+async def test_register_creates_user_with_default_timezone(db):
+    await register_user(db, _DISCORD_ID, _USERNAME)
+
+    user = await db.get(User, _DISCORD_ID)
+    assert user.timezone == settings.default_timezone
+
+
 async def test_register_syncs_username(db):
     await make_user(db, discord_id=_DISCORD_ID, username="oldname")
 
@@ -45,6 +52,15 @@ async def test_register_syncs_username(db):
     assert user.username == "newname"
     assert msg == "Już jesteś zarejestrowany."
     assert "nazwą Discord" not in msg
+
+
+async def test_register_does_not_overwrite_existing_timezone(db):
+    await make_user(db, discord_id=_DISCORD_ID, username="oldname", tz="America/New_York")
+
+    await register_user(db, _DISCORD_ID, "newname")
+
+    user = await db.get(User, _DISCORD_ID)
+    assert user.timezone == "America/New_York"
 
 
 async def test_issue_login_code_creates_user_and_redeemable_code(db, r, monkeypatch):
