@@ -141,7 +141,7 @@ Tapping a stats bar drills into the library: e.g. `?developer=<name>&sort=playti
 
 **Breaking change:** Previously returned a bare `GameResponse[]`. Mobile clients must read `items` and `total`.
 
-Returns `401` without a valid bearer token.
+Returns `401` without a valid bearer token. Also reachable via the [bot service credential](#bot-service-credential-internal) — with no credentials at all this route returns `401` rather than `403`.
 
 ### `POST /games` — create or link game
 
