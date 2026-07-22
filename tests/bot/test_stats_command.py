@@ -53,6 +53,42 @@ async def test_stats_empty_window_returns_empty_state_copy(mock_summary, mock_re
     assert "obserwuj" in msg.lower() or "śledz" in msg.lower()
 
 
+@patch("app.bot.commands.api_client.get_review_count", new_callable=AsyncMock)
+@patch("app.bot.commands.api_client.get_summary", new_callable=AsyncMock)
+async def test_stats_empty_window_with_review_count_keeps_review_line(
+    mock_summary, mock_review, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "gametrace_web_url", "https://gametrace.example")
+    await make_user(db, discord_id=_DISCORD_ID, username=_USERNAME)
+    mock_summary.return_value = {"total_seconds": 0, "per_game": [], "pending_errors": []}
+    mock_review.return_value = 3
+
+    msg = await stats_command(db, _DISCORD_ID)
+
+    assert "3" in msg
+    assert "https://gametrace.example" in msg
+
+
+@patch("app.bot.commands.api_client.get_review_count", new_callable=AsyncMock)
+@patch("app.bot.commands.api_client.get_summary", new_callable=AsyncMock)
+async def test_stats_empty_window_with_pending_errors_keeps_fix_it_line(
+    mock_summary, mock_review, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "gametrace_web_url", "https://gametrace.example")
+    await make_user(db, discord_id=_DISCORD_ID, username=_USERNAME)
+    mock_summary.return_value = {
+        "total_seconds": 0,
+        "per_game": [],
+        "pending_errors": [{"id": 1, "game_id": 1, "game_name": "Hades", "start_time": "2026-07-01T00:00:00Z"}],
+    }
+    mock_review.return_value = 0
+
+    msg = await stats_command(db, _DISCORD_ID)
+
+    assert "1" in msg
+    assert "https://gametrace.example" in msg
+
+
 async def test_stats_unregistered_returns_register_prompt_and_creates_no_row(db):
     msg = await stats_command(db, "999999999999999999")
 

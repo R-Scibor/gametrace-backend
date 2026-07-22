@@ -43,6 +43,14 @@ async def test_register_first_time_includes_orientation(db):
     assert "obserwuje Twoją aktywność" in msg
 
 
+async def test_register_first_time_includes_web_hint_when_configured(db, monkeypatch):
+    monkeypatch.setattr(settings, "gametrace_web_url", "https://gametrace.example")
+
+    msg = await register_user(db, _DISCORD_ID, _USERNAME)
+
+    assert "https://gametrace.example" in msg
+
+
 async def test_register_creates_user_with_default_timezone(db):
     await register_user(db, _DISCORD_ID, _USERNAME)
 

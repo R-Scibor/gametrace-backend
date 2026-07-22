@@ -111,6 +111,9 @@ async def test_recent_empty_returns_empty_state_copy(mock_recent, db, monkeypatc
     assert "brak danych" not in msg.lower()
     # promise-shaped, matching /stats' empty-state bar
     assert "obserwuj" in msg.lower() or "pojawi" in msg.lower()
+    # must not claim zero sessions were recorded — library_only filtering can
+    # hide NEEDS_REVIEW/ERROR sessions that do exist, just aren't confirmed
+    assert "żadnych zarejestrowanych sesji" not in msg.lower()
 
 
 async def test_recent_unregistered_returns_register_prompt_and_creates_no_row(db):
