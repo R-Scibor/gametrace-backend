@@ -38,11 +38,17 @@ def _format_duration(total_seconds: int) -> str:
 
 
 def stats_empty() -> str:
-    """First-run / quiet-week state. Must read as a promise, not a dead end."""
+    """First-run / quiet-week state. Must read as a promise, not a dead end.
+
+    Deliberately does NOT append the web hint — callers append the
+    pending-errors / review-count lines (each with their own web hint) when
+    those counts are non-zero, and a bare empty state still ends clean
+    without one.
+    """
     return (
         "Jeszcze nie mam żadnych sesji z ostatnich 7 dni, ale już Cię obserwuję — "
         "zagraj w cokolwiek, a Twój czas zacznie się tu pojawiać. "
-        f"Wróć po sesji i sprawdź `/stats` ponownie.{_web_hint()}"
+        "Wróć po sesji i sprawdź `/stats` ponownie."
     )
 
 
@@ -54,7 +60,23 @@ def stats_reply(
     review_count: int,
 ) -> str:
     if total_seconds <= 0 or not per_game:
-        return stats_empty()
+        lines = [stats_empty()]
+
+        if pending_errors_count > 0:
+            lines.append("")
+            lines.append(
+                f"Poza tym masz {pending_errors_count} sesje wymagające poprawy — "
+                f"popraw je w aplikacji.{_web_hint()}"
+            )
+
+        if review_count > 0:
+            lines.append("")
+            lines.append(
+                f"{review_count} gier czeka na potwierdzenie w aplikacji — "
+                f"stąd też się nie liczą.{_web_hint()}"
+            )
+
+        return "\n".join(lines)
 
     lines = [f"Ostatnie 7 dni: **{_format_duration(total_seconds)}** łącznie."]
 
@@ -119,9 +141,14 @@ def _format_session_line(entry: dict, tz: ZoneInfo) -> str:
 
 
 def recent_empty() -> str:
-    """First-run / quiet-history state. Same promise-not-dead-end bar as /stats."""
+    """First-run / quiet-history state. Same promise-not-dead-end bar as /stats.
+
+    Must not claim zero sessions were recorded — the API request behind
+    `/recent` filters to library-visible games, so a NEEDS_REVIEW stub can
+    leave this list empty even though sessions do exist server-side.
+    """
     return (
-        "Jeszcze nie mam żadnych zarejestrowanych sesji, ale już Cię obserwuję — "
+        "Nie mam tu jeszcze nic do pokazania, ale już Cię obserwuję — "
         f"zagraj w cokolwiek, a pojawi się tutaj po zakończeniu.{_web_hint()}"
     )
 
@@ -147,7 +174,7 @@ def register_reply(*, created: bool) -> str:
     """First-time /register gets orientation; returning users keep the terse ack."""
     if not created:
         return "Już jesteś zarejestrowany."
-    return f"Zarejestrowano w GameTrace! {_BOT_INTRO}"
+    return f"Zarejestrowano w GameTrace! {_BOT_INTRO}{_web_hint()}"
 
 
 def login_reply(*, code: str, created: bool) -> str:
