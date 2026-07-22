@@ -64,7 +64,7 @@ async def logout_user(db, r, discord_id: str) -> str:
     await db.commit()
 
     await link_codes.discard_pending_code(r, discord_id)
-    return f"Wylogowano. Unieważniono {count} sesji w aplikacji."
+    return f"Wylogowano. Unieważniono {count} tokenów logowania w aplikacji."
 
 
 async def stats_command(db, discord_id: str) -> str:

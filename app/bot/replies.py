@@ -20,13 +20,6 @@ def _web_hint() -> str:
     return f" {settings.gametrace_web_url}" if settings.gametrace_web_url else ""
 
 
-_BOT_INTRO = (
-    "GameTrace obserwuje Twoją aktywność na Discordzie i automatycznie "
-    "zapisuje, w co grasz — bez żadnej pracy z Twojej strony. Wystarczy, "
-    "że grasz, a sesje same się tu pojawiają."
-)
-
-
 def _format_duration(total_seconds: int) -> str:
     hours = total_seconds // 3600
     minutes = (total_seconds % 3600) // 60
@@ -153,37 +146,122 @@ def recent_empty() -> str:
     )
 
 
+_HELP_WHAT_IS_IT = (
+    "**GameTrace** — tracker czasu spędzonego w grach.\n\n"
+    "Bot widzi Twoją aktywność na Discordzie (status „W grze…”) i "
+    "automatycznie zapisuje sesje rozgrywki."
+)
+
+_HELP_HOW_TO_START_NO_APP = (
+    "**Jak zacząć**\n"
+    "1. Włącz w Discordzie wyświetlanie statusu aktywności gry (Activity Status).\n"
+    "2. Na tym kanale wpisz `/login` albo `/register` — bot odpowie kodem "
+    "widocznym tylko dla Ciebie."
+)
+
+_HELP_COMMANDS = (
+    "**Komendy**\n"
+    "`/register` — załóż konto i zacznij śledzenie sesji\n"
+    "`/login` — kod logowania do aplikacji (ważny 5 min)\n"
+    "`/logout` — wyloguj się ze wszystkich urządzeń w aplikacji\n"
+    "`/stats` — łączny czas grania i najczęściej grane gry z ostatnich 7 dni\n"
+    "`/recent` — ostatnie sesje: gra, kiedy grałeś i ile trwało\n"
+    "`/help` — czym jest GameTrace i jak zacząć"
+)
+
+
 def help_reply() -> str:
     """Orientation for someone who noticed the bot and has no idea what it is.
 
-    Discord's own slash-command picker already lists every command with its
-    description, so this is prose about *why the bot exists*, not an index.
-    The web-app pointer is only appended when a URL is configured — a
-    dangling "see the app" with nothing to point at reads as broken.
+    Spells out every command here even though Discord's own slash-command
+    picker also lists them — the picker's descriptions are one-liners
+    truncated to fit, this is the place for real explanations. The
+    web-app section (wizard link, app links) is only appended when a URL is
+    configured — a dangling "see the app" with nothing to point at reads as
+    broken.
     """
     if not settings.gametrace_web_url:
-        return _BOT_INTRO
+        return f"{_HELP_WHAT_IS_IT}\n\n{_HELP_HOW_TO_START_NO_APP}\n\n{_HELP_COMMANDS}"
+
+    web_url = settings.gametrace_web_url
     return (
-        f"{_BOT_INTRO}\n\n"
-        f"Pełny obraz — statystyki, historia, biblioteka gier — czeka w "
-        f"aplikacji webowej: {settings.gametrace_web_url}"
+        f"{_HELP_WHAT_IS_IT} W aplikacji webowej i na Androidzie masz "
+        f"bibliotekę gier, szczegółowe statystyki, mapę aktywności oraz "
+        f"ręczne i głosowe dodawanie sesji.\n\n"
+        f"👉 Zacznij tutaj: {web_url}/welcome — kreator przeprowadzi Cię "
+        f"krok po kroku.\n\n"
+        f"**Jak zacząć**\n"
+        f"1. Włącz w Discordzie wyświetlanie statusu aktywności gry (Activity Status).\n"
+        f"2. Na tym kanale wpisz `/login` albo `/register` — bot odpowie kodem "
+        f"widocznym tylko dla Ciebie.\n"
+        f"3. Wpisz kod w aplikacji i graj jak zwykle — sesje pojawią się automatycznie.\n\n"
+        f"{_HELP_COMMANDS}\n\n"
+        f"**Aplikacje**\n"
+        f"• Web: {web_url}\n"
+        f"• Android: {web_url}/download\n\n"
+        f"Komendy slash działają tylko na kanałach serwera — nie na priv. (DM)."
     )
 
 
 def register_reply(*, created: bool) -> str:
-    """First-time /register gets orientation; returning users keep the terse ack."""
+    """First-time /register gets full orientation; returning users get a
+    terse ack plus a reminder of the /login next step — not a bare no-op
+    reply, since "already registered" still leaves "now what?" unanswered.
+    """
     if not created:
-        return "Już jesteś zarejestrowany."
-    return f"Zarejestrowano w GameTrace! {_BOT_INTRO}{_web_hint()}"
+        if not settings.gametrace_web_url:
+            return "Jesteś już zarejestrowany. Wpisz `/login`, żeby dostać kod logowania do aplikacji."
+        return (
+            f"Jesteś już zarejestrowany. Wpisz `/login` i zaloguj się w "
+            f"aplikacji lub na stronie: {settings.gametrace_web_url}"
+        )
+
+    intro = (
+        "Zarejestrowano w GameTrace! Od teraz bot automatycznie zapisuje "
+        "Twoje sesje grania.\n\n"
+        "**Co dalej**\n"
+        "1. Wpisz `/login` — dostaniesz kod widoczny tylko dla Ciebie.\n"
+        "2. Wpisz kod w aplikacji, żeby połączyć konto.\n"
+        "3. Graj jak zwykle — sesje pojawią się automatycznie."
+    )
+    if not settings.gametrace_web_url:
+        return intro
+    return (
+        f"{intro}\n\n"
+        f"👉 Aplikacja: {settings.gametrace_web_url}/welcome — kreator "
+        f"przeprowadzi Cię krok po kroku."
+    )
 
 
 def login_reply(*, code: str, created: bool) -> str:
-    """First-time /login gets onboarding context before the code; returning
-    users keep today's terse reply. The code itself is never dropped."""
-    terse = f"Twój kod logowania: **{code}**. Wpisz go w aplikacji w ciągu 5 minut."
+    """`/login` upserts the user itself, so `created=True` here means "this
+    is this person's first contact with the bot at all" — same onboarding
+    treatment as /register's first-time path. Returning users get the code
+    plus a link, not the full walkthrough again."""
     if not created:
-        return terse
-    return f"{_BOT_INTRO}\n\n{terse}"
+        if not settings.gametrace_web_url:
+            return f"Twój kod logowania: **{code}**. Wpisz go w aplikacji w ciągu 5 minut."
+        return (
+            f"Twój kod logowania: **{code}**. Wpisz go w aplikacji lub na "
+            f"stronie w ciągu 5 minut: {settings.gametrace_web_url}"
+        )
+
+    intro = (
+        "Witaj w GameTrace! Jeszcze nie miałeś konta, więc właśnie je "
+        "założyłem.\n\n"
+        f"Twój kod logowania: **{code}**. Ważny 5 minut.\n\n"
+        "**Co dalej**\n"
+        "1. Wpisz kod w aplikacji lub na stronie, żeby połączyć konto.\n"
+        "2. Graj jak zwykle na Discordzie — sesje zaczną się zapisywać "
+        "automatycznie."
+    )
+    if not settings.gametrace_web_url:
+        return intro
+    return (
+        f"{intro}\n\n"
+        f"👉 Aplikacja: {settings.gametrace_web_url}/welcome — kreator "
+        f"przeprowadzi Cię krok po kroku."
+    )
 
 
 def recent_reply(*, sessions: list[dict], user_timezone: str | None) -> str:

@@ -40,7 +40,7 @@ async def test_register_first_time_includes_orientation(db):
     msg = await register_user(db, _DISCORD_ID, _USERNAME)
 
     assert "Zarejestrowano w GameTrace!" in msg
-    assert "obserwuje Twoją aktywność" in msg
+    assert "/login" in msg
 
 
 async def test_register_first_time_includes_web_hint_when_configured(db, monkeypatch):
@@ -65,7 +65,8 @@ async def test_register_syncs_username(db):
 
     user = await db.get(User, _DISCORD_ID)
     assert user.username == "newname"
-    assert msg == "Już jesteś zarejestrowany."
+    assert msg.startswith("Jesteś już zarejestrowany.")
+    assert "/login" in msg
     assert "nazwą Discord" not in msg
 
 
@@ -96,19 +97,33 @@ async def test_issue_login_code_first_time_includes_onboarding_and_code(db, r, m
 
     msg = await issue_login_code(db, r, _DISCORD_ID, _USERNAME)
 
-    assert "obserwuje Twoją aktywność" in msg
+    assert "Witaj w GameTrace!" in msg
     assert "493 072" in msg
     assert "5 minut" in msg
 
 
 async def test_issue_login_code_returning_user_gets_terse_reply(db, r, monkeypatch):
+    monkeypatch.setattr(settings, "gametrace_web_url", "")
     await make_user(db, discord_id=_DISCORD_ID, username=_USERNAME)
     monkeypatch.setattr(secrets, "randbelow", lambda n: 493_072)
 
     msg = await issue_login_code(db, r, _DISCORD_ID, _USERNAME)
 
     assert msg == "Twój kod logowania: **493 072**. Wpisz go w aplikacji w ciągu 5 minut."
-    assert "obserwuje Twoją aktywność" not in msg
+    assert "Witaj w GameTrace!" not in msg
+
+
+async def test_issue_login_code_returning_user_gets_link_when_web_url_configured(db, r, monkeypatch):
+    monkeypatch.setattr(settings, "gametrace_web_url", "https://gametrace.example")
+    await make_user(db, discord_id=_DISCORD_ID, username=_USERNAME)
+    monkeypatch.setattr(secrets, "randbelow", lambda n: 493_072)
+
+    msg = await issue_login_code(db, r, _DISCORD_ID, _USERNAME)
+
+    assert msg == (
+        "Twój kod logowania: **493 072**. Wpisz go w aplikacji lub na "
+        "stronie w ciągu 5 minut: https://gametrace.example"
+    )
 
 
 async def test_issue_login_code_unconfigured_secret_returns_friendly_message(db, r, monkeypatch):

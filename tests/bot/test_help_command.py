@@ -26,6 +26,16 @@ def test_help_degrades_sensibly_without_web_url(monkeypatch):
 
     msg = help_command()
 
-    # No dangling reference to "the app" with nowhere to point.
+    # No dangling link/wizard pointer with nowhere to point.
     assert "https://" not in msg
-    assert "aplikacj" not in msg.lower()
+    assert "👉" not in msg
+    assert "**Aplikacje**" not in msg
+
+
+def test_help_lists_every_command(monkeypatch):
+    monkeypatch.setattr(settings, "gametrace_web_url", "https://gametrace.example")
+
+    msg = help_command()
+
+    for command in ("/register", "/login", "/logout", "/stats", "/recent", "/help"):
+        assert command in msg

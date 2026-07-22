@@ -94,7 +94,7 @@ async def login_command(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(msg, ephemeral=True)
 
 
-@tree.command(name="logout", description="Wyloguj się ze wszystkich sesji aplikacji GameTrace")
+@tree.command(name="logout", description="Wyloguj się ze wszystkich urządzeń w aplikacji GameTrace")
 async def logout_command(interaction: discord.Interaction) -> None:
     discord_id = str(interaction.user.id)
 
@@ -106,7 +106,7 @@ async def logout_command(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(msg, ephemeral=True)
 
 
-@tree.command(name="stats", description="Pokaż swoje statystyki z ostatnich 7 dni")
+@tree.command(name="stats", description="Łączny czas grania i najczęściej grane gry z ostatnich 7 dni")
 async def stats_command_handler(interaction: discord.Interaction) -> None:
     # Defer before any I/O — a cold container's DB query + API round-trip can
     # exceed Discord's ~3s ack deadline, otherwise showing a false failure.
@@ -121,7 +121,7 @@ async def stats_command_handler(interaction: discord.Interaction) -> None:
     await interaction.followup.send(msg, ephemeral=True)
 
 
-@tree.command(name="recent", description="Pokaż swoje ostatnie sesje")
+@tree.command(name="recent", description="Ostatnie sesje: gra, kiedy grałeś i ile trwało")
 async def recent_command_handler(interaction: discord.Interaction) -> None:
     # Defer before any I/O — same rationale as /stats.
     await interaction.response.defer(ephemeral=True)
@@ -135,7 +135,7 @@ async def recent_command_handler(interaction: discord.Interaction) -> None:
     await interaction.followup.send(msg, ephemeral=True)
 
 
-@tree.command(name="help", description="Dowiedz się, czym jest GameTrace")
+@tree.command(name="help", description="Czym jest GameTrace i jak zacząć")
 async def help_command_handler(interaction: discord.Interaction) -> None:
     # No I/O — no defer, no registration check, unlike /stats and /recent.
     from app.bot.commands import help_command
