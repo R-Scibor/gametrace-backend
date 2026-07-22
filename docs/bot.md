@@ -9,7 +9,8 @@ Source: `app/bot/main.py`, `app/bot/commands.py`, `app/bot/session_manager.py`, 
 - Listens for Discord rich-presence updates (`on_presence_update`) on every guild it's in.
 - Translates "user started / stopped / switched games" into `game_sessions` rows.
 - On restart, reconciles every `ONGOING` session against current presence (Self-Healing).
-- Exposes `/register`, `/login`, and `/logout` slash commands for user onboarding and session management. Until a user exists in the `users` table (via `/register` or `/login`), the bot ignores their presence entirely.
+- Exposes `/register`, `/login`, and `/logout` slash commands for user onboarding and session management, plus `/stats`, `/recent`, and `/help` for read-only lookups. Until a user exists in the `users` table (via `/register` or `/login`), the bot ignores their presence entirely.
+- The read commands (`/stats`, `/recent`) never query Postgres directly for session/game data — they call the FastAPI service over HTTP (`app/bot/api_client.py`), so visibility rules (`library_only`, `is_ignored`, unaccepted `NEEDS_REVIEW`) stay defined in exactly one place, the API layer, instead of being reimplemented against the bot's own DB session.
 
 ## Intents and prerequisites
 
@@ -24,27 +25,27 @@ The OAuth2 invite URL must include both `bot` and `applications.commands` scopes
 
 ## Slash commands
 
-All three commands read `discord_id` and `username` from the interaction context (no user input — Discord supplies them). Replies are ephemeral (only the invoking user sees them). Logic lives in `app/bot/commands.py`.
+Six commands total: `/register`, `/login`, `/logout` for onboarding and session management, plus `/stats`, `/recent`, `/help` for read-only lookups. All read `discord_id` and `username` from the interaction context (no user input — Discord supplies them). Replies are ephemeral (only the invoking user sees them). Command logic lives in `app/bot/commands.py`; user-facing copy is isolated in `app/bot/replies.py` so tone/wording can be reviewed in one place independent of the calling code.
 
 ### `/register`
 
-Upserts a `users` row:
+Upserts a `users` row (new users get `settings.default_timezone`, not the `UTC` model default):
 
-- New user → INSERT, reply: "Zarejestrowano w GameTrace!"
-- Existing user → sync the `username` field in case the user renamed on Discord; reply: "Już jesteś zarejestrowany."
+- New user → INSERT, reply includes a short onboarding blurb about what GameTrace does (and a link to the web app, if `GAMETRACE_WEB_URL` is set).
+- Existing user → sync the `username` field in case the user renamed on Discord; terse reply: "Już jesteś zarejestrowany."
 
 Use this when a user wants to be tracked by the bot without logging into the mobile app yet.
 
 ### `/login`
 
-Upserts the `users` row (same as `/register`), then issues a one-time login code stored in Redis (`LINK_CODE_SECRET` must be set):
+Upserts the `users` row (same as `/register`, including the `default_timezone` on first creation), then issues a one-time login code stored in Redis (`LINK_CODE_SECRET` must be set):
 
 - **6-digit code** — cryptographically random, displayed as `XXX XXX` (e.g. `482 193`).
 - **5-minute TTL** — expires automatically after 300 seconds.
 - **Single-use** — redeemed via `POST /api/v1/auth/link`; the code is deleted on successful redemption.
 - **Re-run invalidates** — issuing a new `/login` deletes any previous pending code for that user.
 
-Reply: `Twój kod logowania: **XXX XXX**. Wpisz go w aplikacji w ciągu 5 minut.` If `LINK_CODE_SECRET` is unset, reply: `Kody logowania nie są skonfigurowane.`
+Reply: `Twój kod logowania: **XXX XXX**. Wpisz go w aplikacji w ciągu 5 minut.` — first-time users (this call created the `users` row) get the same onboarding blurb as `/register` prepended before the code; returning users get just the terse code line. If `LINK_CODE_SECRET` is unset, reply: `Kody logowania nie są skonfigurowane.`
 
 After running `/login`, the user enters the code in the mobile app to obtain a bearer token.
 
@@ -56,6 +57,37 @@ Revokes **all** active app sessions for the user:
 2. Discards any pending link code in Redis.
 
 Reply: `Wylogowano. Unieważniono N sesji w aplikacji.` (or `Nie jesteś zarejestrowany.` if the user has no `users` row).
+
+### `/stats`
+
+Reports the caller's last 7 days, mirroring `GET /stats/summary?days=7`: total playtime, top 3 games, count of sessions needing a fix (`pending_errors`), and count of games awaiting review (`GET /games?status=NEEDS_REVIEW`).
+
+- Unregistered caller → `NOT_REGISTERED` reply ("Nie jesteś zarejestrowany..."), no API call made.
+- Registered but nothing played in the window → an encouraging "still watching, come back after you play" reply, not a bare empty state.
+- Read-only — never creates a `users` row (unlike `/register`/`/login`).
+
+### `/recent`
+
+Reports the caller's last 5 non-ongoing sessions (`GET /sessions?status=COMPLETED&status=ERROR&library_only=true&limit=5`), each rendered with the game name, local start time (caller's `users.timezone`, resolved as described under [Timezone resolution](#timezone-resolution-in-recent) below), and duration (or "błąd, brak czasu trwania" for `ERROR` rows).
+
+- Unregistered caller → `NOT_REGISTERED` reply, no API call made.
+- Registered but no history yet → an encouraging empty-state reply, same bar as `/stats`.
+- Requests `library_only=true`, so sessions on ignored games or unaccepted `NEEDS_REVIEW` stubs are excluded, matching what the Dashboard "Recents" tile shows.
+- Read-only — never creates a `users` row.
+
+### `/help`
+
+Static orientation copy — no HTTP call, no DB lookup, no defer. Explains what GameTrace does for someone who noticed the bot and has no idea why it's there; it does not enumerate the other commands (Discord's own slash-command picker already does that with each command's description). Appends a link to the web app when `GAMETRACE_WEB_URL` is configured.
+
+### Read commands: defer, degradation, and access path
+
+`/stats` and `/recent` call `interaction.response.defer(ephemeral=True)` before any I/O — a cold container's DB lookup plus the HTTP round-trip to the API can exceed Discord's ~3-second ack deadline, which would otherwise surface as a false "this interaction failed" to the user. `/help` does neither DB lookup nor defer since it has no I/O to wait on.
+
+Both read commands call the API via `app/bot/api_client.py` using the [bot service credential](api.md#bot-service-credential-internal) (`X-Bot-Service-Secret` + `X-Discord-Id`), authenticated server-side by `get_bot_user`/`get_current_or_bot_user`. If the API is unreachable, times out (5s), or returns a non-2xx/non-JSON response, the command catches `BotApiError` and replies with a friendly Polish failure message (`Nie udało się pobrać statystyk...` / `Nie udało się pobrać ostatnich sesji...`) instead of raising. **This failure mode is isolated to the two read commands** — presence recording (`on_presence_update`) talks to Postgres directly and is completely unaffected by the API being down.
+
+### Timezone resolution in `/recent`
+
+`/recent` resolves the caller's local time with a plain `ZoneInfo(user.timezone)` lookup, falling back to UTC when the value is missing or not a recognised IANA zone (`app/bot/replies.py::_resolve_tz`). This is a **different** rule from the voice pipeline's `resolve_timezone` (`app/services/voice_context.py`), which additionally treats the literal string `"UTC"` as "unset" and substitutes `DEFAULT_TIMEZONE` in that case. `/recent` has no reason to make that substitution — a user whose `users.timezone` is genuinely `"UTC"` should see times in UTC, not silently remapped to the server's default zone. Two distinct timezone-resolution semantics exist in the codebase by design; don't assume they match when touching either one.
 
 ## Presence tracking
 
@@ -145,3 +177,5 @@ The 12h ceiling is intentionally generous — it's a backstop for "user fell asl
 | User leaves all guilds the bot is in | Their `ONGOING` session can no longer be reconciled; on next restart Self-Healing marks it `ERROR` with "user not found". |
 | Discord rich-presence flicker | Handled by stitch-resume + flicker suppression (see above). Short BOT sessions are flagged `is_flicker=true` at close; if the same game resumes within `SESSION_STITCH_WINDOW_SECONDS`, the session is reopened and the flag is cleared. |
 | `LINK_CODE_SECRET` unset | `/login` replies with an error message; `POST /auth/link` returns `503`. |
+| API unreachable/timeout for `/stats` or `/recent` | The command replies with a friendly Polish failure message (see [Read commands: defer, degradation, and access path](#read-commands-defer-degradation-and-access-path)). Presence recording is unaffected — it never goes through the API. |
+| `BOT_SERVICE_SECRET` unset | `/stats` and `/recent` still defer, call the API, and get back `401` from `get_bot_user` — surfaced to the user as the same generic failure message as any other `BotApiError`. |
