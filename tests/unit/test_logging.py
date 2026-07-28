@@ -4,6 +4,7 @@ import logging
 import structlog
 
 from app.core.logging import configure_logging, new_trace_id
+from app.core.observability import log_admin_action
 
 
 def _install(caplog, component: str, level: str = "INFO") -> None:
@@ -62,3 +63,24 @@ def test_new_trace_id_is_short_and_unique():
     a, b = new_trace_id(), new_trace_id()
     assert a != b
     assert len(a) == 12
+
+
+def test_log_admin_action_emits_detail(caplog):
+    _install(caplog, "api")
+    log_admin_action(
+        admin_id="1",
+        action="delete_report",
+        resource="report:42",
+        detail="preview of deleted message",
+    )
+    line = _capture(caplog)
+    assert line["event"] == "admin_action"
+    assert line["detail"] == "preview of deleted message"
+
+
+def test_log_admin_action_without_detail_still_logs(caplog):
+    _install(caplog, "api")
+    log_admin_action(admin_id="1", action="enrich_requeue", resource="game:5")
+    line = _capture(caplog)
+    assert line["event"] == "admin_action"
+    assert line["detail"] is None

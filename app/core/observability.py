@@ -52,6 +52,7 @@ def log_admin_action(
     resource: str,
     before: str | None = None,
     after: str | None = None,
+    detail: str | None = None,
 ) -> None:
     """Structured audit-log line for an admin write. Plain stdlib logging, no Sentry coupling."""
     logger.info(
@@ -62,5 +63,6 @@ def log_admin_action(
             "resource": resource,
             "before": before,
             "after": after,
+            "detail": detail,
         },
     )
