@@ -38,6 +38,25 @@ class AdminReportListResponse(BaseModel):
     items: list[AdminReportItem]
 
 
+class AdminReportFacet(BaseModel):
+    """A single distinct value + count for a report context facet."""
+
+    value: str
+    count: int
+
+
+class AdminReportFacetsResponse(BaseModel):
+    """Distinct `context` values in the reports table, for filter dropdowns.
+
+    Scoped by `status` only — never by `q`/`screen`/`platform` — so a dropdown
+    always lists every value in the bucket, including ones not currently
+    selected.
+    """
+
+    screens: list[AdminReportFacet]
+    platforms: list[AdminReportFacet]
+
+
 class AdminReportPatch(BaseModel):
     """Triage update for a single report. Any status may transition to any other.
 

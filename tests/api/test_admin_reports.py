@@ -126,6 +126,360 @@ async def test_invalid_status_returns_422(admin_client, db, admin_user):
     assert resp.status_code == 422
 
 
+# ── GET /admin/reports filters: q / screen / platform ──────────────────────────
+
+async def test_q_matches_case_insensitive_substring_of_message(
+    admin_client, db, admin_user
+):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    matching = await make_report(db, player.discord_id, message="Library screen crashes")
+    other = await make_report(db, player.discord_id, message="unrelated bug")
+
+    resp = await admin_client.get(URL, params={"q": "library SCREEN"})
+    assert resp.status_code == 200
+    body = resp.json()
+    ids = [item["id"] for item in body["items"]]
+    assert ids == [matching.id]
+    assert body["total"] == 1
+    assert other.id not in ids
+
+
+async def test_q_percent_matches_literal_percent(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    matching = await make_report(db, player.discord_id, message="battery drops 100% fast")
+    decoy = await make_report(db, player.discord_id, message="battery drops fast")
+
+    resp = await admin_client.get(URL, params={"q": "100%"})
+    assert resp.status_code == 200
+    body = resp.json()
+    ids = [item["id"] for item in body["items"]]
+    assert ids == [matching.id]
+    assert decoy.id not in ids
+
+
+async def test_q_underscore_matches_literal_underscore(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    matching = await make_report(db, player.discord_id, message="crash in foo_bar module")
+    decoy = await make_report(db, player.discord_id, message="crash in fooxbar module")
+
+    resp = await admin_client.get(URL, params={"q": "foo_bar"})
+    assert resp.status_code == 200
+    body = resp.json()
+    ids = [item["id"] for item in body["items"]]
+    assert ids == [matching.id]
+    assert decoy.id not in ids
+
+
+async def test_q_over_200_chars_returns_422(admin_client, db, admin_user):
+    resp = await admin_client.get(URL, params={"q": "x" * 201})
+    assert resp.status_code == 422
+
+
+async def test_q_exactly_200_chars_accepted(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    await make_report(db, player.discord_id, message="whatever")
+
+    resp = await admin_client.get(URL, params={"q": "x" * 200})
+    assert resp.status_code == 200
+
+
+async def test_q_blank_behaves_as_absent(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    await make_report(db, player.discord_id, message="one")
+    await make_report(db, player.discord_id, message="two")
+
+    resp = await admin_client.get(URL, params={"q": "   "})
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 2
+
+
+async def test_screen_filter_matches_exact_context_value(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    library = await make_report(
+        db,
+        player.discord_id,
+        message="a",
+        context={"screen": "Library", "platform": "android"},
+    )
+    home = await make_report(
+        db,
+        player.discord_id,
+        message="b",
+        context={"screen": "Home", "platform": "android"},
+    )
+    library_details = await make_report(
+        db,
+        player.discord_id,
+        message="c",
+        context={"screen": "LibraryDetails", "platform": "android"},
+    )
+
+    resp = await admin_client.get(URL, params={"screen": "Library"})
+    assert resp.status_code == 200
+    body = resp.json()
+    ids = [item["id"] for item in body["items"]]
+    assert ids == [library.id]
+    assert body["total"] == 1
+    assert home.id not in ids
+    assert library_details.id not in ids
+
+
+async def test_platform_filter_matches_exact_context_value(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    ios_report = await make_report(
+        db,
+        player.discord_id,
+        message="a",
+        context={"screen": "Home", "platform": "ios"},
+    )
+    android_report = await make_report(
+        db,
+        player.discord_id,
+        message="b",
+        context={"screen": "Home", "platform": "android"},
+    )
+
+    resp = await admin_client.get(URL, params={"platform": "ios"})
+    assert resp.status_code == 200
+    body = resp.json()
+    ids = [item["id"] for item in body["items"]]
+    assert ids == [ios_report.id]
+    assert android_report.id not in ids
+
+
+async def test_screen_and_platform_blank_behave_as_absent(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    await make_report(db, player.discord_id, message="one")
+    await make_report(db, player.discord_id, message="two")
+
+    resp = await admin_client.get(URL, params={"screen": "  ", "platform": ""})
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 2
+
+
+async def test_filters_compose_with_status_and_each_other(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    target = await make_report(
+        db,
+        player.discord_id,
+        message="Library screen crashes on Android",
+        status="open",
+        context={"screen": "Library", "platform": "android"},
+    )
+    wrong_status = await make_report(
+        db,
+        player.discord_id,
+        message="Library screen crashes on Android",
+        status="closed",
+        context={"screen": "Library", "platform": "android"},
+    )
+    wrong_platform = await make_report(
+        db,
+        player.discord_id,
+        message="Library screen crashes on iOS",
+        status="open",
+        context={"screen": "Library", "platform": "ios"},
+    )
+    wrong_screen = await make_report(
+        db,
+        player.discord_id,
+        message="Home screen crashes on Android",
+        status="open",
+        context={"screen": "Home", "platform": "android"},
+    )
+
+    resp = await admin_client.get(
+        URL,
+        params={
+            "status": "open",
+            "q": "crashes",
+            "screen": "Library",
+            "platform": "android",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    ids = [item["id"] for item in body["items"]]
+    assert ids == [target.id]
+    assert body["total"] == 1
+    for excluded in (wrong_status, wrong_platform, wrong_screen):
+        assert excluded.id not in ids
+
+
+async def test_total_reflects_filtered_count_with_pagination(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    for i in range(3):
+        await make_report(
+            db,
+            player.discord_id,
+            message=f"library bug {i}",
+            context={"screen": "Library", "platform": "android"},
+        )
+    await make_report(
+        db,
+        player.discord_id,
+        message="unrelated",
+        context={"screen": "Home", "platform": "android"},
+    )
+
+    resp = await admin_client.get(URL, params={"screen": "Library", "limit": 1})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 3
+    assert len(body["items"]) == 1
+
+
+# ── GET /admin/reports/facets ───────────────────────────────────────────────────
+
+FACETS_URL = f"{URL}/facets"
+
+
+async def test_facets_unauthenticated_returns_401(client, db):
+    resp = await client.get(FACETS_URL, headers={"Authorization": "Bearer badtoken"})
+    assert resp.status_code == 401
+
+
+async def test_facets_non_admin_returns_403(authed_client, db, user):
+    resp = await authed_client.get(FACETS_URL)
+    assert resp.status_code == 403
+
+
+async def test_facets_empty_table_returns_empty_lists_not_404(
+    admin_client, db, admin_user
+):
+    resp = await admin_client.get(FACETS_URL)
+    assert resp.status_code == 200
+    assert resp.json() == {"screens": [], "platforms": []}
+
+
+async def test_facets_counts_and_ordering(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    # Library: 2 reports, Home: 1 report -> Library should sort first (count desc)
+    await make_report(
+        db, player.discord_id, message="a", context={"screen": "Library", "platform": "android"}
+    )
+    await make_report(
+        db, player.discord_id, message="b", context={"screen": "Library", "platform": "ios"}
+    )
+    await make_report(
+        db, player.discord_id, message="c", context={"screen": "Home", "platform": "android"}
+    )
+
+    resp = await admin_client.get(FACETS_URL)
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["screens"] == [
+        {"value": "Library", "count": 2},
+        {"value": "Home", "count": 1},
+    ]
+    assert body["platforms"] == [
+        {"value": "android", "count": 2},
+        {"value": "ios", "count": 1},
+    ]
+
+
+async def test_facets_tie_count_orders_by_value_asc(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    await make_report(
+        db, player.discord_id, message="a", context={"screen": "Zeta", "platform": "android"}
+    )
+    await make_report(
+        db, player.discord_id, message="b", context={"screen": "Alpha", "platform": "android"}
+    )
+
+    resp = await admin_client.get(FACETS_URL)
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["screens"] == [
+        {"value": "Alpha", "count": 1},
+        {"value": "Zeta", "count": 1},
+    ]
+
+
+async def test_facets_missing_screen_key_is_skipped_not_empty_string(
+    admin_client, db, admin_user
+):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    await make_report(db, player.discord_id, message="a", context={"platform": "ios"})
+    await make_report(
+        db, player.discord_id, message="b", context={"screen": "Home", "platform": "android"}
+    )
+
+    resp = await admin_client.get(FACETS_URL)
+    assert resp.status_code == 200
+    body = resp.json()
+
+    screen_values = [f["value"] for f in body["screens"]]
+    assert "" not in screen_values
+    assert body["screens"] == [{"value": "Home", "count": 1}]
+    # platform is present on both -> both counted
+    platform_values = {f["value"]: f["count"] for f in body["platforms"]}
+    assert platform_values == {"ios": 1, "android": 1}
+
+
+async def test_facets_null_screen_value_is_skipped_not_empty_string(
+    admin_client, db, admin_user
+):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    await make_report(
+        db, player.discord_id, message="a", context={"screen": None, "platform": "ios"}
+    )
+
+    resp = await admin_client.get(FACETS_URL)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["screens"] == []
+
+
+async def test_facets_scoped_by_status(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    await make_report(
+        db,
+        player.discord_id,
+        message="a",
+        status="open",
+        context={"screen": "Library", "platform": "android"},
+    )
+    await make_report(
+        db,
+        player.discord_id,
+        message="b",
+        status="closed",
+        context={"screen": "Home", "platform": "ios"},
+    )
+
+    resp = await admin_client.get(FACETS_URL, params={"status": "open"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["screens"] == [{"value": "Library", "count": 1}]
+    assert body["platforms"] == [{"value": "android", "count": 1}]
+
+
+async def test_facets_not_cross_filtered_by_q_screen_platform(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    await make_report(
+        db, player.discord_id, message="a", context={"screen": "Library", "platform": "android"}
+    )
+    await make_report(
+        db, player.discord_id, message="b", context={"screen": "Home", "platform": "ios"}
+    )
+
+    # Facets endpoint doesn't accept q/screen/platform at all; even if passed
+    # (ignored by FastAPI as unknown params), it must still list every value.
+    resp = await admin_client.get(FACETS_URL, params={"screen": "Library"})
+    assert resp.status_code == 200
+    body = resp.json()
+    screen_values = {f["value"] for f in body["screens"]}
+    assert screen_values == {"Library", "Home"}
+
+
+async def test_facets_invalid_status_returns_422(admin_client, db, admin_user):
+    resp = await admin_client.get(FACETS_URL, params={"status": "bogus"})
+    assert resp.status_code == 422
+
+
 # ── PATCH /admin/reports/{id} ──────────────────────────────────────────────────
 
 async def test_patch_unauthenticated_returns_401(client, db):

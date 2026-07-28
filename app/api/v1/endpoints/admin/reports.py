@@ -9,9 +9,26 @@ from app.core.database import get_db
 from app.core.observability import log_admin_action
 from app.models.report import Report
 from app.models.user import User
-from app.schemas.admin import AdminReportItem, AdminReportListResponse, AdminReportPatch
+from app.schemas.admin import (
+    AdminReportFacet,
+    AdminReportFacetsResponse,
+    AdminReportItem,
+    AdminReportListResponse,
+    AdminReportPatch,
+)
 
 router = APIRouter()
+
+_ESCAPE_CHAR = "\\"
+
+
+def _escape_like(value: str) -> str:
+    """Escape LIKE/ILIKE metacharacters so a typed `%`/`_` matches literally."""
+    return (
+        value.replace(_ESCAPE_CHAR, _ESCAPE_CHAR * 2)
+        .replace("%", f"{_ESCAPE_CHAR}%")
+        .replace("_", f"{_ESCAPE_CHAR}_")
+    )
 
 
 def _to_report_item(report: Report, username: str | None) -> AdminReportItem:
@@ -34,13 +51,35 @@ def _to_report_item(report: Report, username: str | None) -> AdminReportItem:
 @router.get("/reports", response_model=AdminReportListResponse)
 async def list_reports(
     status: Literal["open", "triaged", "closed"] | None = None,
+    q: str | None = Query(None, max_length=200),
+    screen: str | None = None,
+    platform: str | None = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),  # admin gate (router-level too; explicit for clarity)
 ):
-    """Admin reports inbox: paginated, newest-first, optionally filtered by status."""
+    """Admin reports inbox: paginated, newest-first, filtered by status/q/screen/platform.
+
+    Blank/whitespace-only `q`/`screen`/`platform` are treated as absent. `q` is
+    a case-insensitive substring match on `message`; `%`/`_` are escaped so a
+    typed literal matches literally rather than acting as SQL wildcards.
+    """
     base_filter = [Report.status == status] if status is not None else []
+
+    q_stripped = q.strip() if q is not None else None
+    if q_stripped:
+        base_filter.append(
+            Report.message.ilike(f"%{_escape_like(q_stripped)}%", escape=_ESCAPE_CHAR)
+        )
+
+    screen_stripped = screen.strip() if screen is not None else None
+    if screen_stripped:
+        base_filter.append(Report.context["screen"].astext == screen_stripped)
+
+    platform_stripped = platform.strip() if platform is not None else None
+    if platform_stripped:
+        base_filter.append(Report.context["platform"].astext == platform_stripped)
 
     total = await db.scalar(
         select(func.count()).select_from(Report).where(*base_filter)
@@ -61,6 +100,57 @@ async def list_reports(
     ]
 
     return AdminReportListResponse(total=total, items=items)
+
+
+# ---------------------------------------------------------------------------
+# GET /reports/facets
+# ---------------------------------------------------------------------------
+# Registered before /reports/{report_id} below: a static path must win over a
+# path-param route, or a literal "facets" id would get swallowed by PATCH/DELETE
+# routing for {report_id} instead. Nothing shadows it today, but this ordering
+# is the one-line guard against that footgun as more {report_id} routes land.
+
+@router.get("/reports/facets", response_model=AdminReportFacetsResponse)
+async def report_facets(
+    status: Literal["open", "triaged", "closed"] | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),  # admin gate (router-level too; explicit for clarity)
+):
+    """Distinct `context.screen`/`context.platform` values + counts, for filter dropdowns.
+
+    Scoped by `status` only — never by `q`/`screen`/`platform` — so picking a
+    value from a dropdown never removes other options from that same dropdown.
+    Reports whose `context` lacks the key (or has it as JSON `null`) are
+    skipped rather than surfacing as an empty-string facet.
+    """
+    status_filter = [Report.status == status] if status is not None else []
+
+    screen_col = Report.context["screen"].astext
+    platform_col = Report.context["platform"].astext
+
+    screens_result = await db.execute(
+        select(screen_col, func.count())
+        .where(*status_filter, screen_col.isnot(None))
+        .group_by(screen_col)
+        .order_by(func.count().desc(), screen_col.asc())
+    )
+    screens = [
+        AdminReportFacet(value=value, count=count)
+        for value, count in screens_result.all()
+    ]
+
+    platforms_result = await db.execute(
+        select(platform_col, func.count())
+        .where(*status_filter, platform_col.isnot(None))
+        .group_by(platform_col)
+        .order_by(func.count().desc(), platform_col.asc())
+    )
+    platforms = [
+        AdminReportFacet(value=value, count=count)
+        for value, count in platforms_result.all()
+    ]
+
+    return AdminReportFacetsResponse(screens=screens, platforms=platforms)
 
 
 # ---------------------------------------------------------------------------
