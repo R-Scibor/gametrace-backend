@@ -235,6 +235,14 @@ async def test_patch_status_bogus_returns_422(admin_client, db, admin_user):
 
 # ── PATCH partial-update semantics: admin_note + presence rules ────────────────
 
+async def test_patch_status_explicit_null_returns_422(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="open")
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={"status": None})
+    assert resp.status_code == 422
+
+
 async def test_patch_empty_body_returns_422(admin_client, db, admin_user):
     player = await make_user(db, discord_id="333333333333333333", username="player")
     report = await make_report(db, player.discord_id, status="open")

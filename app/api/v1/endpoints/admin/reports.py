@@ -86,6 +86,8 @@ async def triage_report(
     fields_set = body.model_fields_set
     if "status" not in fields_set and "admin_note" not in fields_set:
         raise HTTPException(status_code=422, detail="No fields to update.")
+    if "status" in fields_set and body.status is None:
+        raise HTTPException(status_code=422, detail="status cannot be null.")
 
     report = await db.get(Report, report_id)
     if report is None:
