@@ -93,9 +93,23 @@ async def triage_report(
     if report is None:
         raise HTTPException(status_code=404, detail=f"Report {report_id} not found.")
 
-    if "status" in fields_set and body.status != report.status:
+    status_changed = "status" in fields_set and body.status != report.status
+    if status_changed:
         before_status = report.status
         report.status = body.status
+
+    note_changed = False
+    if "admin_note" in fields_set:
+        new_note = (body.admin_note or "").strip() or None
+        note_changed = new_note != report.admin_note
+        if note_changed:
+            before_marker = "set" if report.admin_note else "empty"
+            after_marker = "set" if new_note else "empty"
+            report.admin_note = new_note
+
+    await db.commit()
+
+    if status_changed:
         log_admin_action(
             user.discord_id,
             "report_triage",
@@ -103,22 +117,14 @@ async def triage_report(
             before=before_status,
             after=body.status,
         )
-
-    if "admin_note" in fields_set:
-        new_note = (body.admin_note or "").strip() or None
-        if new_note != report.admin_note:
-            before_marker = "set" if report.admin_note else "empty"
-            after_marker = "set" if new_note else "empty"
-            report.admin_note = new_note
-            log_admin_action(
-                user.discord_id,
-                "report_note",
-                f"report:{report_id}",
-                before=before_marker,
-                after=after_marker,
-            )
-
-    await db.commit()
+    if note_changed:
+        log_admin_action(
+            user.discord_id,
+            "report_note",
+            f"report:{report_id}",
+            before=before_marker,
+            after=after_marker,
+        )
 
     result = await db.execute(
         select(Report, User.username)
