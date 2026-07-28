@@ -180,12 +180,46 @@ async def test_patch_missing_report_returns_404(admin_client, db, admin_user):
     assert resp.status_code == 404
 
 
-async def test_patch_status_open_returns_422(admin_client, db, admin_user):
+async def test_patch_closed_to_open_reopens(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="closed")
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={"status": "open"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "open"
+
+    list_resp = await admin_client.get(URL)
+    items = list_resp.json()["items"]
+    patched = next(item for item in items if item["id"] == report.id)
+    assert patched["status"] == "open"
+
+
+async def test_patch_triaged_to_open_reopens(admin_client, db, admin_user):
     player = await make_user(db, discord_id="333333333333333333", username="player")
     report = await make_report(db, player.discord_id, status="triaged")
 
     resp = await admin_client.patch(f"{URL}/{report.id}", json={"status": "open"})
-    assert resp.status_code == 422
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "open"
+
+
+async def test_patch_triaged_to_closed_returns_updated_item(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="triaged")
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={"status": "closed"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "closed"
+
+
+async def test_patch_closed_to_triaged_returns_updated_item(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="closed")
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={"status": "triaged"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "triaged"
 
 
 async def test_patch_status_bogus_returns_422(admin_client, db, admin_user):

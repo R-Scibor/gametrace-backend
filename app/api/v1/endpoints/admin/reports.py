@@ -74,7 +74,7 @@ async def triage_report(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),  # admin gate (router-level too; explicit for clarity)
 ):
-    """Triage a single report: open -> triaged | closed. No reopen in v1."""
+    """Triage a single report: any status may transition to any other."""
     report = await db.get(Report, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail=f"Report {report_id} not found.")

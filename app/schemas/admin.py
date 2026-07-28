@@ -39,9 +39,9 @@ class AdminReportListResponse(BaseModel):
 
 
 class AdminReportPatch(BaseModel):
-    """Triage update for a single report. No reopen in v1."""
+    """Triage update for a single report. Any status may transition to any other."""
 
-    status: Literal["triaged", "closed"]
+    status: Literal["open", "triaged", "closed"] | None = None
 
 
 class AdminGameItem(BaseModel):

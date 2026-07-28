@@ -149,7 +149,7 @@ In-app user feedback submitted via `POST /reports`. Triaged by admins via `GET /
 | `user_id` | `VARCHAR(32)` | FK → `users.discord_id`, `ON DELETE CASCADE`, indexed |
 | `message` | `TEXT` | Free-text feedback, trimmed server-side. `NOT NULL`. |
 | `context` | `JSONB` | Diagnostic blob captured client-side — `screen`, `platform`, `osVersion`, `appVersion` (camelCase keys). `NOT NULL`. |
-| `status` | `VARCHAR(16)` | `open` \| `triaged` \| `closed`, `CHECK` constraint `ck_reports_status`. Default `'open'`. `NOT NULL`. No reopen path in v1 — `PATCH /admin/reports/{id}` only accepts `triaged`/`closed`. |
+| `status` | `VARCHAR(16)` | `open` \| `triaged` \| `closed`, `CHECK` constraint `ck_reports_status`. Default `'open'`. `NOT NULL`. `PATCH /admin/reports/{id}` allows any status to transition to any other, including reopening a `closed` or `triaged` report. |
 | `created_at` | `TIMESTAMPTZ` | Default `NOW()`, indexed. |
 | `admin_note` | `TEXT` | Admin's free-text triage note. Nullable, no default. Migration `0017`. |
 

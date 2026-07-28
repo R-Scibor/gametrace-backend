@@ -86,3 +86,21 @@ async def test_overview_empty_db_all_zero(admin_client, db, admin_user):
     assert body["game_count"] == 0
     assert body["open_reports_count"] == 0
     assert body["user_count"] == 1                 # the admin_user fixture only
+
+
+async def test_reopen_report_raises_open_reports_count(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    closed = Report(user_id=player.discord_id, message="bug", context={"screen": "Home"}, status="closed")
+    db.add(closed)
+    await db.flush()
+
+    resp = await admin_client.get(URL)
+    assert resp.json()["open_reports_count"] == 0
+
+    patch_resp = await admin_client.patch(
+        f"/api/v1/admin/reports/{closed.id}", json={"status": "open"}
+    )
+    assert patch_resp.status_code == 200
+
+    resp = await admin_client.get(URL)
+    assert resp.json()["open_reports_count"] == 1
