@@ -31,6 +31,25 @@ def _escape_like(value: str) -> str:
     )
 
 
+def _status_filter(status: str | None) -> list:
+    return [Report.status == status] if status is not None else []
+
+
+async def _facet_counts(db: AsyncSession, col, status_filter: list) -> list[AdminReportFacet]:
+    """Distinct values + counts for a single `context` key, ordered count DESC, value ASC.
+
+    Rows where `col` is SQL `NULL` (key absent or JSON `null`) are excluded so a
+    missing key never surfaces as an empty-string facet.
+    """
+    result = await db.execute(
+        select(col, func.count())
+        .where(*status_filter, col.isnot(None))
+        .group_by(col)
+        .order_by(func.count().desc(), col.asc())
+    )
+    return [AdminReportFacet(value=value, count=count) for value, count in result.all()]
+
+
 def _to_report_item(report: Report, username: str | None) -> AdminReportItem:
     return AdminReportItem(
         id=report.id,
@@ -65,7 +84,7 @@ async def list_reports(
     a case-insensitive substring match on `message`; `%`/`_` are escaped so a
     typed literal matches literally rather than acting as SQL wildcards.
     """
-    base_filter = [Report.status == status] if status is not None else []
+    base_filter = _status_filter(status)
 
     q_stripped = q.strip() if q is not None else None
     if q_stripped:
@@ -123,32 +142,10 @@ async def report_facets(
     Reports whose `context` lacks the key (or has it as JSON `null`) are
     skipped rather than surfacing as an empty-string facet.
     """
-    status_filter = [Report.status == status] if status is not None else []
+    status_filter = _status_filter(status)
 
-    screen_col = Report.context["screen"].astext
-    platform_col = Report.context["platform"].astext
-
-    screens_result = await db.execute(
-        select(screen_col, func.count())
-        .where(*status_filter, screen_col.isnot(None))
-        .group_by(screen_col)
-        .order_by(func.count().desc(), screen_col.asc())
-    )
-    screens = [
-        AdminReportFacet(value=value, count=count)
-        for value, count in screens_result.all()
-    ]
-
-    platforms_result = await db.execute(
-        select(platform_col, func.count())
-        .where(*status_filter, platform_col.isnot(None))
-        .group_by(platform_col)
-        .order_by(func.count().desc(), platform_col.asc())
-    )
-    platforms = [
-        AdminReportFacet(value=value, count=count)
-        for value, count in platforms_result.all()
-    ]
+    screens = await _facet_counts(db, Report.context["screen"].astext, status_filter)
+    platforms = await _facet_counts(db, Report.context["platform"].astext, status_filter)
 
     return AdminReportFacetsResponse(screens=screens, platforms=platforms)
 

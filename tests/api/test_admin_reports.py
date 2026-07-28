@@ -170,6 +170,23 @@ async def test_q_underscore_matches_literal_underscore(admin_client, db, admin_u
     assert decoy.id not in ids
 
 
+async def test_q_backslash_matches_literal_backslash(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    matching = await make_report(
+        db, player.discord_id, message=r"path is C:\Games\save.dat corrupted"
+    )
+    decoy = await make_report(
+        db, player.discord_id, message="path is C Games save.dat corrupted"
+    )
+
+    resp = await admin_client.get(URL, params={"q": r"C:\Games"})
+    assert resp.status_code == 200
+    body = resp.json()
+    ids = [item["id"] for item in body["items"]]
+    assert ids == [matching.id]
+    assert decoy.id not in ids
+
+
 async def test_q_over_200_chars_returns_422(admin_client, db, admin_user):
     resp = await admin_client.get(URL, params={"q": "x" * 201})
     assert resp.status_code == 422
