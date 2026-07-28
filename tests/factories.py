@@ -139,6 +139,7 @@ async def make_report(
     context: dict | None = None,
     status: str = "open",
     created_at: datetime | None = None,
+    admin_note: str | None = None,
 ) -> Report:
     report = Report(
         user_id=user_id,
@@ -146,6 +147,7 @@ async def make_report(
         context=context
         or {"screen": "Home", "platform": "android", "osVersion": "14", "appVersion": "1.0.0"},
         status=status,
+        admin_note=admin_note,
     )
     if created_at is not None:
         report.created_at = created_at

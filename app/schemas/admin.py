@@ -28,6 +28,7 @@ class AdminReportItem(BaseModel):
     context: dict
     status: str
     created_at: datetime
+    admin_note: str | None
 
 
 class AdminReportListResponse(BaseModel):

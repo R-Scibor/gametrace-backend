@@ -23,6 +23,7 @@ def _to_report_item(report: Report, username: str | None) -> AdminReportItem:
         context=report.context,
         status=report.status,
         created_at=report.created_at,
+        admin_note=report.admin_note,
     )
 
 

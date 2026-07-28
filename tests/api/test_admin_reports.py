@@ -46,6 +46,29 @@ async def test_list_returns_total_and_items_newest_first_with_username(
     assert body["items"][0]["user_id"] == player.discord_id
 
 
+async def test_admin_note_surfaces_on_list_when_set_and_null_when_unset(
+    admin_client, db, admin_user
+):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    noted = await make_report(
+        db,
+        player.discord_id,
+        message="noted",
+        admin_note="looked into it",
+        created_at=dt(hours_ago=2),
+    )
+    unnoted = await make_report(
+        db, player.discord_id, message="unnoted", created_at=dt(hours_ago=1)
+    )
+
+    resp = await admin_client.get(URL)
+    assert resp.status_code == 200
+    items = {item["id"]: item for item in resp.json()["items"]}
+
+    assert items[noted.id]["admin_note"] == "looked into it"
+    assert items[unnoted.id]["admin_note"] is None
+
+
 async def test_status_filter_narrows_items_and_total(admin_client, db, admin_user):
     player = await make_user(db, discord_id="333333333333333333", username="player")
     await make_report(db, player.discord_id, status="open", created_at=dt(hours_ago=3))

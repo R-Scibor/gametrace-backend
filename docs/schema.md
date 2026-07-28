@@ -151,6 +151,7 @@ In-app user feedback submitted via `POST /reports`. Triaged by admins via `GET /
 | `context` | `JSONB` | Diagnostic blob captured client-side — `screen`, `platform`, `osVersion`, `appVersion` (camelCase keys). `NOT NULL`. |
 | `status` | `VARCHAR(16)` | `open` \| `triaged` \| `closed`, `CHECK` constraint `ck_reports_status`. Default `'open'`. `NOT NULL`. No reopen path in v1 — `PATCH /admin/reports/{id}` only accepts `triaged`/`closed`. |
 | `created_at` | `TIMESTAMPTZ` | Default `NOW()`, indexed. |
+| `admin_note` | `TEXT` | Admin's free-text triage note. Nullable, no default. Migration `0017`. |
 
 **Indexes:**
 
@@ -188,6 +189,7 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 | `0007_game_metadata.py` | Adds `first_release_date` + `genres`/`themes`/`developers`/`publishers` JSONB columns to `games` with GIN indexes. |
 | `0010_reports_table.py` | Adds the `reports` table (`user_id` FK cascade, `message`, `context` JSONB, `created_at`) with `ix_reports_user_id` and `ix_reports_created_at` indexes. |
 | `0014_reports_status.py` | Adds `reports.status` (`String(16)`, default `'open'`, `NOT NULL`) with `ck_reports_status` (`open`/`triaged`/`closed`) and the `ix_reports_status_created_at` index for the admin triage inbox. |
+| `0017_reports_admin_note.py` | Adds `reports.admin_note` (`Text`, nullable, no default) for admin triage notes. |
 
 ## Scheduled tasks (Celery Beat)
 
