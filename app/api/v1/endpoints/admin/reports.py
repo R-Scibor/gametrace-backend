@@ -180,6 +180,10 @@ async def triage_report(
     if report is None:
         raise HTTPException(status_code=404, detail=f"Report {report_id} not found.")
 
+    before_status = None
+    before_marker = None
+    after_marker = None
+
     status_changed = "status" in fields_set and body.status != report.status
     if status_changed:
         before_status = report.status

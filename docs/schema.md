@@ -141,7 +141,7 @@ Unique constraint on `(user_id, game_id)`. The merge endpoint (`POST /api/v1/adm
 
 ### `reports`
 
-In-app user feedback submitted via `POST /reports`. Triaged by admins via `GET /admin/reports` / `PATCH /admin/reports/{id}` (see [api.md](api.md#admin)).
+In-app user feedback submitted via `POST /reports`. Triaged by admins via `GET /admin/reports` / `PATCH /admin/reports/{id}` / `DELETE /admin/reports/{id}` / `GET /admin/reports/facets` (see [api.md](api.md#admin)).
 
 | Column | Type | Notes |
 |---|---|---|

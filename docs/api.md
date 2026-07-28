@@ -302,7 +302,8 @@ Every write is logged via `log_admin_action()` (`app/core/observability.py`) —
     "appVersion": "1.4.2"
   },
   "status": "open",
-  "created_at": "2026-07-09T18:22:00Z"
+  "created_at": "2026-07-09T18:22:00Z",
+  "admin_note": "spam — closing"
 }
 ```
 
