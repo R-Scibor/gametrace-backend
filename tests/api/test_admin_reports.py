@@ -1,6 +1,9 @@
+from unittest.mock import patch
+
 from tests.factories import dt, make_report, make_user
 
 URL = "/api/v1/admin/reports"
+LOG_PATCH_TARGET = "app.api.v1.endpoints.admin.reports.log_admin_action"
 
 
 # ── Auth gate ────────────────────────────────────────────────────────────────
@@ -228,3 +231,239 @@ async def test_patch_status_bogus_returns_422(admin_client, db, admin_user):
 
     resp = await admin_client.patch(f"{URL}/{report.id}", json={"status": "bogus"})
     assert resp.status_code == 422
+
+
+# ── PATCH partial-update semantics: admin_note + presence rules ────────────────
+
+async def test_patch_empty_body_returns_422(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="open")
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={})
+    assert resp.status_code == 422
+
+
+async def test_patch_status_only_leaves_existing_note_intact(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(
+        db, player.discord_id, status="open", admin_note="existing note"
+    )
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={"status": "triaged"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "triaged"
+    assert body["admin_note"] == "existing note"
+
+
+async def test_patch_note_only_leaves_status_intact(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="triaged")
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={"admin_note": "x"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "triaged"
+    assert body["admin_note"] == "x"
+
+
+async def test_patch_note_empty_string_clears_to_null(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, admin_note="something")
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={"admin_note": ""})
+    assert resp.status_code == 200
+    assert resp.json()["admin_note"] is None
+
+
+async def test_patch_note_explicit_null_clears_to_null(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, admin_note="something")
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={"admin_note": None})
+    assert resp.status_code == 200
+    assert resp.json()["admin_note"] is None
+
+
+async def test_patch_note_whitespace_only_clears_to_null(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, admin_note="something")
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={"admin_note": "   "})
+    assert resp.status_code == 200
+    assert resp.json()["admin_note"] is None
+
+
+async def test_patch_note_overwrites_existing_note(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, admin_note="old note")
+
+    resp = await admin_client.patch(f"{URL}/{report.id}", json={"admin_note": "new note"})
+    assert resp.status_code == 200
+    assert resp.json()["admin_note"] == "new note"
+
+
+async def test_patch_note_over_4000_chars_returns_422(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id)
+
+    resp = await admin_client.patch(
+        f"{URL}/{report.id}", json={"admin_note": "x" * 4001}
+    )
+    assert resp.status_code == 422
+
+
+async def test_patch_note_exactly_4000_chars_accepted(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id)
+
+    resp = await admin_client.patch(
+        f"{URL}/{report.id}", json={"admin_note": "x" * 4000}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["admin_note"] == "x" * 4000
+
+
+async def test_patch_both_status_and_note_updates_both(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="open")
+
+    resp = await admin_client.patch(
+        f"{URL}/{report.id}", json={"status": "triaged", "admin_note": "both changed"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "triaged"
+    assert body["admin_note"] == "both changed"
+
+
+# ── PATCH no-op semantics: same value → 200, zero audit lines ────────────────
+
+async def test_patch_same_status_is_noop_returns_200_no_audit(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="open")
+
+    with patch(LOG_PATCH_TARGET) as mock_log:
+        resp = await admin_client.patch(f"{URL}/{report.id}", json={"status": "open"})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "open"
+    mock_log.assert_not_called()
+
+
+async def test_patch_same_note_is_noop_returns_200_no_audit(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, admin_note="unchanged note")
+
+    with patch(LOG_PATCH_TARGET) as mock_log:
+        resp = await admin_client.patch(
+            f"{URL}/{report.id}", json={"admin_note": "unchanged note"}
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["admin_note"] == "unchanged note"
+    mock_log.assert_not_called()
+
+
+async def test_patch_note_noop_when_clearing_already_null_note(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, admin_note=None)
+
+    with patch(LOG_PATCH_TARGET) as mock_log:
+        resp = await admin_client.patch(f"{URL}/{report.id}", json={"admin_note": ""})
+
+    assert resp.status_code == 200
+    assert resp.json()["admin_note"] is None
+    mock_log.assert_not_called()
+
+
+# ── PATCH audit semantics: content never logged, correct actions ─────────────
+
+async def test_patch_status_change_emits_report_triage_with_before_after(
+    admin_client, db, admin_user
+):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="open")
+
+    with patch(LOG_PATCH_TARGET) as mock_log:
+        resp = await admin_client.patch(f"{URL}/{report.id}", json={"status": "triaged"})
+
+    assert resp.status_code == 200
+    mock_log.assert_called_once_with(
+        admin_user.discord_id,
+        "report_triage",
+        f"report:{report.id}",
+        before="open",
+        after="triaged",
+    )
+
+
+async def test_patch_note_set_emits_report_note_with_set_marker_no_content(
+    admin_client, db, admin_user
+):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, admin_note=None)
+
+    with patch(LOG_PATCH_TARGET) as mock_log:
+        resp = await admin_client.patch(
+            f"{URL}/{report.id}", json={"admin_note": "secret triage details"}
+        )
+
+    assert resp.status_code == 200
+    mock_log.assert_called_once_with(
+        admin_user.discord_id,
+        "report_note",
+        f"report:{report.id}",
+        before="empty",
+        after="set",
+    )
+    for call in mock_log.call_args_list:
+        for arg in list(call.args) + list(call.kwargs.values()):
+            assert arg != "secret triage details"
+
+
+async def test_patch_note_clear_emits_report_note_with_empty_marker(
+    admin_client, db, admin_user
+):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, admin_note="had something")
+
+    with patch(LOG_PATCH_TARGET) as mock_log:
+        resp = await admin_client.patch(f"{URL}/{report.id}", json={"admin_note": None})
+
+    assert resp.status_code == 200
+    mock_log.assert_called_once_with(
+        admin_user.discord_id,
+        "report_note",
+        f"report:{report.id}",
+        before="set",
+        after="empty",
+    )
+
+
+async def test_patch_both_changed_emits_both_audit_lines(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="open", admin_note=None)
+
+    with patch(LOG_PATCH_TARGET) as mock_log:
+        resp = await admin_client.patch(
+            f"{URL}/{report.id}",
+            json={"status": "triaged", "admin_note": "flagged"},
+        )
+
+    assert resp.status_code == 200
+    assert mock_log.call_count == 2
+    mock_log.assert_any_call(
+        admin_user.discord_id,
+        "report_triage",
+        f"report:{report.id}",
+        before="open",
+        after="triaged",
+    )
+    mock_log.assert_any_call(
+        admin_user.discord_id,
+        "report_note",
+        f"report:{report.id}",
+        before="empty",
+        after="set",
+    )

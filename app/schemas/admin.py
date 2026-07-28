@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.game import CoverSource, EnrichmentStatus
 
@@ -39,9 +39,15 @@ class AdminReportListResponse(BaseModel):
 
 
 class AdminReportPatch(BaseModel):
-    """Triage update for a single report. Any status may transition to any other."""
+    """Triage update for a single report. Any status may transition to any other.
+
+    Partial update: only keys present in the request body are applied — check
+    `model_fields_set`, not attribute truthiness, since a missing key and an
+    explicit JSON `null` both collapse to `None` after Pydantic parses this.
+    """
 
     status: Literal["open", "triaged", "closed"] | None = None
+    admin_note: str | None = Field(default=None, max_length=4000)
 
 
 class AdminGameItem(BaseModel):

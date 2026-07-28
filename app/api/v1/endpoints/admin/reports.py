@@ -74,18 +74,49 @@ async def triage_report(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),  # admin gate (router-level too; explicit for clarity)
 ):
-    """Triage a single report: any status may transition to any other."""
+    """Triage a single report: any status may transition to any other.
+
+    Partial update over two independent columns (`status`, `admin_note`).
+    Only keys present in the request body are written; an empty body (no
+    recognized key) is rejected. `admin_note` is trimmed server-side, and
+    both an explicit `null` and a trimmed-empty string clear it to `NULL`.
+    A field set to the value it already holds is a no-op: `200` is returned
+    but no audit line is emitted for that field.
+    """
+    fields_set = body.model_fields_set
+    if "status" not in fields_set and "admin_note" not in fields_set:
+        raise HTTPException(status_code=422, detail="No fields to update.")
+
     report = await db.get(Report, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail=f"Report {report_id} not found.")
 
-    before = report.status
-    report.status = body.status
-    await db.commit()
+    if "status" in fields_set and body.status != report.status:
+        before_status = report.status
+        report.status = body.status
+        log_admin_action(
+            user.discord_id,
+            "report_triage",
+            f"report:{report_id}",
+            before=before_status,
+            after=body.status,
+        )
 
-    log_admin_action(
-        user.discord_id, "report_triage", f"report:{report_id}", before=before, after=body.status
-    )
+    if "admin_note" in fields_set:
+        new_note = (body.admin_note or "").strip() or None
+        if new_note != report.admin_note:
+            before_marker = "set" if report.admin_note else "empty"
+            after_marker = "set" if new_note else "empty"
+            report.admin_note = new_note
+            log_admin_action(
+                user.discord_id,
+                "report_note",
+                f"report:{report_id}",
+                before=before_marker,
+                after=after_marker,
+            )
+
+    await db.commit()
 
     result = await db.execute(
         select(Report, User.username)
