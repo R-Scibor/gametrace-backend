@@ -475,3 +475,86 @@ async def test_patch_both_changed_emits_both_audit_lines(admin_client, db, admin
         before="empty",
         after="set",
     )
+
+
+# ── DELETE /admin/reports/{id} ─────────────────────────────────────────────────
+
+async def test_delete_unauthenticated_returns_401(client, db):
+    resp = await client.delete(
+        f"{URL}/1", headers={"Authorization": "Bearer badtoken"}
+    )
+    assert resp.status_code == 401
+
+
+async def test_delete_non_admin_returns_403(authed_client, db, user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id)
+
+    resp = await authed_client.delete(f"{URL}/{report.id}")
+    assert resp.status_code == 403
+
+
+async def test_delete_returns_204_and_removes_from_list(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id)
+
+    resp = await admin_client.delete(f"{URL}/{report.id}")
+    assert resp.status_code == 204
+    assert resp.content == b""
+
+    list_resp = await admin_client.get(URL)
+    assert list_resp.status_code == 200
+    ids = [item["id"] for item in list_resp.json()["items"]]
+    assert report.id not in ids
+
+
+async def test_delete_open_report_drops_open_reports_count(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id, status="open")
+
+    overview_before = await admin_client.get("/api/v1/admin/stats/overview")
+    assert overview_before.json()["open_reports_count"] == 1
+
+    resp = await admin_client.delete(f"{URL}/{report.id}")
+    assert resp.status_code == 204
+
+    overview_after = await admin_client.get("/api/v1/admin/stats/overview")
+    assert overview_after.json()["open_reports_count"] == 0
+
+
+async def test_delete_missing_report_returns_404(admin_client, db, admin_user):
+    resp = await admin_client.delete(f"{URL}/999999")
+    assert resp.status_code == 404
+
+
+async def test_delete_twice_returns_404_on_second_call(admin_client, db, admin_user):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    report = await make_report(db, player.discord_id)
+
+    first = await admin_client.delete(f"{URL}/{report.id}")
+    assert first.status_code == 204
+
+    second = await admin_client.delete(f"{URL}/{report.id}")
+    assert second.status_code == 404
+
+
+async def test_delete_emits_report_delete_with_before_status_and_message_preview(
+    admin_client, db, admin_user
+):
+    player = await make_user(db, discord_id="333333333333333333", username="player")
+    long_message = "x" * 200
+    report = await make_report(
+        db, player.discord_id, message=long_message, status="triaged"
+    )
+
+    with patch(LOG_PATCH_TARGET) as mock_log:
+        resp = await admin_client.delete(f"{URL}/{report.id}")
+
+    assert resp.status_code == 204
+    mock_log.assert_called_once_with(
+        admin_user.discord_id,
+        "report_delete",
+        f"report:{report.id}",
+        before="triaged",
+        detail=long_message[:80],
+    )

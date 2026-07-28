@@ -134,3 +134,35 @@ async def triage_report(
     updated_report, username = result.one()
 
     return _to_report_item(updated_report, username)
+
+
+# ---------------------------------------------------------------------------
+# DELETE /reports/{report_id}
+# ---------------------------------------------------------------------------
+
+@router.delete("/reports/{report_id}", status_code=204)
+async def delete_report(
+    report_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),  # admin gate (router-level too; explicit for clarity)
+):
+    """Hard-delete a report. The row is gone; there is no soft-delete for reports."""
+    report = await db.get(Report, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail=f"Report {report_id} not found.")
+
+    before_status = report.status
+    message_preview = report.message[:80]
+
+    await db.delete(report)
+    await db.commit()
+
+    log_admin_action(
+        user.discord_id,
+        "report_delete",
+        f"report:{report_id}",
+        before=before_status,
+        detail=message_preview,
+    )
+
+    return None
