@@ -106,6 +106,24 @@ def test_views_construct_with_no_arguments_and_never_time_out(view_cls):
     assert view.is_persistent()
 
 
+# --- rendered copy ---------------------------------------------------------
+
+
+def test_panel_view_renders_the_panel_title_and_body():
+    """The public panel message — the one screen every visitor sees."""
+    texts = _texts(panel.PanelView())
+    assert f"### {replies.PANEL_TITLE}" in texts
+    assert replies.panel_body() in texts
+
+
+def test_member_menu_greets_a_connected_user_instead_of_repeating_the_help_text():
+    """A registered user must not be told to click ▶ Zaczynam to create an
+    account, which is what the help copy says."""
+    texts = _texts(panel.MemberView())
+    assert replies.panel_member_menu() in texts
+    assert replies.panel_help_reply() not in texts
+
+
 # --- 2. entry branch -------------------------------------------------------
 
 

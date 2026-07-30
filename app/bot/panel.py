@@ -32,7 +32,10 @@ from app.core.database import AsyncSessionLocal
 from app.core.redis import get_redis
 from app.models.user import User
 
-MEMBER_MENU_TITLE = "GameTrace"
+# Plain product name, used for every ephemeral screen that is not about one
+# specific action — the member menu and the help reply. Matches the title
+# `main.py` gives `/help`.
+BRAND_TITLE = "GameTrace"
 DISCLOSURE_TITLE = replies.PANEL_TITLE
 REGISTERED_TITLE = "Rejestracja"
 
@@ -92,7 +95,7 @@ class _PanelRow(ActionRow):
         # is unusable in the very channel this panel exists for.
         body = replies.panel_help_reply()
         await interaction.response.send_message(
-            view=layout.reply_view(MEMBER_MENU_TITLE, body, layout.accent_for(body)),
+            view=layout.reply_view(BRAND_TITLE, body, layout.accent_for(body)),
             ephemeral=True,
         )
 
@@ -216,8 +219,8 @@ class MemberView(LayoutView):
         super().__init__(timeout=None)
         self.add_item(
             _panel_container(
-                title or MEMBER_MENU_TITLE,
-                body if body is not None else replies.panel_help_reply(),
+                title or BRAND_TITLE,
+                body if body is not None else replies.panel_member_menu(),
                 _MemberRow(),
             )
         )

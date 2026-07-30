@@ -363,6 +363,18 @@ _PANEL_HOW_TO_START = (
 )
 
 
+def panel_member_menu() -> str:
+    """Body of the ephemeral menu an already-registered user opens from the
+    panel. Deliberately tiny: the buttons underneath are the content, and
+    every extra sentence pushes them further from the eye.
+
+    Must not restate the title (the container renders `### {title}` above
+    this) and must not instruct any slash command — the panel exists exactly
+    where slash commands are unreachable.
+    """
+    return "Cześć! Twoje konto jest już połączone. Co chcesz zrobić?"
+
+
 def panel_help_reply() -> str:
     """Panel equivalent of /help — same orientation content, but the "Jak
     zacząć" block is button-oriented since this reply can appear in a
