@@ -305,9 +305,14 @@ def _privacy_hint() -> str:
 
 def panel_body() -> str:
     """Landing copy for the panel message itself — no instructions to type
-    anything, only what the two entry buttons do."""
+    anything, only what the two entry buttons do.
+
+    Does NOT restate `PANEL_TITLE`: the view this feeds (`reply_view()` in
+    a later task) already renders the title as a `### heading` above the
+    body, so opening the body with the title again would double it up.
+    """
     return (
-        f"{PANEL_TITLE} — tracker czasu spędzonego w grach.\n\n"
+        "Tracker czasu spędzonego w grach.\n\n"
         "Bot widzi Twoją aktywność na Discordzie (status „W grze…”) i "
         "automatycznie zapisuje sesje rozgrywki.\n\n"
         "Kliknij **▶ Zaczynam**, żeby założyć konto, albo **ℹ Co to jest?**, "
@@ -318,13 +323,21 @@ def panel_body() -> str:
 def panel_disclosure() -> str:
     """Shown before account creation, behind the **▶ Zaczynam** button —
     plain-language disclosure of what gets recorded, not stored consent.
-    Confirmed via **✓ Akceptuję i zakładam konto**."""
+    Confirmed via **✓ Akceptuję i zakładam konto**.
+
+    The privacy link (when configured) sits on its own line right after the
+    "what gets recorded" paragraph, not tacked onto the CTA sentence — it
+    should read as part of the disclosure, not as a run-on after "click
+    here to continue".
+    """
+    privacy_hint = _privacy_hint()
+    privacy_line = f"\n{privacy_hint.strip()}\n" if privacy_hint else ""
     return (
         "Zanim założysz konto — czym jest sesja gry:\n\n"
         "Kiedy grasz, GameTrace zapisuje **nazwę gry** oraz **czas "
         "rozpoczęcia i zakończenia** sesji. Nic więcej — żadnej treści "
-        "wiadomości, żadnych zrzutów ekranu.\n\n"
-        f"Kliknij **✓ Akceptuję i zakładam konto**, żeby kontynuować.{_privacy_hint()}"
+        f"wiadomości, żadnych zrzutów ekranu.\n{privacy_line}\n"
+        "Kliknij **✓ Akceptuję i zakładam konto**, żeby kontynuować."
     )
 
 

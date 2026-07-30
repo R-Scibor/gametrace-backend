@@ -17,11 +17,15 @@ def _assert_no_slash_start_instruction(text: str) -> None:
 
     Deliberately NOT `assert "/login" not in text` — panel_help_reply()
     legitimately lists `/login` inside the composed _HELP_COMMANDS block.
-    Instead this scans for the verb ("wpisz"/"wpisać" — Polish "type") within
-    a short window before a slash command token, which is exactly the shape
-    of the old instructional sentences ("Wpisz `/login`", "wpisz /login albo
-    /register") and would fail if that phrasing were pasted back in, while
-    leaving a bare command list (no "wpisz" nearby) untouched.
+    Instead this scans for the literal prefix "wpisz" (Polish imperative
+    "type") — matching "wpisz" itself plus any word-character suffix, e.g.
+    "wpiszcie" — immediately followed by a slash command token. NOTE: this
+    does NOT match other conjugations such as "wpisać" (infinitive) or
+    "wpisujesz" (present tense); it is scoped to the exact "wpisz ..."
+    imperative shape used by both forbidden sentences ("Wpisz `/login`",
+    "wpisz /login albo /register"), which is what would reappear if that
+    phrasing were pasted back in. A bare command list (no "wpisz" nearby)
+    is left untouched.
     """
     pattern = re.compile(r"wpisz\w*\s+(?:[`\"]?\s*)?/(?:login|register)", re.IGNORECASE)
     match = pattern.search(text)
@@ -36,6 +40,14 @@ def test_panel_title_is_a_nonempty_string():
 def test_panel_body_has_no_slash_instruction():
     text = replies.panel_body()
     _assert_no_slash_start_instruction(text)
+
+
+def test_panel_body_does_not_restate_title():
+    """reply_view() (a later task) renders PANEL_TITLE as a heading above
+    the body; the body must not open with it again or the panel shows the
+    title twice in a row."""
+    text = replies.panel_body()
+    assert not text.startswith(replies.PANEL_TITLE)
 
 
 def test_panel_disclosure_has_no_slash_instruction():
