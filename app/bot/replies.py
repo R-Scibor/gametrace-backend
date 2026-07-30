@@ -308,19 +308,23 @@ def _privacy_hint() -> str:
 
 
 def panel_body() -> str:
-    """Landing copy for the panel message itself — no instructions to type
-    anything, only what the two entry buttons do.
+    """Landing copy for the panel message itself — short bilingual pitch plus
+    a pointer at the buttons below. No instructions to type anything: this is
+    the read-only channel the whole feature exists to work around.
 
     Does NOT restate `PANEL_TITLE`: the view this feeds (`reply_view()` in
     a later task) already renders the title as a `### heading` above the
     body, so opening the body with the title again would double it up.
+
+    Deliberately stays compact — the full walkthrough lives behind the
+    **🇵🇱 Co to jest?** / **🇬🇧 What is it?** buttons (`panel_info_pl()` /
+    `panel_info_en()`), each with its own 4000-char ephemeral budget.
     """
     return (
-        "Tracker czasu spędzonego w grach.\n\n"
-        "Bot widzi Twoją aktywność na Discordzie (status „W grze…”) i "
-        "automatycznie zapisuje sesje rozgrywki.\n\n"
-        "Kliknij **▶ Zaczynam**, żeby założyć konto, albo **ℹ Co to jest?**, "
-        "żeby dowiedzieć się więcej najpierw."
+        "🇵🇱 Tracker czasu spędzonego w grach — bot widzi Twój status gry na "
+        "Discordzie i zapisuje sesje automatycznie. Użyj przycisków poniżej.\n\n"
+        "🇬🇧 A playtime tracker — the bot sees your Discord game status and "
+        "logs sessions automatically. Use the buttons below."
     )
 
 
@@ -355,18 +359,6 @@ def panel_register_confirmation() -> str:
     )
 
 
-_PANEL_HOW_TO_START = (
-    "**Jak zacząć**\n"
-    "1. Kliknij **▶ Zaczynam** na panelu powyżej, żeby założyć konto.\n"
-    "2. Kliknij **🔑 Weź kod** — bot odpowie kodem widocznym tylko dla Ciebie.\n"
-    "3. Wpisz kod w aplikacji i graj jak zwykle — sesje pojawią się "
-    "automatycznie.\n\n"
-    "Statystyki i ostatnie sesje sprawdzisz tu na miejscu przyciskami "
-    "**📊 Statystyki** i **🕒 Ostatnie**, a **🚪 Wyloguj** wylogowuje Cię z "
-    "aplikacji."
-)
-
-
 def panel_member_menu() -> str:
     """Body of the ephemeral menu an already-registered user opens from the
     panel. Deliberately tiny: the buttons underneath are the content, and
@@ -379,17 +371,165 @@ def panel_member_menu() -> str:
     return "Cześć! Twoje konto jest już połączone. Co chcesz zrobić?"
 
 
-def panel_help_reply() -> str:
-    """Panel equivalent of /help — same orientation content, but the "Jak
-    zacząć" block is button-oriented since this reply can appear in a
-    channel where the user cannot type a slash command at all.
+def panel_info_pl() -> str:
+    """Full Polish info screen, opened ephemerally from the **🇵🇱 Co to
+    jest?** button. Gets its own 4000-char Components V2 budget, so unlike
+    `panel_body()` this can afford the full walkthrough.
 
-    Composes the existing `_HELP_WHAT_IS_IT` and `_HELP_COMMANDS` constants
-    rather than duplicating their text — the command list is still useful
-    reference (those commands work in DMs and unlocked channels), only the
-    "type this to start" instruction is replaced.
+    Step 3 of "Jak zacząć" is the buttons (**▶ Zaczynam**, **🔑 Weź kod**) —
+    never "type /login" — because this screen is reachable from the exact
+    channel where typing a slash command is impossible. The "Komendy"
+    section still *lists* `/login` / `/register` / `/logout` as reference:
+    those work fine in DMs and unlocked channels, framed explicitly as such.
     """
-    return f"{_HELP_WHAT_IS_IT}\n\n{_PANEL_HOW_TO_START}\n\n{_HELP_COMMANDS}"
+    web = settings.gametrace_web_url
+
+    what_is_it = (
+        "**Co to jest?**\n"
+        "GameTrace to tracker czasu spędzonego w grach. Bot Discorda widzi "
+        "Twoją aktywność (Activity / „W grze…”) i automatycznie zapisuje "
+        "sesje rozgrywki. Potem przeglądasz je na stronie lub w natywnej "
+        "aplikacji na Androida: biblioteka gier, szczegółowe statystyki, "
+        "mapa aktywności oraz ręczne i głosowe dodawanie sesji."
+    )
+
+    commands_section = (
+        "**Komendy**\n"
+        "Na tym kanale pisanie jest wyłączone, więc korzystasz z przycisków "
+        "powyżej. Na kanałach serwera, gdzie możesz pisać, działają też:\n"
+        "`/login` — kod logowania (ważny 5 min)\n"
+        "`/register` — utworzenie konta\n"
+        "`/logout` — unieważnia sesje w aplikacji"
+    )
+
+    important_section = (
+        "**Ważne**\n"
+        "Komendy slash działają tylko na kanałach serwera, nie na priv. "
+        "(DM). Jeśli kod wygasł, kliknij **🔑 Weź kod** ponownie i użyj "
+        "nowego w ciągu 5 minut."
+    )
+
+    if not web:
+        how_to_start = (
+            "**Jak zacząć**\n"
+            "1. Musisz być na tym serwerze — bot śledzi tylko członków "
+            "serwera, na którym działa.\n"
+            "2. Włącz w Discordzie wyświetlanie statusu aktywności gry "
+            "(Activity Status).\n"
+            "3. Kliknij **▶ Zaczynam** na panelu powyżej, a potem **🔑 Weź "
+            "kod** — bot odpowie 6-cyfrowym kodem widocznym tylko dla "
+            "Ciebie, ważnym 5 minut.\n"
+            "4. Wpisz ten kod w aplikacji.\n"
+            "5. Graj jak zwykle — sesje pojawią się automatycznie."
+        )
+        return f"{what_is_it}\n\n{how_to_start}\n\n{commands_section}\n\n{important_section}"
+
+    start_here = f"👉 Zacznij tutaj: {web}/welcome — kreator przeprowadzi Cię krok po kroku."
+
+    how_to_start = (
+        "**Jak zacząć**\n"
+        "1. Musisz być na tym serwerze — bot śledzi tylko członków "
+        "serwera, na którym działa.\n"
+        "2. Włącz w Discordzie wyświetlanie statusu aktywności gry "
+        "(Activity Status).\n"
+        "3. Kliknij **▶ Zaczynam** na panelu powyżej, a potem **🔑 Weź "
+        "kod** — bot odpowie 6-cyfrowym kodem widocznym tylko dla Ciebie, "
+        "ważnym 5 minut.\n"
+        f"4. Wpisz ten kod w aplikacji (przeglądarka {web} albo kreator "
+        f"{web}/welcome).\n"
+        "5. Graj jak zwykle — sesje pojawią się automatycznie w wersji web "
+        "i mobilnej."
+    )
+
+    apps_section = (
+        "**Aplikacje**\n"
+        f"Web: {web} · Android (APK): {web}/download · Onboarding od "
+        f"zera: {web}/welcome.\n"
+        "Jedno konto Discord — te same sesje w przeglądarce i w aplikacji."
+    )
+
+    return (
+        f"{what_is_it}\n\n{start_here}\n\n{how_to_start}\n\n{apps_section}"
+        f"\n\n{commands_section}\n\n{important_section}"
+    )
+
+
+def panel_info_en() -> str:
+    """English mirror of `panel_info_pl()`, opened from the **🇬🇧 What is
+    it?** button. Button labels stay in their literal Polish form
+    (**▶ Zaczynam**, **🔑 Weź kod**) — the buttons themselves are labelled in
+    Polish, so an English reader needs the exact on-screen text to find them,
+    not a translated paraphrase.
+    """
+    web = settings.gametrace_web_url
+
+    what_is_it = (
+        "**What is it?**\n"
+        "GameTrace is a playtime tracker. The Discord bot sees your "
+        "activity (Activity / “Playing…”) and automatically logs your "
+        "gaming sessions. You then review them on the website or in the "
+        "native Android app: game library, detailed stats, an activity "
+        "heatmap, and manual and voice session logging."
+    )
+
+    commands_section = (
+        "**Commands**\n"
+        "Writing is disabled on this channel, so use the buttons above. "
+        "On server channels where you can type, these also work:\n"
+        "`/login` — login code (valid 5 min)\n"
+        "`/register` — create an account\n"
+        "`/logout` — invalidates your app sessions"
+    )
+
+    important_section = (
+        "**Important**\n"
+        "Slash commands only work on server channels, not in DMs. If the "
+        "code expired, click **🔑 Weź kod** again and use the new one "
+        "within 5 minutes."
+    )
+
+    if not web:
+        how_to_start = (
+            "**How to get started**\n"
+            "1. You need to be a member of this server — the bot only "
+            "tracks members of the server it runs on.\n"
+            "2. Turn on Activity Status sharing in Discord.\n"
+            "3. Click **▶ Zaczynam** on the panel above, then **🔑 Weź "
+            "kod** — the bot will reply with a 6-digit code visible only "
+            "to you, valid for 5 minutes.\n"
+            "4. Enter that code in the app.\n"
+            "5. Play as usual — sessions will show up automatically."
+        )
+        return f"{what_is_it}\n\n{how_to_start}\n\n{commands_section}\n\n{important_section}"
+
+    start_here = f"👉 Start here: {web}/welcome — the wizard walks you through it step by step."
+
+    how_to_start = (
+        "**How to get started**\n"
+        "1. You need to be a member of this server — the bot only tracks "
+        "members of the server it runs on.\n"
+        "2. Turn on Activity Status sharing in Discord.\n"
+        "3. Click **▶ Zaczynam** on the panel above, then **🔑 Weź kod** "
+        "— the bot will reply with a 6-digit code visible only to you, "
+        "valid for 5 minutes.\n"
+        f"4. Enter that code in the app (browser {web} or the wizard "
+        f"{web}/welcome).\n"
+        "5. Play as usual — sessions will show up automatically on web "
+        "and mobile."
+    )
+
+    apps_section = (
+        "**Apps**\n"
+        f"Web: {web} · Android (APK): {web}/download · Onboarding from "
+        f"scratch: {web}/welcome.\n"
+        "One Discord account — the same sessions in your browser and in "
+        "the app."
+    )
+
+    return (
+        f"{what_is_it}\n\n{start_here}\n\n{how_to_start}\n\n{apps_section}"
+        f"\n\n{commands_section}\n\n{important_section}"
+    )
 
 
 # --- /panel command (admin-only, posts the panel above) -------------------
