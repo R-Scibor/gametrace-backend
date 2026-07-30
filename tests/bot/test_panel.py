@@ -80,6 +80,7 @@ def test_custom_ids_are_unique_across_every_persistent_view():
     assert {cid for _, cid in seen} == {
         "gt:panel:start",
         "gt:panel:help",
+        "gt:panel:help:en",
         "gt:new:accept",
         "gt:menu:code",
         "gt:menu:stats",
@@ -323,17 +324,11 @@ async def test_button_defers_are_thinking_defers(custom_id, view_name):
     interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
 
 
-@pytest.mark.xfail(
-    reason=(
-        "panel.py's gt:panel:help button still calls replies.panel_help_reply(), "
-        "which this copy-only task removed in favour of panel_info_pl()/"
-        "panel_info_en() behind two new buttons. Wiring the button(s) to the "
-        "new functions is the next task's job (see report c2-report.md); this "
-        "test documents the known-broken call site until then."
-    ),
-    strict=True,
-)
-async def test_help_button_replies_without_deferring_and_without_io():
+async def test_help_button_renders_the_polish_info_screen_without_deferring_or_io():
+    """`gt:panel:help` is deliberately kept for the Polish screen — panels
+    already posted to the live server carry a button with this exact
+    custom_id, so renaming it would leave those buttons dispatching
+    nowhere."""
     interaction = _interaction()
 
     with patch.object(panel, "AsyncSessionLocal", MagicMock(side_effect=AssertionError("no I/O"))):
@@ -341,5 +336,25 @@ async def test_help_button_replies_without_deferring_and_without_io():
 
     interaction.response.defer.assert_not_awaited()
     view = _sent_view(interaction.response.send_message)
-    assert replies.panel_info_pl() in _texts(view) or replies.panel_info_en() in _texts(view)
+    texts = _texts(view)
+    # Distinguishing content, not just "one of the two" — must be the Polish
+    # screen specifically, and not the English one.
+    assert replies.panel_info_pl() in texts
+    assert replies.panel_info_en() not in texts
+    assert f"### {panel.BRAND_TITLE}" in texts
+    assert interaction.response.send_message.await_args.kwargs["ephemeral"] is True
+
+
+async def test_help_en_button_renders_the_english_info_screen_without_deferring_or_io():
+    interaction = _interaction()
+
+    with patch.object(panel, "AsyncSessionLocal", MagicMock(side_effect=AssertionError("no I/O"))):
+        await _callback(panel.PanelView(), "gt:panel:help:en")(interaction)
+
+    interaction.response.defer.assert_not_awaited()
+    view = _sent_view(interaction.response.send_message)
+    texts = _texts(view)
+    assert replies.panel_info_en() in texts
+    assert replies.panel_info_pl() not in texts
+    assert f"### {panel.BRAND_TITLE}" in texts
     assert interaction.response.send_message.await_args.kwargs["ephemeral"] is True

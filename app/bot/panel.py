@@ -105,7 +105,7 @@ class _PanelRow(ActionRow):
         await _send_view(interaction, view)
 
     @discord.ui.button(
-        label="ℹ Co to jest?",
+        label="🇵🇱 Co to jest?",
         custom_id="gt:panel:help",
         style=discord.ButtonStyle.secondary,
     )
@@ -113,7 +113,25 @@ class _PanelRow(ActionRow):
         # No I/O, so no defer. Uses the panel's button-oriented help copy
         # rather than `commands.help_command()`, whose "type /login" wording
         # is unusable in the very channel this panel exists for.
-        body = replies.panel_help_reply()
+        #
+        # `gt:panel:help` is kept (not renamed) even though this is now the
+        # Polish-only screen: panels already posted to the live server carry
+        # a button with this exact custom_id, and renaming it would leave
+        # those buttons dispatching nowhere.
+        body = replies.panel_info_pl()
+        await interaction.response.send_message(
+            view=layout.reply_view(BRAND_TITLE, body, layout.accent_for(body)),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="🇬🇧 What is it?",
+        custom_id="gt:panel:help:en",
+        style=discord.ButtonStyle.secondary,
+    )
+    async def help_en(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        # English mirror of `help` above — no I/O, so no defer.
+        body = replies.panel_info_en()
         await interaction.response.send_message(
             view=layout.reply_view(BRAND_TITLE, body, layout.accent_for(body)),
             ephemeral=True,

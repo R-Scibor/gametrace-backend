@@ -103,7 +103,7 @@ Both read commands call the API via `app/bot/api_client.py` using the [bot servi
 
 ### Who posts it, and what happens
 
-An admin runs `/panel` in the target channel (see [`/panel` (admin)](#panel-admin) above). This posts one **public** `PanelView` message — a title, body, and two buttons — the only non-ephemeral message anywhere in the feature. Everything a clicker sees after that is ephemeral, exactly like the slash-command replies.
+An admin runs `/panel` in the target channel (see [`/panel` (admin)](#panel-admin) above). This posts one **public** `PanelView` message — a title, body, and three buttons — the only non-ephemeral message anywhere in the feature. Everything a clicker sees after that is ephemeral, exactly like the slash-command replies.
 
 Re-running `/panel` posts an **additional** panel; it does not replace or invalidate the previous one. Every panel's buttons share the same `custom_id`s and dispatch through the same registered views, so old panels keep working — a stale copy left behind after a re-run is cosmetic clutter to delete manually, never a broken button.
 
@@ -112,7 +112,8 @@ Re-running `/panel` posts an **additional** panel; it does not replace or invali
 | Button | Where | Does |
 |---|---|---|
 | `▶ Zaczynam` | `PanelView` (public panel) | Looks up the clicker in `users` (read-only). No account → opens the `NewUserView` disclosure, ephemeral. Existing account → opens the `MemberView` menu, ephemeral. |
-| `ℹ Co to jest?` | `PanelView` (public panel) | Static orientation reply (panel equivalent of `/help`), ephemeral. No I/O. |
+| `🇵🇱 Co to jest?` (`gt:panel:help`) | `PanelView` (public panel) | Polish orientation screen (`replies.panel_info_pl()`), ephemeral. No I/O. Kept on `gt:panel:help` deliberately — panels already posted to the live server carry a button with that exact `custom_id`, so keeping the id (rather than minting a new one for the Polish screen) means those existing panels keep working after this deploy. |
+| `🇬🇧 What is it?` (`gt:panel:help:en`) | `PanelView` (public panel) | English mirror (`replies.panel_info_en()`), ephemeral. No I/O. New `custom_id` — only this button is new. |
 | `✓ Akceptuję i zakładam konto` | `NewUserView` (ephemeral disclosure) | Calls `commands.register_user`, then **edits the same message** into a `MemberView` — the disclosure becomes the member menu in place, not a second message. |
 | `🔑 Weź kod` | `MemberView` (ephemeral menu) | Issues a login code via `commands.issue_login_code`, same semantics as `/login`'s code step. |
 | `📊 Statystyki` | `MemberView` (ephemeral menu) | Same as `/stats`, via `commands.stats_command`. |
