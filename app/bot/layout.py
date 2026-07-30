@@ -26,7 +26,7 @@ _FAILURE_BODIES = frozenset(
 
 
 class Accent(Enum):
-    BRAND = discord.Colour.blurple()
+    BRAND = discord.Colour(0xFF7A1A)
     FAILURE = discord.Colour.red()
 
 

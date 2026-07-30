@@ -67,6 +67,16 @@ async def on_ready():
     logger.info("Bot connected as %s", bot.user)
     await tree.sync()
     logger.info("Slash commands synced.")
+    synced_guilds = 0
+    for guild_id in settings.discord_guild_id_set:
+        try:
+            guild_obj = discord.Object(id=int(guild_id))
+            tree.copy_global_to(guild=guild_obj)
+            await tree.sync(guild=guild_obj)
+            synced_guilds += 1
+        except Exception:
+            logger.warning("Guild command sync failed for guild_id=%s", guild_id, exc_info=True)
+    logger.info("Slash commands synced to %d guild(s).", synced_guilds)
     if not _views_registered:
         for view_cls in PERSISTENT_VIEWS:
             bot.add_view(view_cls())

@@ -95,6 +95,13 @@ def test_reply_view_brand_and_failure_produce_different_colours():
     assert _container(brand_view).accent_colour != _container(failure_view).accent_colour
 
 
+def test_accent_brand_is_gametrace_orange_not_blurple():
+    """GameTrace brand orange (#ff7a1a), matching gametrace-web's theme token —
+    not discord.Colour.blurple(). Guards against regressing to Discord's default."""
+    assert Accent.BRAND.value == discord.Colour(0xFF7A1A)
+    assert Accent.BRAND.value != discord.Colour.blurple()
+
+
 def test_accent_for_output_feeds_reply_view_colour_end_to_end():
     body = replies.LINK_CODES_UNCONFIGURED
 
