@@ -172,6 +172,17 @@ async def help_command_handler(interaction: discord.Interaction) -> None:
     )
 
 
+async def _panel_ack(interaction: discord.Interaction, body: str) -> None:
+    """Ephemeral V2 reply for the /panel command itself — same rendering
+    path (`layout.reply_view` + `layout.accent_for`) as every other slash
+    command's reply, so PANEL_POSTED/PANEL_MISSING_PERMISSIONS/
+    PANEL_REFUSED_NOT_ADMIN are never sent as bare positional strings."""
+    await interaction.response.send_message(
+        view=layout.reply_view("Panel", body, layout.accent_for(body)),
+        ephemeral=True,
+    )
+
+
 @tree.command(
     name="panel",
     description="Opublikuj panel startowy GameTrace na tym kanale (dla adminów)",
@@ -182,17 +193,22 @@ async def panel_command(interaction: discord.Interaction) -> None:
     # Discord's own manage_guild permission gates who can post the panel —
     # this is a "who may post in this channel" question, not GameTrace RBAC,
     # so there is deliberately no is_admin/database lookup here.
+    if interaction.channel is None:
+        # guild_only() makes this unlikely in practice, but interaction.channel
+        # can still be None (e.g. an uncached channel) — send() on None would
+        # raise AttributeError, which the Forbidden handler below can't catch.
+        await _panel_ack(interaction, replies.PANEL_MISSING_PERMISSIONS)
+        return
+
     try:
         await interaction.channel.send(view=PanelView())
     except discord.Forbidden:
         # Realistic failure: a locked channel where the bot itself also
         # lacks Send Messages. Silent failure here is maddening to debug.
-        await interaction.response.send_message(
-            replies.PANEL_MISSING_PERMISSIONS, ephemeral=True
-        )
+        await _panel_ack(interaction, replies.PANEL_MISSING_PERMISSIONS)
         return
 
-    await interaction.response.send_message(replies.PANEL_POSTED, ephemeral=True)
+    await _panel_ack(interaction, replies.PANEL_POSTED)
 
 
 @panel_command.error
@@ -200,9 +216,7 @@ async def panel_command_error(
     interaction: discord.Interaction, error: app_commands.AppCommandError
 ) -> None:
     if isinstance(error, app_commands.MissingPermissions):
-        await interaction.response.send_message(
-            replies.PANEL_REFUSED_NOT_ADMIN, ephemeral=True
-        )
+        await _panel_ack(interaction, replies.PANEL_REFUSED_NOT_ADMIN)
         return
     raise error
 

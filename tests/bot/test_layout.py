@@ -64,6 +64,18 @@ def test_accent_for_other_text_is_brand():
     assert accent_for("cokolwiek innego") == Accent.BRAND
 
 
+def test_accent_for_panel_failure_strings():
+    for body in (
+        replies.PANEL_MISSING_PERMISSIONS,
+        replies.PANEL_REFUSED_NOT_ADMIN,
+    ):
+        assert accent_for(body) == Accent.FAILURE
+
+
+def test_accent_for_panel_posted_is_brand():
+    assert accent_for(replies.PANEL_POSTED) == Accent.BRAND
+
+
 def test_reply_view_brand_accent_reaches_container_colour():
     view = reply_view("Tytuł", "Treść.", accent=Accent.BRAND)
 

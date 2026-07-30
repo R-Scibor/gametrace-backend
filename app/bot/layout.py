@@ -17,6 +17,8 @@ _FAILURE_BODIES = frozenset(
         replies.STATS_FAILURE,
         replies.RECENT_FAILURE,
         replies.LINK_CODES_UNCONFIGURED,
+        replies.PANEL_MISSING_PERMISSIONS,
+        replies.PANEL_REFUSED_NOT_ADMIN,
     }
 )
 
