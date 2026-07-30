@@ -90,12 +90,46 @@ When `game_sessions` crosses ~10 million rows or `/stats/summary` p95 climbs pas
 with native Postgres partitioning — no data loss, no rollups, and partition pruning
 keeps time-windowed queries trivial. Not relevant at current scale.
 
-## Manual game tracking (mobile)
+## Manual game tracking (clients)
 
-**Vision only — not scheduled.** Mobile users can't log playtime for a game that never
-appeared via Discord presence. The intended fix is a wizard — library suggest → IGDB
-disambiguation (user picks) → optional "Unrecognized" stub → `POST /sessions` — not a
-global catalog search. See [manual-game-tracking.md](manual-game-tracking.md).
+**Backend is live** (`GET /games/suggest`, `POST /games/match`, `POST /games` — see
+[manual-game-tracking.md](manual-game-tracking.md) and [api.md](api.md)). Clients still
+need the wizard (library suggest → optional IGDB pick → create/link → `POST /sessions`)
+so users can log games that never appeared via Discord presence. Highest-value remaining
+frontend gap; not blocked on further backend work.
+
+## Possible future expansions
+
+Ideas that are deliberately **not** in the near-term finish line. Design notes may exist
+under `docs/superpowers/specs/`; nothing here is scheduled.
+
+### Steam playtime import
+
+Import a user's Steam library (lifetime minutes per owned game) as a **self-contained
+snapshot**, shown on stats behind a source filter (GameTrace / Steam / cumulative). Never
+writes to the shared `games` catalog or to `game_sessions` — Steam only returns scalar
+`playtime_forever`, not timestamped sessions, so mixing would invent times and double-count.
+
+Parked as product expansion. Spec (when revived):
+[docs/superpowers/specs/2026-06-30-steam-playtime-import-design.md](superpowers/specs/2026-06-30-steam-playtime-import-design.md).
+
+## Discord bot onboarding panel
+
+**Shipped.** Every bot reply — slash commands and the new panel below — now renders as a
+Components V2 layout (title, separator, body inside a container) instead of plain
+markdown text.
+
+Beyond the visual restyle, this closes a real access gap: Discord requires the **Send
+Messages** permission to invoke a slash command, so a read-only announcement channel
+could never offer `/login` or `/register` to `@everyone`. Buttons carry no such
+requirement. An admin (`Manage Server` permission) runs `/panel` once to post a
+permanent onboarding message into any channel — including one where `@everyone` has
+Send Messages turned off. From there, anyone can register an account, grab a login
+code, check stats, view recent sessions, or log out entirely through buttons, with no
+typing required. The buttons are registered as persistent views, so they keep working
+across bot restarts, and posting `/panel` again simply adds another copy — old panels
+are unaffected. See [bot.md](bot.md#onboarding-panel) for the full button map and
+required permissions.
 
 ## Game covers
 

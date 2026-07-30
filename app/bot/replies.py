@@ -386,3 +386,17 @@ def panel_help_reply() -> str:
     "type this to start" instruction is replaced.
     """
     return f"{_HELP_WHAT_IS_IT}\n\n{_PANEL_HOW_TO_START}\n\n{_HELP_COMMANDS}"
+
+
+# --- /panel command (admin-only, posts the panel above) -------------------
+
+PANEL_POSTED = "Panel opublikowany na tym kanale."
+
+PANEL_MISSING_PERMISSIONS = (
+    "Nie udało się opublikować panelu — brakuje mi uprawnienia **Wyślij "
+    "wiadomości** (Send Messages) na tym kanale."
+)
+
+PANEL_REFUSED_NOT_ADMIN = (
+    "Ta komenda wymaga uprawnienia **Zarządzaj serwerem** (Manage Server)."
+)

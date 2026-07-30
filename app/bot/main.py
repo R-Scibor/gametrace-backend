@@ -12,7 +12,8 @@ import structlog
 from discord import app_commands
 from discord.ext import tasks
 
-from app.bot import layout
+from app.bot import layout, replies
+from app.bot.panel import PERSISTENT_VIEWS, PanelView
 from app.core.config import settings
 from app.core.redis import get_redis
 from app.core.database import AsyncSessionLocal
@@ -39,6 +40,13 @@ intents.members = True
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
+# `on_ready` re-fires on every gateway reconnect, not just process start.
+# Registering the same persistent views again on each reconnect would be
+# harmless functionally (same custom_ids, same classes) but is still
+# needless repeated work — guard it the same way `_heartbeat_loop.is_running()`
+# guards the heartbeat loop below.
+_views_registered = False
+
 
 def _get_game_name(member: discord.Member) -> str | None:
     """Extract the currently played game name from a member's activities."""
@@ -55,9 +63,15 @@ def _get_game_name(member: discord.Member) -> str | None:
 
 @bot.event
 async def on_ready():
+    global _views_registered
     logger.info("Bot connected as %s", bot.user)
     await tree.sync()
     logger.info("Slash commands synced.")
+    if not _views_registered:
+        for view_cls in PERSISTENT_VIEWS:
+            bot.add_view(view_cls())
+        _views_registered = True
+        logger.info("Persistent panel views registered.")
     try:
         await get_redis().set(BOT_STARTED_AT_KEY, int(time.time()))
     except Exception:
@@ -156,6 +170,41 @@ async def help_command_handler(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(
         view=layout.reply_view("GameTrace", msg, layout.accent_for(msg)), ephemeral=True
     )
+
+
+@tree.command(
+    name="panel",
+    description="Opublikuj panel startowy GameTrace na tym kanale (dla adminów)",
+)
+@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.guild_only()
+async def panel_command(interaction: discord.Interaction) -> None:
+    # Discord's own manage_guild permission gates who can post the panel —
+    # this is a "who may post in this channel" question, not GameTrace RBAC,
+    # so there is deliberately no is_admin/database lookup here.
+    try:
+        await interaction.channel.send(view=PanelView())
+    except discord.Forbidden:
+        # Realistic failure: a locked channel where the bot itself also
+        # lacks Send Messages. Silent failure here is maddening to debug.
+        await interaction.response.send_message(
+            replies.PANEL_MISSING_PERMISSIONS, ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(replies.PANEL_POSTED, ephemeral=True)
+
+
+@panel_command.error
+async def panel_command_error(
+    interaction: discord.Interaction, error: app_commands.AppCommandError
+) -> None:
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message(
+            replies.PANEL_REFUSED_NOT_ADMIN, ephemeral=True
+        )
+        return
+    raise error
 
 
 @bot.event

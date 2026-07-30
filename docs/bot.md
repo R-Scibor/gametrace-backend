@@ -9,7 +9,7 @@ Source: `app/bot/main.py`, `app/bot/commands.py`, `app/bot/session_manager.py`, 
 - Listens for Discord rich-presence updates (`on_presence_update`) on every guild it's in.
 - Translates "user started / stopped / switched games" into `game_sessions` rows.
 - On restart, reconciles every `ONGOING` session against current presence (Self-Healing).
-- Exposes `/register`, `/login`, and `/logout` slash commands for user onboarding and session management, plus `/stats`, `/recent`, and `/help` for read-only lookups. Until a user exists in the `users` table (via `/register` or `/login`), the bot ignores their presence entirely.
+- Exposes `/register`, `/login`, and `/logout` slash commands for user onboarding and session management, plus `/stats`, `/recent`, and `/help` for read-only lookups, and an admin-only `/panel` that posts a button-driven onboarding panel (see [Onboarding panel](#onboarding-panel)) for channels where slash commands are unreachable. Until a user exists in the `users` table (via `/register`, `/login`, or the panel), the bot ignores their presence entirely.
 - The read commands (`/stats`, `/recent`) never query Postgres directly for session/game data — they call the FastAPI service over HTTP (`app/bot/api_client.py`), so visibility rules (`library_only`, `is_ignored`, unaccepted `NEEDS_REVIEW`) stay defined in exactly one place, the API layer, instead of being reimplemented against the bot's own DB session.
 
 ## Intents and prerequisites
@@ -25,7 +25,7 @@ The OAuth2 invite URL must include both `bot` and `applications.commands` scopes
 
 ## Slash commands
 
-Six commands total: `/register`, `/login`, `/logout` for onboarding and session management, plus `/stats`, `/recent`, `/help` for read-only lookups. All read `discord_id` and `username` from the interaction context (no user input — Discord supplies them). Replies are ephemeral (only the invoking user sees them). Command logic lives in `app/bot/commands.py`; user-facing copy is isolated in `app/bot/replies.py` so tone/wording can be reviewed in one place independent of the calling code.
+Seven commands total: `/register`, `/login`, `/logout` for onboarding and session management, plus `/stats`, `/recent`, `/help` for read-only lookups, and `/panel` (admin-only) to post the onboarding panel. All except `/panel` read `discord_id` and `username` from the interaction context (no user input — Discord supplies them) and reply ephemerally (only the invoking user sees them). Command logic lives in `app/bot/commands.py`; user-facing copy is isolated in `app/bot/replies.py` so tone/wording can be reviewed in one place independent of the calling code.
 
 ### `/register`
 
@@ -79,6 +79,14 @@ Reports the caller's last 5 non-ongoing sessions (`GET /sessions?status=COMPLETE
 
 Static orientation copy — no HTTP call, no DB lookup, no defer. Explains what GameTrace does for someone who noticed the bot and has no idea why it's there; it does not enumerate the other commands (Discord's own slash-command picker already does that with each command's description). Appends a link to the web app when `GAMETRACE_WEB_URL` is configured.
 
+### `/panel` (admin)
+
+Posts the onboarding panel (see [Onboarding panel](#onboarding-panel) below) as a **public** message in the channel it's invoked in — the one non-ephemeral message in the whole feature. Gated on Discord's own `manage_guild` permission (`app_commands.checks.has_permissions(manage_guild=True)`), not GameTrace's `is_admin` — who may post a message into a channel is a Discord-server question, not app RBAC, so there is no database lookup.
+
+- Success → the panel is posted publicly, then the command acknowledges with an ephemeral confirmation so the admin isn't left guessing.
+- Bot lacks **Send Messages** in the channel → the `send()` call raises `discord.Forbidden`, caught and replied to the admin ephemerally, naming the missing permission. Without this, a locked channel where the bot also can't post fails silently.
+- Caller lacks `manage_guild` → Discord raises `app_commands.MissingPermissions` before the command body runs; a `@panel_command.error` handler replies with a clean ephemeral refusal instead of leaving a traceback in the logs.
+
 ### Read commands: defer, degradation, and access path
 
 `/stats` and `/recent` call `interaction.response.defer(ephemeral=True)` before any I/O — a cold container's DB lookup plus the HTTP round-trip to the API can exceed Discord's ~3-second ack deadline, which would otherwise surface as a false "this interaction failed" to the user. `/help` does neither DB lookup nor defer since it has no I/O to wait on.
@@ -88,6 +96,46 @@ Both read commands call the API via `app/bot/api_client.py` using the [bot servi
 ### Timezone resolution in `/recent`
 
 `/recent` resolves the caller's local time with a plain `ZoneInfo(user.timezone)` lookup, falling back to UTC when the value is missing or not a recognised IANA zone (`app/bot/replies.py::_resolve_tz`). This is a **different** rule from the voice pipeline's `resolve_timezone` (`app/services/voice_context.py`), which additionally treats the literal string `"UTC"` as "unset" and substitutes `DEFAULT_TIMEZONE` in that case. `/recent` has no reason to make that substitution — a user whose `users.timezone` is genuinely `"UTC"` should see times in UTC, not silently remapped to the server's default zone. Two distinct timezone-resolution semantics exist in the codebase by design; don't assume they match when touching either one.
+
+## Onboarding panel
+
+`app/bot/panel.py`. Discord requires the **Send Messages** permission to invoke a slash command, so a read-only announcement channel (`@everyone` denied Send Messages) can never offer `/login` or `/register` there. Buttons carry no such requirement, so this module reimplements the entry path — register, get a login code, check stats, view recent sessions, log out — as Components V2 buttons on a persistent message that `/panel` posts.
+
+### Who posts it, and what happens
+
+An admin runs `/panel` in the target channel (see [`/panel` (admin)](#panel-admin) above). This posts one **public** `PanelView` message — a title, body, and two buttons — the only non-ephemeral message anywhere in the feature. Everything a clicker sees after that is ephemeral, exactly like the slash-command replies.
+
+Re-running `/panel` posts an **additional** panel; it does not replace or invalidate the previous one. Every panel's buttons share the same `custom_id`s and dispatch through the same registered views, so old panels keep working — a stale copy left behind after a re-run is cosmetic clutter to delete manually, never a broken button.
+
+### Button map
+
+| Button | Where | Does |
+|---|---|---|
+| `▶ Zaczynam` | `PanelView` (public panel) | Looks up the clicker in `users` (read-only). No account → opens the `NewUserView` disclosure, ephemeral. Existing account → opens the `MemberView` menu, ephemeral. |
+| `ℹ Co to jest?` | `PanelView` (public panel) | Static orientation reply (panel equivalent of `/help`), ephemeral. No I/O. |
+| `✓ Akceptuję i zakładam konto` | `NewUserView` (ephemeral disclosure) | Calls `commands.register_user`, then **edits the same message** into a `MemberView` — the disclosure becomes the member menu in place, not a second message. |
+| `🔑 Weź kod` | `MemberView` (ephemeral menu) | Issues a login code via `commands.issue_login_code`, same semantics as `/login`'s code step. |
+| `📊 Statystyki` | `MemberView` (ephemeral menu) | Same as `/stats`, via `commands.stats_command`. |
+| `🕒 Ostatnie` | `MemberView` (ephemeral menu) | Same as `/recent`, via `commands.recent_command`. |
+| `🚪 Wyloguj` | `MemberView` (ephemeral menu) | Same as `/logout`, via `commands.logout_user`. |
+
+All three views (`PanelView`, `NewUserView`, `MemberView`) are stateless — instantiated once with no arguments and shared by every clicker, so any per-user data is read only from the interaction, never stored on the view.
+
+### Persistence across restarts
+
+`on_ready` registers every class in `panel.PERSISTENT_VIEWS` (`PanelView`, `NewUserView`, `MemberView`) via `bot.add_view(cls())`, so their `custom_id`s keep dispatching after a bot restart without needing the original message. Because `on_ready` re-fires on every gateway reconnect (not just process start), registration is guarded by a module-level flag in `app/bot/main.py` — the same pattern `_heartbeat_loop.is_running()` uses to guard the heartbeat loop — so repeated reconnects don't re-register the same views.
+
+**One owner per `custom_id`.** discord.py dispatches persistent components by `(component_type, custom_id)` in a single bucket, so if the same pair were ever registered on two views, the second registration would silently steal the first's callback. This is why `gt:menu:*` lives on `MemberView` alone — the accept path reaches it by editing the disclosure message into a `MemberView`, never by duplicating the button onto `NewUserView`.
+
+### Setting up a locked onboarding channel
+
+This is the scenario the panel exists for: a channel where new members land, `@everyone` has **Send Messages** denied (so it stays clutter-free and slash commands are unreachable), and the panel is the only way in.
+
+Required permissions in that channel:
+
+- **The bot** needs **View Channel** and **Send Messages** — explicitly, since a channel-level or role-level deny for `@everyone` does not automatically extend to the bot's own role. Give the bot's role (or a channel-specific permission overwrite for the bot) both, even though `@everyone` has Send Messages off.
+- **The invoking admin** needs the `manage_guild` (Manage Server) permission to run `/panel` at all — enforced by Discord itself, not looked up in GameTrace's `users.is_admin`.
+- **Embed Links is not required.** Components V2 layouts are not embeds; nothing in this feature uses the embed system.
 
 ## Presence tracking
 
