@@ -282,3 +282,82 @@ def recent_reply(*, sessions: list[dict], user_timezone: str | None) -> str:
     lines.append("")
     lines.append(f"Zobacz więcej w aplikacji.{_web_hint()}")
     return "\n".join(lines)
+
+
+# --- Onboarding panel (Components V2) -------------------------------------
+#
+# Posted as a persistent message in a read-only channel where @everyone
+# cannot Send Messages — so slash commands are unreachable there. Every
+# string below must be actionable via a button, never "type this command".
+# The views/buttons that render these strings are wired in a later task;
+# this module only owns the copy.
+
+PANEL_TITLE = "🎮 GameTrace"
+
+
+def _privacy_hint() -> str:
+    return (
+        f" Pełna polityka prywatności: {settings.gametrace_privacy_url}"
+        if settings.gametrace_privacy_url
+        else ""
+    )
+
+
+def panel_body() -> str:
+    """Landing copy for the panel message itself — no instructions to type
+    anything, only what the two entry buttons do."""
+    return (
+        f"{PANEL_TITLE} — tracker czasu spędzonego w grach.\n\n"
+        "Bot widzi Twoją aktywność na Discordzie (status „W grze…”) i "
+        "automatycznie zapisuje sesje rozgrywki.\n\n"
+        "Kliknij **▶ Zaczynam**, żeby założyć konto, albo **ℹ Co to jest?**, "
+        "żeby dowiedzieć się więcej najpierw."
+    )
+
+
+def panel_disclosure() -> str:
+    """Shown before account creation, behind the **▶ Zaczynam** button —
+    plain-language disclosure of what gets recorded, not stored consent.
+    Confirmed via **✓ Akceptuję i zakładam konto**."""
+    return (
+        "Zanim założysz konto — czym jest sesja gry:\n\n"
+        "Kiedy grasz, GameTrace zapisuje **nazwę gry** oraz **czas "
+        "rozpoczęcia i zakończenia** sesji. Nic więcej — żadnej treści "
+        "wiadomości, żadnych zrzutów ekranu.\n\n"
+        f"Kliknij **✓ Akceptuję i zakładam konto**, żeby kontynuować.{_privacy_hint()}"
+    )
+
+
+def panel_register_confirmation() -> str:
+    """Shown right after the panel creates the account — points at the
+    button that gets the login code, not at typing /login."""
+    return (
+        "Konto założone! Od teraz bot automatycznie zapisuje Twoje sesje "
+        "grania.\n\n"
+        "Kliknij **🔑 Weź kod**, żeby dostać kod i połączyć konto z aplikacją."
+    )
+
+
+_PANEL_HOW_TO_START = (
+    "**Jak zacząć**\n"
+    "1. Kliknij **▶ Zaczynam** na panelu powyżej, żeby założyć konto.\n"
+    "2. Kliknij **🔑 Weź kod** — bot odpowie kodem widocznym tylko dla Ciebie.\n"
+    "3. Wpisz kod w aplikacji i graj jak zwykle — sesje pojawią się "
+    "automatycznie.\n\n"
+    "Statystyki i ostatnie sesje sprawdzisz tu na miejscu przyciskami "
+    "**📊 Statystyki** i **🕒 Ostatnie**, a **🚪 Wyloguj** wylogowuje Cię z "
+    "aplikacji."
+)
+
+
+def panel_help_reply() -> str:
+    """Panel equivalent of /help — same orientation content, but the "Jak
+    zacząć" block is button-oriented since this reply can appear in a
+    channel where the user cannot type a slash command at all.
+
+    Composes the existing `_HELP_WHAT_IS_IT` and `_HELP_COMMANDS` constants
+    rather than duplicating their text — the command list is still useful
+    reference (those commands work in DMs and unlocked channels), only the
+    "type this to start" instruction is replaced.
+    """
+    return f"{_HELP_WHAT_IS_IT}\n\n{_PANEL_HOW_TO_START}\n\n{_HELP_COMMANDS}"
