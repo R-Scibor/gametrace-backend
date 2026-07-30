@@ -148,8 +148,12 @@ def recent_empty() -> str:
     )
 
 
+# Does NOT restate the product name: every consumer (`/help`, the panel help
+# screen) renders a "GameTrace" title as a `### heading` right above this, so
+# opening with "**GameTrace** — " printed the title twice. Same rule as
+# `panel_body()`.
 _HELP_WHAT_IS_IT = (
-    "**GameTrace** — tracker czasu spędzonego w grach.\n\n"
+    "Tracker czasu spędzonego w grach.\n\n"
     "Bot widzi Twoją aktywność na Discordzie (status „W grze…”) i "
     "automatycznie zapisuje sesje rozgrywki."
 )
@@ -395,6 +399,15 @@ PANEL_POSTED = "Panel opublikowany na tym kanale."
 PANEL_MISSING_PERMISSIONS = (
     "Nie udało się opublikować panelu — brakuje mi uprawnienia **Wyślij "
     "wiadomości** (Send Messages) na tym kanale."
+)
+
+# Distinct from PANEL_MISSING_PERMISSIONS on purpose: this is the
+# `interaction.channel is None` branch, where nothing is wrong with the bot's
+# permissions and pointing an admin at Send Messages would send them chasing a
+# setting that is already correct.
+PANEL_CHANNEL_UNAVAILABLE = (
+    "Nie udało się opublikować panelu — nie rozpoznaję kanału, z którego "
+    "wywołano komendę. Spróbuj ponownie na kanale tekstowym serwera."
 )
 
 PANEL_REFUSED_NOT_ADMIN = (

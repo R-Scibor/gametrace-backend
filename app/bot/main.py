@@ -197,7 +197,9 @@ async def panel_command(interaction: discord.Interaction) -> None:
         # guild_only() makes this unlikely in practice, but interaction.channel
         # can still be None (e.g. an uncached channel) — send() on None would
         # raise AttributeError, which the Forbidden handler below can't catch.
-        await _panel_ack(interaction, replies.PANEL_MISSING_PERMISSIONS)
+        # Not a permissions problem — say so, or an admin goes hunting for a
+        # Send Messages grant that is already in place.
+        await _panel_ack(interaction, replies.PANEL_CHANNEL_UNAVAILABLE)
         return
 
     try:

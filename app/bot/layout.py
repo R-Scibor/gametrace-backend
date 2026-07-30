@@ -2,7 +2,8 @@
 
 Pure rendering: builds a `LayoutView` from a title/body pair and picks an
 accent colour. No database access, no interaction handling, no Discord
-client state — Tasks 3 and 5 own wiring this into views/commands.
+client state — `app/bot/main.py` and `app/bot/panel.py` wire this into
+slash-command replies and panel views.
 """
 from enum import Enum
 
@@ -18,6 +19,7 @@ _FAILURE_BODIES = frozenset(
         replies.RECENT_FAILURE,
         replies.LINK_CODES_UNCONFIGURED,
         replies.PANEL_MISSING_PERMISSIONS,
+        replies.PANEL_CHANNEL_UNAVAILABLE,
         replies.PANEL_REFUSED_NOT_ADMIN,
     }
 )

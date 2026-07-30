@@ -25,7 +25,7 @@ The OAuth2 invite URL must include both `bot` and `applications.commands` scopes
 
 ## Slash commands
 
-Seven commands total: `/register`, `/login`, `/logout` for onboarding and session management, plus `/stats`, `/recent`, `/help` for read-only lookups, and `/panel` (admin-only) to post the onboarding panel. All except `/panel` read `discord_id` and `username` from the interaction context (no user input — Discord supplies them) and reply ephemerally (only the invoking user sees them). Command logic lives in `app/bot/commands.py`; user-facing copy is isolated in `app/bot/replies.py` so tone/wording can be reviewed in one place independent of the calling code.
+Seven commands total: `/register`, `/login`, `/logout` for onboarding and session management, plus `/stats`, `/recent`, `/help` for read-only lookups, and `/panel` (admin-only) to post the onboarding panel. All of them reply ephemerally (only the invoking user sees the reply), and all except `/panel` read `discord_id` and `username` from the interaction context (no user input — Discord supplies them). `/panel` is the one command that also posts a **public** message to the channel — the panel itself — alongside its ephemeral acknowledgement. Command logic lives in `app/bot/commands.py`; user-facing copy is isolated in `app/bot/replies.py` so tone/wording can be reviewed in one place independent of the calling code.
 
 ### `/register`
 

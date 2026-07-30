@@ -57,10 +57,28 @@ def _panel_container(title: str, body: str, row: ActionRow) -> Container:
 async def _send_reply(interaction: discord.Interaction, title: str, body: str) -> None:
     """Ephemeral V2 followup. Never pass `content=` next to a V2 view —
     discord.py sets the v2 flag and Discord rejects the message with a 400."""
-    await interaction.followup.send(
-        view=layout.reply_view(title, body, layout.accent_for(body)),
-        ephemeral=True,
+    await _send_view(
+        interaction, layout.reply_view(title, body, layout.accent_for(body))
     )
+
+
+async def _send_view(interaction: discord.Interaction, view: discord.ui.LayoutView) -> None:
+    """Send a view as an ephemeral followup, always asking for the message back.
+
+    `wait=True` is what makes discord.py file this short-lived instance under
+    `ViewStore._views[message_id]`. Without a message ID it would land in the
+    `message_id=None` bucket — the same one `bot.add_view()` uses at startup —
+    and since an ephemeral dispatchable view has its timeout forced to 15
+    minutes, its later `remove_view()` would pop those `(type, custom_id)`
+    keys with no identity check and deregister the panel buttons globally.
+
+    `Webhook.send` currently forces `wait=True` for application webhooks
+    (which an interaction followup always is), so today this is belt and
+    braces; it is passed explicitly so the guarantee is stated at the call
+    site rather than depending on a library internal. The returned message is
+    unused — only the ID that reaches `ViewStore` matters.
+    """
+    await interaction.followup.send(view=view, ephemeral=True, wait=True)
 
 
 class _PanelRow(ActionRow):
@@ -73,8 +91,10 @@ class _PanelRow(ActionRow):
     )
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         # Defer first: the registration lookup is a DB round-trip and Discord's
-        # ack deadline is ~3s.
-        await interaction.response.defer(ephemeral=True)
+        # ack deadline is ~3s. `thinking=True` is required on a *component*
+        # interaction — without it discord.py sends DEFERRED_MESSAGE_UPDATE and
+        # the click shows no loading indicator at all.
+        await interaction.response.defer(ephemeral=True, thinking=True)
         discord_id = str(interaction.user.id)
 
         async with AsyncSessionLocal() as db:
@@ -82,7 +102,7 @@ class _PanelRow(ActionRow):
 
         # Read-only branch — the account is created only on explicit accept.
         view = MemberView() if user is not None else NewUserView()
-        await interaction.followup.send(view=view, ephemeral=True)
+        await _send_view(interaction, view)
 
     @discord.ui.button(
         label="ℹ Co to jest?",
@@ -135,7 +155,9 @@ class _MemberRow(ActionRow):
         style=discord.ButtonStyle.primary,
     )
     async def code(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await interaction.response.defer(ephemeral=True)
+        # `thinking=True`: component interactions ignore `ephemeral` on a bare
+        # defer and get no loading indicator (see `_PanelRow.start`).
+        await interaction.response.defer(ephemeral=True, thinking=True)
         discord_id = str(interaction.user.id)
         username = interaction.user.name
 
@@ -150,7 +172,9 @@ class _MemberRow(ActionRow):
         style=discord.ButtonStyle.secondary,
     )
     async def stats(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await interaction.response.defer(ephemeral=True)
+        # `thinking=True`: component interactions ignore `ephemeral` on a bare
+        # defer and get no loading indicator (see `_PanelRow.start`).
+        await interaction.response.defer(ephemeral=True, thinking=True)
         discord_id = str(interaction.user.id)
 
         async with AsyncSessionLocal() as db:
@@ -164,7 +188,9 @@ class _MemberRow(ActionRow):
         style=discord.ButtonStyle.secondary,
     )
     async def recent(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await interaction.response.defer(ephemeral=True)
+        # `thinking=True`: component interactions ignore `ephemeral` on a bare
+        # defer and get no loading indicator (see `_PanelRow.start`).
+        await interaction.response.defer(ephemeral=True, thinking=True)
         discord_id = str(interaction.user.id)
 
         async with AsyncSessionLocal() as db:
@@ -178,7 +204,9 @@ class _MemberRow(ActionRow):
         style=discord.ButtonStyle.danger,
     )
     async def logout(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await interaction.response.defer(ephemeral=True)
+        # `thinking=True`: component interactions ignore `ephemeral` on a bare
+        # defer and get no loading indicator (see `_PanelRow.start`).
+        await interaction.response.defer(ephemeral=True, thinking=True)
         discord_id = str(interaction.user.id)
 
         async with AsyncSessionLocal() as db:
@@ -226,7 +254,8 @@ class MemberView(LayoutView):
         )
 
 
-# Task 6 registers these on startup: `for cls in PERSISTENT_VIEWS: bot.add_view(cls())`.
+# Registered on startup by `on_ready` in `app/bot/main.py`:
+# `for cls in PERSISTENT_VIEWS: bot.add_view(cls())`.
 PERSISTENT_VIEWS: tuple[type[discord.ui.LayoutView], ...] = (
     PanelView,
     NewUserView,

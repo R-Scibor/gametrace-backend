@@ -50,6 +50,20 @@ def test_panel_body_does_not_restate_title():
     assert not text.startswith(replies.PANEL_TITLE)
 
 
+def test_help_copy_does_not_restate_the_brand_title(monkeypatch):
+    """Same rule as `panel_body`, for the other constant rendered under a
+    "GameTrace" heading: `_HELP_WHAT_IS_IT` feeds both `/help` and the
+    panel's help screen, and both render `### GameTrace` above it. Opening
+    the body with "**GameTrace** — " printed the title twice in a row."""
+    assert not replies._HELP_WHAT_IS_IT.startswith("**GameTrace**")
+
+    for web_url in ("", "https://gametrace.example"):
+        monkeypatch.setattr(settings, "gametrace_web_url", web_url)
+        for text in (replies.help_reply(), replies.panel_help_reply()):
+            assert not text.startswith("**GameTrace**")
+            assert not text.startswith("GameTrace")
+
+
 def test_panel_disclosure_has_no_slash_instruction():
     text = replies.panel_disclosure()
     _assert_no_slash_start_instruction(text)

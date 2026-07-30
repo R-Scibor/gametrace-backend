@@ -248,6 +248,80 @@ async def test_code_button_passes_the_redis_handle_and_username():
     func.assert_awaited_once_with(db, "redis-handle", "9", "bob")
 
 
+# --- 7. persistent-view registration hygiene -------------------------------
+
+
+_VIEW_CARRYING_FOLLOWUP_BUTTONS = [
+    ("gt:panel:start", "PanelView"),
+    ("gt:menu:code", "MemberView"),
+    ("gt:menu:stats", "MemberView"),
+    ("gt:menu:recent", "MemberView"),
+    ("gt:menu:logout", "MemberView"),
+]
+
+
+@pytest.mark.parametrize("custom_id,view_name", _VIEW_CARRYING_FOLLOWUP_BUTTONS)
+async def test_ephemeral_followups_carrying_a_view_ask_for_the_message_back(
+    custom_id, view_name
+):
+    """`wait=True` is what gives the sent view a message ID to be filed under.
+
+    An ephemeral followup that carries a dispatchable view gets
+    `view.timeout = 15 * 60` forced on it by discord.py. If that instance was
+    stored without a message ID it would sit in `ViewStore._views[None]` —
+    the same bucket `bot.add_view()` fills at startup — and its expiry would
+    pop the shared `(component_type, custom_id)` keys, deregistering the
+    panel buttons for everyone.
+    """
+    interaction = _interaction()
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=None)
+
+    with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
+         patch.object(panel, "get_redis", return_value="redis"), \
+         patch.object(panel.commands, "issue_login_code", new=AsyncMock(return_value="x")), \
+         patch.object(panel.commands, "stats_command", new=AsyncMock(return_value="x")), \
+         patch.object(panel.commands, "recent_command", new=AsyncMock(return_value="x")), \
+         patch.object(panel.commands, "logout_user", new=AsyncMock(return_value="x")):
+        await _callback(getattr(panel, view_name)(), custom_id)(interaction)
+
+    kwargs = interaction.followup.send.await_args.kwargs
+    assert kwargs["view"] is not None
+    assert kwargs.get("wait") is True, f"{custom_id} followup must request the message ID"
+
+
+@pytest.mark.parametrize(
+    "custom_id,view_name",
+    [
+        ("gt:panel:start", "PanelView"),
+        ("gt:menu:code", "MemberView"),
+        ("gt:menu:stats", "MemberView"),
+        ("gt:menu:recent", "MemberView"),
+        ("gt:menu:logout", "MemberView"),
+    ],
+)
+async def test_button_defers_are_thinking_defers(custom_id, view_name):
+    """These are *component* interactions: discord.py maps a bare
+    `defer(ephemeral=True)` to DEFERRED_MESSAGE_UPDATE and drops `ephemeral`
+    entirely, so the click shows no loading state at all. Only
+    `thinking=True` produces the "Bot is thinking…" placeholder — without it
+    a slow lookup looks like a dead button and gets clicked twice, which on
+    `gt:menu:code` mints and burns a second login code."""
+    interaction = _interaction()
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=None)
+
+    with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
+         patch.object(panel, "get_redis", return_value="redis"), \
+         patch.object(panel.commands, "issue_login_code", new=AsyncMock(return_value="x")), \
+         patch.object(panel.commands, "stats_command", new=AsyncMock(return_value="x")), \
+         patch.object(panel.commands, "recent_command", new=AsyncMock(return_value="x")), \
+         patch.object(panel.commands, "logout_user", new=AsyncMock(return_value="x")):
+        await _callback(getattr(panel, view_name)(), custom_id)(interaction)
+
+    interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+
+
 async def test_help_button_replies_without_deferring_and_without_io():
     interaction = _interaction()
 
