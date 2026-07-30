@@ -111,7 +111,7 @@ Re-running `/panel` posts an **additional** panel; it does not replace or invali
 
 | Button | Where | Does |
 |---|---|---|
-| `▶ Zaczynam` | `PanelView` (public panel) | Looks up the clicker in `users` (read-only). No account → opens the `NewUserView` disclosure, ephemeral. Existing account → opens the `MemberView` menu, ephemeral. |
+| `▶ START` | `PanelView` (public panel) | Looks up the clicker in `users` (read-only). No account → opens the `NewUserView` disclosure, ephemeral. Existing account → opens the `MemberView` menu, ephemeral. |
 | `🇵🇱 Co to jest?` (`gt:panel:help`) | `PanelView` (public panel) | Polish orientation screen (`replies.panel_info_pl()`), ephemeral. No I/O. Kept on `gt:panel:help` deliberately — panels already posted to the live server carry a button with that exact `custom_id`, so keeping the id (rather than minting a new one for the Polish screen) means those existing panels keep working after this deploy. |
 | `🇬🇧 What is it?` (`gt:panel:help:en`) | `PanelView` (public panel) | English mirror (`replies.panel_info_en()`), ephemeral. No I/O. New `custom_id` — only this button is new. |
 | `✓ Akceptuję i zakładam konto` | `NewUserView` (ephemeral disclosure) | Calls `commands.register_user`, then **edits the same message** into a `MemberView` — the disclosure becomes the member menu in place, not a second message. |

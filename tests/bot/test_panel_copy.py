@@ -108,7 +108,7 @@ def test_panel_info_en_lists_commands_as_reference():
 
 def test_panel_info_pl_points_at_buttons():
     text = replies.panel_info_pl()
-    assert "▶ Zaczynam" in text
+    assert "▶ START" in text
     assert "🔑 Weź kod" in text
 
 
@@ -116,7 +116,7 @@ def test_panel_info_en_points_at_buttons_using_literal_polish_labels():
     """The buttons themselves are labelled in Polish, so the English screen
     must refer to them by their exact on-screen text, not a translation."""
     text = replies.panel_info_en()
-    assert "▶ Zaczynam" in text
+    assert "▶ START" in text
     assert "🔑 Weź kod" in text
 
 

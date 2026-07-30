@@ -118,7 +118,7 @@ def test_panel_view_renders_the_panel_title_and_body():
 
 
 def test_member_menu_greets_a_connected_user_instead_of_repeating_the_help_text():
-    """A registered user must not be told to click ▶ Zaczynam to create an
+    """A registered user must not be told to click ▶ START to create an
     account, which is what the info screens say."""
     texts = _texts(panel.MemberView())
     assert replies.panel_member_menu() in texts

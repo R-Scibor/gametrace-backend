@@ -321,15 +321,17 @@ def panel_body() -> str:
     `panel_info_en()`), each with its own 4000-char ephemeral budget.
     """
     return (
-        "🇵🇱 Tracker czasu spędzonego w grach — bot widzi Twój status gry na "
-        "Discordzie i zapisuje sesje automatycznie. Użyj przycisków poniżej.\n\n"
-        "🇬🇧 A playtime tracker — the bot sees your Discord game status and "
-        "logs sessions automatically. Use the buttons below."
+        "🇵🇱 Bot rozpoznaje Twój status „W grze…” na Discordzie i sam "
+        "zapisuje sesje — nic nie trzeba włączać ręcznie. Kliknij "
+        "**▶ START**, żeby zacząć.\n\n"
+        "🇬🇧 The bot recognises your “Playing…” status on Discord and saves "
+        "your sessions automatically — nothing to switch on. Click "
+        "**▶ START** to begin."
     )
 
 
 def panel_disclosure() -> str:
-    """Shown before account creation, behind the **▶ Zaczynam** button —
+    """Shown before account creation, behind the **▶ START** button —
     plain-language disclosure of what gets recorded, not stored consent.
     Confirmed via **✓ Akceptuję i zakładam konto**.
 
@@ -376,7 +378,7 @@ def panel_info_pl() -> str:
     jest?** button. Gets its own 4000-char Components V2 budget, so unlike
     `panel_body()` this can afford the full walkthrough.
 
-    Step 3 of "Jak zacząć" is the buttons (**▶ Zaczynam**, **🔑 Weź kod**) —
+    Step 3 of "Jak zacząć" is the buttons (**▶ START**, **🔑 Weź kod**) —
     never "type /login" — because this screen is reachable from the exact
     channel where typing a slash command is impossible. The "Komendy"
     section still *lists* `/login` / `/register` / `/logout` as reference:
@@ -416,7 +418,7 @@ def panel_info_pl() -> str:
             "serwera, na którym działa.\n"
             "2. Włącz w Discordzie wyświetlanie statusu aktywności gry "
             "(Activity Status).\n"
-            "3. Kliknij **▶ Zaczynam** na panelu powyżej, a potem **🔑 Weź "
+            "3. Kliknij **▶ START** na panelu powyżej, a potem **🔑 Weź "
             "kod** — bot odpowie 6-cyfrowym kodem widocznym tylko dla "
             "Ciebie, ważnym 5 minut.\n"
             "4. Wpisz ten kod w aplikacji.\n"
@@ -432,7 +434,7 @@ def panel_info_pl() -> str:
         "serwera, na którym działa.\n"
         "2. Włącz w Discordzie wyświetlanie statusu aktywności gry "
         "(Activity Status).\n"
-        "3. Kliknij **▶ Zaczynam** na panelu powyżej, a potem **🔑 Weź "
+        "3. Kliknij **▶ START** na panelu powyżej, a potem **🔑 Weź "
         "kod** — bot odpowie 6-cyfrowym kodem widocznym tylko dla Ciebie, "
         "ważnym 5 minut.\n"
         f"4. Wpisz ten kod w aplikacji (przeglądarka {web} albo kreator "
@@ -456,9 +458,9 @@ def panel_info_pl() -> str:
 
 def panel_info_en() -> str:
     """English mirror of `panel_info_pl()`, opened from the **🇬🇧 What is
-    it?** button. Button labels stay in their literal Polish form
-    (**▶ Zaczynam**, **🔑 Weź kod**) — the buttons themselves are labelled in
-    Polish, so an English reader needs the exact on-screen text to find them,
+    it?** button. Button labels stay in their exact on-screen form
+    (**▶ START**, **🔑 Weź kod**) — `🔑 Weź kod` is still Polish on the
+    button itself, so an English reader needs the literal text to find it,
     not a translated paraphrase.
     """
     web = settings.gametrace_web_url
@@ -494,7 +496,7 @@ def panel_info_en() -> str:
             "1. You need to be a member of this server — the bot only "
             "tracks members of the server it runs on.\n"
             "2. Turn on Activity Status sharing in Discord.\n"
-            "3. Click **▶ Zaczynam** on the panel above, then **🔑 Weź "
+            "3. Click **▶ START** on the panel above, then **🔑 Weź "
             "kod** — the bot will reply with a 6-digit code visible only "
             "to you, valid for 5 minutes.\n"
             "4. Enter that code in the app.\n"
@@ -509,7 +511,7 @@ def panel_info_en() -> str:
         "1. You need to be a member of this server — the bot only tracks "
         "members of the server it runs on.\n"
         "2. Turn on Activity Status sharing in Discord.\n"
-        "3. Click **▶ Zaczynam** on the panel above, then **🔑 Weź kod** "
+        "3. Click **▶ START** on the panel above, then **🔑 Weź kod** "
         "— the bot will reply with a 6-digit code visible only to you, "
         "valid for 5 minutes.\n"
         f"4. Enter that code in the app (browser {web} or the wizard "

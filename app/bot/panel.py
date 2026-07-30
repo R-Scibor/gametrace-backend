@@ -85,7 +85,7 @@ class _PanelRow(ActionRow):
     """Buttons on the public panel message."""
 
     @discord.ui.button(
-        label="▶ Zaczynam",
+        label="▶ START",
         custom_id="gt:panel:start",
         style=discord.ButtonStyle.primary,
     )
