@@ -15,6 +15,8 @@ STATS_FAILURE = "Nie udało się pobrać statystyk. Spróbuj ponownie za chwilę
 
 RECENT_FAILURE = "Nie udało się pobrać ostatnich sesji. Spróbuj ponownie za chwilę."
 
+LINK_CODES_UNCONFIGURED = "Kody logowania nie są skonfigurowane."
+
 
 def _web_hint() -> str:
     return f" {settings.gametrace_web_url}" if settings.gametrace_web_url else ""

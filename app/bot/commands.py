@@ -43,7 +43,7 @@ async def issue_login_code(db, r, discord_id: str, username: str) -> str:
         created = await _upsert_user(db, discord_id, username)
         code = await link_codes.issue_code(r, discord_id)
     except link_codes.LinkCodesNotConfigured:
-        return "Kody logowania nie są skonfigurowane."
+        return replies.LINK_CODES_UNCONFIGURED
 
     spaced = _format_code(code)
     return replies.login_reply(code=spaced, created=created)
