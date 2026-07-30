@@ -12,6 +12,7 @@ import structlog
 from discord import app_commands
 from discord.ext import tasks
 
+from app.bot import layout
 from app.core.config import settings
 from app.core.redis import get_redis
 from app.core.database import AsyncSessionLocal
@@ -78,7 +79,9 @@ async def register_command(interaction: discord.Interaction) -> None:
 
         msg = await register_user(db, discord_id, username)
 
-    await interaction.response.send_message(msg, ephemeral=True)
+    await interaction.response.send_message(
+        view=layout.reply_view("Rejestracja", msg, layout.accent_for(msg)), ephemeral=True
+    )
 
 
 @tree.command(name="login", description="Uzyskaj kod logowania do aplikacji GameTrace")
@@ -91,7 +94,9 @@ async def login_command(interaction: discord.Interaction) -> None:
 
         msg = await issue_login_code(db, get_redis(), discord_id, username)
 
-    await interaction.response.send_message(msg, ephemeral=True)
+    await interaction.response.send_message(
+        view=layout.reply_view("Kod logowania", msg, layout.accent_for(msg)), ephemeral=True
+    )
 
 
 @tree.command(name="logout", description="Wyloguj się ze wszystkich urządzeń w aplikacji GameTrace")
@@ -103,7 +108,9 @@ async def logout_command(interaction: discord.Interaction) -> None:
 
         msg = await logout_user(db, get_redis(), discord_id)
 
-    await interaction.response.send_message(msg, ephemeral=True)
+    await interaction.response.send_message(
+        view=layout.reply_view("Wylogowano", msg, layout.accent_for(msg)), ephemeral=True
+    )
 
 
 @tree.command(name="stats", description="Łączny czas grania i najczęściej grane gry z ostatnich 7 dni")
@@ -118,7 +125,9 @@ async def stats_command_handler(interaction: discord.Interaction) -> None:
 
         msg = await stats_command(db, discord_id)
 
-    await interaction.followup.send(msg, ephemeral=True)
+    await interaction.followup.send(
+        view=layout.reply_view("Statystyki", msg, layout.accent_for(msg)), ephemeral=True
+    )
 
 
 @tree.command(name="recent", description="Ostatnie sesje: gra, kiedy grałeś i ile trwało")
@@ -132,7 +141,9 @@ async def recent_command_handler(interaction: discord.Interaction) -> None:
 
         msg = await recent_command(db, discord_id)
 
-    await interaction.followup.send(msg, ephemeral=True)
+    await interaction.followup.send(
+        view=layout.reply_view("Ostatnie sesje", msg, layout.accent_for(msg)), ephemeral=True
+    )
 
 
 @tree.command(name="help", description="Czym jest GameTrace i jak zacząć")
@@ -142,7 +153,9 @@ async def help_command_handler(interaction: discord.Interaction) -> None:
 
     msg = help_command()
 
-    await interaction.response.send_message(msg, ephemeral=True)
+    await interaction.response.send_message(
+        view=layout.reply_view("GameTrace", msg, layout.accent_for(msg)), ephemeral=True
+    )
 
 
 @bot.event
