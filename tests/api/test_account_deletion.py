@@ -1,11 +1,27 @@
 from datetime import datetime, timedelta, timezone
 
+import fakeredis.aioredis
+import pytest
 from sqlalchemy import select
 
 from app.core.config import settings
 from app.models.session import SessionSource, SessionStatus
 from app.models.user import UserAuthToken, UserDevice
 from tests.factories import make_alias, make_device, make_game, make_session, make_token, make_user
+
+
+@pytest.fixture
+async def redis_client():
+    return fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+
+@pytest.fixture(autouse=True)
+def patch_get_redis(monkeypatch, redis_client):
+    # schedule_deletion() calls the module-level get_redis() in
+    # app.services.account_deletion; without this patch the real cached client
+    # in app.core.redis is used, which breaks across pytest's per-test event
+    # loops (see tests/api/test_auth_link.py for the same pattern).
+    monkeypatch.setattr("app.services.account_deletion.get_redis", lambda: redis_client)
 
 
 async def test_deletion_columns_round_trip(db):
@@ -146,3 +162,32 @@ async def test_schedule_deletion_original_bearer_401_after_call(client, db, user
 
     again = await client.get("/api/v1/profile/me")
     assert again.status_code == 401
+
+
+async def test_schedule_deletion_survives_redis_outage(
+    authed_client, db, user, monkeypatch
+):
+    """A Redis failure during the best-effort link-code flush must not roll back
+    or corrupt the already-committed deletion, and must not surface as a 500."""
+    import redis.exceptions
+
+    class _BrokenRedis:
+        async def getdel(self, *args, **kwargs):
+            raise redis.exceptions.ConnectionError("redis unreachable")
+
+    monkeypatch.setattr(
+        "app.services.account_deletion.get_redis", lambda: _BrokenRedis()
+    )
+
+    resp = await authed_client.post("/api/v1/profile/me/deletion")
+    assert resp.status_code == 202
+    body = resp.json()
+
+    await db.refresh(user)
+    assert user.purge_at is not None
+    assert datetime.fromisoformat(body["purge_at"]) == user.purge_at
+
+    result = await db.execute(
+        select(UserAuthToken).where(UserAuthToken.user_id == user.discord_id)
+    )
+    assert result.scalars().all() == []

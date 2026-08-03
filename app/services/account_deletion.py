@@ -8,6 +8,7 @@ task) purges the row once `purge_at` passes.
 import logging
 from datetime import datetime, timedelta, timezone
 
+import redis.exceptions
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,14 +49,13 @@ async def schedule_deletion(db: AsyncSession, user: User) -> User:
     await db.commit()
     await db.refresh(user)
 
-    # Best-effort: the deletion above is already committed, so ANY Redis
-    # failure here (connection error, closed event loop, etc.) must not roll
-    # it back — it just leaves a link code to expire on its own TTL instead
-    # of being flushed immediately. Deliberately broad except for that reason.
+    # Best-effort: the deletion above is already committed, so a Redis outage
+    # here must not roll it back — it just leaves a link code to expire on its
+    # own TTL instead of being flushed immediately.
     try:
         r = get_redis()
         await link_codes.discard_pending_code(r, user.discord_id)
-    except Exception:
+    except (redis.exceptions.RedisError, ConnectionError, OSError):
         logger.warning(
             "schedule_deletion.link_code_flush_failed",
             extra={"discord_id": user.discord_id},
