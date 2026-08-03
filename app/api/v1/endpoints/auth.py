@@ -1,5 +1,6 @@
 import hmac
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -243,11 +244,33 @@ async def logout(
     await db.commit()
 
 
-async def get_current_user(
+def _pending_deletion_error(user: User) -> HTTPException:
+    """Build the structured 403 for an account scheduled for deletion.
+
+    days_left is a CEILING of the remaining time so it never reads 0 while
+    the account still exists (e.g. 25h left -> 2, not 1).
+    """
+    now = datetime.now(timezone.utc)
+    delta = user.purge_at - now
+    days_left = max(1, math.ceil(delta.total_seconds() / 86400))
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "detail": "Account scheduled for deletion",
+            "deletion_requested_at": user.deletion_requested_at.isoformat(),
+            "purge_at": user.purge_at.isoformat(),
+            "days_left": days_left,
+        },
+    )
+
+
+async def get_current_user_allow_pending(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Dependency — resolves Bearer token to a User, refreshes last_active, raises 401 if invalid/expired."""
+    """Dependency — resolves Bearer token to a User, refreshes last_active, raises 401 if
+    invalid/expired. Unlike get_current_user, does NOT reject accounts scheduled for deletion.
+    """
     result = await db.execute(
         select(UserAuthToken).where(
             UserAuthToken.token == UserAuthToken.hash_token(credentials.credentials)
@@ -272,6 +295,17 @@ async def get_current_user(
         await db.commit()
 
     user = await db.get(User, token.user_id)
+    return user
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Dependency — resolves Bearer token to a User, raises 403 if scheduled for deletion."""
+    user = await get_current_user_allow_pending(credentials=credentials, db=db)
+    if user.purge_at is not None:
+        raise _pending_deletion_error(user)
     return user
 
 
@@ -302,6 +336,9 @@ async def get_bot_user(
     user = await db.get(User, x_discord_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if user.purge_at is not None:
+        raise _pending_deletion_error(user)
 
     return user
 
