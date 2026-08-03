@@ -19,8 +19,14 @@ The root identity table. Keyed on Discord ID (a snowflake — string, not intege
 | `push_enabled` | `BOOLEAN` | Default `true`. Master switch for any push notification. |
 | `is_admin` | `BOOLEAN` | Default `false`. Gates admin-only endpoints. Not settable via API — operators promote users manually. |
 | `created_at` | `TIMESTAMPTZ` | |
+| `deletion_requested_at` | `TIMESTAMPTZ` | NULL = no pending deletion. Set when the user requests account deletion; starts the grace period. |
+| `purge_at` | `TIMESTAMPTZ` | NULL = no pending deletion. `deletion_requested_at` + `ACCOUNT_DELETION_GRACE_DAYS` (default 7). The account becomes eligible for permanent purge at this timestamp. |
 
 A user must exist here before the bot will track their presence — the bot is intentionally blind to non-registered users.
+
+**Indexes:**
+
+- `ix_users_purge_at_partial` — partial btree on `purge_at WHERE purge_at IS NOT NULL`. Migration `0018`.
 
 ### `user_auth_tokens`
 
@@ -190,6 +196,7 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 | `0010_reports_table.py` | Adds the `reports` table (`user_id` FK cascade, `message`, `context` JSONB, `created_at`) with `ix_reports_user_id` and `ix_reports_created_at` indexes. |
 | `0014_reports_status.py` | Adds `reports.status` (`String(16)`, default `'open'`, `NOT NULL`) with `ck_reports_status` (`open`/`triaged`/`closed`) and the `ix_reports_status_created_at` index for the admin triage inbox. |
 | `0017_reports_admin_note.py` | Adds `reports.admin_note` (`Text`, nullable, no default) for admin triage notes. |
+| `0018_user_account_deletion.py` | Adds `users.deletion_requested_at` and `users.purge_at` (`TIMESTAMPTZ`, nullable, no default) with the partial index `ix_users_purge_at_partial`. |
 
 ## Scheduled tasks (Celery Beat)
 

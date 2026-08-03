@@ -17,8 +17,17 @@ async def make_user(
     username: str = "testuser",
     tz: str = "UTC",
     is_admin: bool = False,
+    deletion_requested_at: datetime | None = None,
+    purge_at: datetime | None = None,
 ) -> User:
-    user = User(discord_id=discord_id, username=username, timezone=tz, is_admin=is_admin)
+    user = User(
+        discord_id=discord_id,
+        username=username,
+        timezone=tz,
+        is_admin=is_admin,
+        deletion_requested_at=deletion_requested_at,
+        purge_at=purge_at,
+    )
     db.add(user)
     await db.flush()
     return user
