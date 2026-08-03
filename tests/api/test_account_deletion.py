@@ -164,6 +164,48 @@ async def test_schedule_deletion_original_bearer_401_after_call(client, db, user
     assert again.status_code == 401
 
 
+async def test_cancel_deletion_clears_columns_and_returns_200(client, db):
+    user = await make_user(
+        db,
+        discord_id="666666666666666666",
+        username="cancel_user",
+        deletion_requested_at=datetime.now(timezone.utc) - timedelta(days=1),
+        purge_at=datetime.now(timezone.utc) + timedelta(days=6),
+    )
+    token = await make_token(db, user.discord_id)
+    client.headers.update({"Authorization": f"Bearer {token}"})
+
+    resp = await client.delete("/api/v1/profile/me/deletion")
+    assert resp.status_code == 200
+
+    await db.refresh(user)
+    assert user.deletion_requested_at is None
+    assert user.purge_at is None
+
+
+async def test_cancel_deletion_restores_normal_route_access(client, db):
+    user = await make_user(
+        db,
+        discord_id="777777777777777777",
+        username="cancel_user2",
+        deletion_requested_at=datetime.now(timezone.utc) - timedelta(days=1),
+        purge_at=datetime.now(timezone.utc) + timedelta(days=6),
+    )
+    token = await make_token(db, user.discord_id)
+    client.headers.update({"Authorization": f"Bearer {token}"})
+
+    cancel_resp = await client.delete("/api/v1/profile/me/deletion")
+    assert cancel_resp.status_code == 200
+
+    resp = await client.get("/api/v1/profile/me")
+    assert resp.status_code == 200
+
+
+async def test_cancel_deletion_unscheduled_account_404s(authed_client):
+    resp = await authed_client.delete("/api/v1/profile/me/deletion")
+    assert resp.status_code == 404
+
+
 async def test_schedule_deletion_survives_redis_outage(
     authed_client, db, user, monkeypatch
 ):

@@ -63,3 +63,23 @@ async def schedule_deletion(db: AsyncSession, user: User) -> User:
         )
 
     return user
+
+
+async def cancel_deletion(db: AsyncSession, user: User) -> bool:
+    """Reverses a scheduled deletion. Returns `False` if the account was not
+    scheduled — the caller must not report success for cancelling nothing.
+
+    Does NOT restore what schedule_deletion already destroyed: auth tokens and
+    device registrations stay revoked, and any session errored out at request
+    time stays ERROR. Only the grace-period columns are cleared.
+    """
+    if user.purge_at is None:
+        return False
+
+    user.deletion_requested_at = None
+    user.purge_at = None
+
+    await db.commit()
+    await db.refresh(user)
+
+    return True

@@ -10,7 +10,7 @@ from app.core.database import get_db
 from app.models.user import User
 from app.schemas.deletion import DeletionStatusResponse
 from app.schemas.profile import ProfileResponse, ProfileSettingsUpdate
-from app.services.account_deletion import schedule_deletion
+from app.services.account_deletion import cancel_deletion, schedule_deletion
 
 logger = logging.getLogger(__name__)
 
@@ -83,3 +83,26 @@ async def delete_account(
         purge_at=user.purge_at,
         days_left=days_left,
     )
+
+
+@router.delete("/me/deletion", status_code=status.HTTP_200_OK)
+async def cancel_account_deletion(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user_allow_pending),
+):
+    # get_current_user_allow_pending (not get_current_user): by definition the
+    # caller of this endpoint is a scheduled account, so the deletion guard
+    # would 403 them before they could ever cancel.
+    cancelled = await cancel_deletion(db, user)
+    if not cancelled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No deletion is scheduled for this account",
+        )
+
+    logger.info(
+        "account_deletion_cancelled",
+        extra={"discord_id": user.discord_id},
+    )
+
+    return {"detail": "Account deletion cancelled"}
