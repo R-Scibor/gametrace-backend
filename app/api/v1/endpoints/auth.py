@@ -21,6 +21,7 @@ from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
 )
+from app.schemas.deletion import PendingDeletion
 from app.services import discord_oauth, link_codes
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,43 @@ _bearer_scheme_optional = HTTPBearer(auto_error=False)
 
 def _token_expiry() -> datetime:
     return datetime.now(timezone.utc) + timedelta(days=settings.session_token_expire_days)
+
+
+def _days_left(purge_at: datetime) -> int:
+    """Ceiling of the time remaining until purge_at, in whole days.
+
+    Never reads 0 while the account still exists (e.g. 25h left -> 2, not 1).
+    """
+    now = datetime.now(timezone.utc)
+    delta = purge_at - now
+    return max(1, math.ceil(delta.total_seconds() / 86400))
+
+
+def _login_response(
+    user: User, token_value: str, *, needs_server_join: bool = False
+) -> LoginResponse:
+    """Shared builder for all three login paths (/login, /link, /discord).
+
+    Logging in never cancels a scheduled deletion — it only surfaces it here
+    so the client can offer a cancel dialog. pending_deletion stays None for
+    normal accounts.
+    """
+    pending_deletion = None
+    if user.purge_at is not None:
+        pending_deletion = PendingDeletion(
+            deletion_requested_at=user.deletion_requested_at,
+            purge_at=user.purge_at,
+            days_left=_days_left(user.purge_at),
+        )
+    return LoginResponse(
+        token=token_value,
+        discord_id=user.discord_id,
+        username=user.username,
+        timezone=user.timezone,
+        is_admin=user.is_admin,
+        needs_server_join=needs_server_join,
+        pending_deletion=pending_deletion,
+    )
 
 
 @router.post("/login", response_model=LoginResponse, status_code=status.HTTP_200_OK)
@@ -77,13 +115,7 @@ async def login(
     await db.commit()
     await db.refresh(user)
 
-    return LoginResponse(
-        token=token_value,
-        discord_id=user.discord_id,
-        username=user.username,
-        timezone=user.timezone,
-        is_admin=user.is_admin,
-    )
+    return _login_response(user, token_value)
 
 
 @router.post("/link", response_model=LoginResponse, status_code=status.HTTP_200_OK)
@@ -153,13 +185,7 @@ async def link_login(
     await db.commit()
     await db.refresh(user)
 
-    return LoginResponse(
-        token=token_value,
-        discord_id=user.discord_id,
-        username=user.username,
-        timezone=user.timezone,
-        is_admin=user.is_admin,
-    )
+    return _login_response(user, token_value)
 
 
 @router.post("/discord", response_model=LoginResponse, status_code=status.HTTP_200_OK)
@@ -217,14 +243,7 @@ async def discord_login(payload: DiscordCallbackRequest, db: AsyncSession = Depe
         )
     await db.refresh(user)
 
-    return LoginResponse(
-        token=token_value,
-        discord_id=user.discord_id,
-        username=user.username,
-        timezone=user.timezone,
-        is_admin=user.is_admin,
-        needs_server_join=needs_server_join,
-    )
+    return _login_response(user, token_value, needs_server_join=needs_server_join)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -250,16 +269,13 @@ def _pending_deletion_error(user: User) -> HTTPException:
     days_left is a CEILING of the remaining time so it never reads 0 while
     the account still exists (e.g. 25h left -> 2, not 1).
     """
-    now = datetime.now(timezone.utc)
-    delta = user.purge_at - now
-    days_left = max(1, math.ceil(delta.total_seconds() / 86400))
     return HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail={
             "detail": "Account scheduled for deletion",
             "deletion_requested_at": user.deletion_requested_at.isoformat(),
             "purge_at": user.purge_at.isoformat(),
-            "days_left": days_left,
+            "days_left": _days_left(user.purge_at),
         },
     )
 
