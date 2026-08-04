@@ -1,6 +1,4 @@
 import logging
-import math
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +8,7 @@ from app.core.database import get_db
 from app.models.user import User
 from app.schemas.deletion import DeletionStatusResponse
 from app.schemas.profile import ProfileResponse, ProfileSettingsUpdate
-from app.services.account_deletion import cancel_deletion, schedule_deletion
+from app.services.account_deletion import cancel_deletion, days_left, schedule_deletion
 
 logger = logging.getLogger(__name__)
 
@@ -76,12 +74,10 @@ async def delete_account(
         extra={"discord_id": user.discord_id, "purge_at": user.purge_at.isoformat()},
     )
 
-    now = datetime.now(timezone.utc)
-    days_left = max(1, math.ceil((user.purge_at - now).total_seconds() / 86400))
     return DeletionStatusResponse(
         deletion_requested_at=user.deletion_requested_at,
         purge_at=user.purge_at,
-        days_left=days_left,
+        days_left=days_left(user.purge_at),
     )
 
 

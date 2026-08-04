@@ -1,7 +1,5 @@
 """Discord slash command logic — testable without discord.py."""
 import logging
-import math
-from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -10,19 +8,9 @@ from app.bot.api_client import BotApiError, PendingDeletionError
 from app.core.config import settings
 from app.models.user import User, UserAuthToken
 from app.services import link_codes
+from app.services.account_deletion import days_left as _days_left
 
 logger = logging.getLogger(__name__)
-
-
-def _days_left(purge_at: datetime) -> int:
-    """Ceiling of the time remaining until purge_at, in whole days. Mirrors
-    `_days_left` in app/api/v1/endpoints/auth.py — duplicated rather than
-    imported since the bot and API are separate deployables; both must stay
-    in sync if the rounding rule ever changes.
-    """
-    now = datetime.now(timezone.utc)
-    delta = purge_at - now
-    return max(1, math.ceil(delta.total_seconds() / 86400))
 
 
 async def _upsert_user(db, discord_id: str, username: str) -> bool:

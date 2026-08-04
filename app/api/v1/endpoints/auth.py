@@ -1,6 +1,5 @@
 import hmac
 import logging
-import math
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -23,6 +22,7 @@ from app.schemas.auth import (
 )
 from app.schemas.deletion import PendingDeletion
 from app.services import discord_oauth, link_codes
+from app.services.account_deletion import days_left as _days_left
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +36,6 @@ _bearer_scheme_optional = HTTPBearer(auto_error=False)
 
 def _token_expiry() -> datetime:
     return datetime.now(timezone.utc) + timedelta(days=settings.session_token_expire_days)
-
-
-def _days_left(purge_at: datetime) -> int:
-    """Ceiling of the time remaining until purge_at, in whole days.
-
-    Never reads 0 while the account still exists (e.g. 25h left -> 2, not 1).
-    """
-    now = datetime.now(timezone.utc)
-    delta = purge_at - now
-    return max(1, math.ceil(delta.total_seconds() / 86400))
 
 
 def _login_response(

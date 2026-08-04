@@ -6,6 +6,7 @@ ONGOING session — so product use stops immediately. A later sweep (separate
 task) purges the row once `purge_at` passes.
 """
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 
 import redis.exceptions
@@ -22,6 +23,23 @@ from app.services import link_codes
 logger = logging.getLogger(__name__)
 
 _ONGOING_SESSION_NOTE = "Session terminated: account scheduled for deletion."
+
+
+def days_left(purge_at: datetime) -> int:
+    """Ceiling of the time remaining until purge_at, in whole days.
+
+    Never reads 0 while the account still exists (e.g. 25h left -> 2, not 1).
+    Single source of truth for this formula — shared by the API (login
+    response, the pending-deletion 403, the deletion-status endpoint) and the
+    Discord bot (/register, /stats, /recent pending-deletion copy). Lives
+    here rather than in app/core because it's specifically the
+    account-deletion grace-period calculation, and this module is already
+    the shared home for schedule/cancel deletion logic that both the API and
+    the bot import from.
+    """
+    now = datetime.now(timezone.utc)
+    delta = purge_at - now
+    return max(1, math.ceil(delta.total_seconds() / 86400))
 
 
 async def schedule_deletion(db: AsyncSession, user: User) -> User:
