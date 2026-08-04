@@ -33,6 +33,7 @@ Upserts a `users` row (new users get `settings.default_timezone`, not the `UTC` 
 
 - New user → INSERT, reply includes a short onboarding blurb about what GameTrace does (and a link to the web app, if `GAMETRACE_WEB_URL` is set).
 - Existing user → sync the `username` field in case the user renamed on Discord; terse reply: "Już jesteś zarejestrowany."
+- Existing user **scheduled for deletion** → the `users` row still exists (deletion is a grace-period sweep, not immediate), so the plain "already registered" reply would be actively misleading. Instead the reply states the account is scheduled for deletion, the purge date, and that cancelling happens by logging into the app — never "already registered".
 
 Use this when a user wants to be tracked by the bot without logging into the mobile app yet.
 
@@ -64,6 +65,7 @@ Reports the caller's last 7 days, mirroring `GET /stats/summary?days=7`: total p
 
 - Unregistered caller → `NOT_REGISTERED` reply ("Nie jesteś zarejestrowany..."), no API call made.
 - Registered but nothing played in the window → an encouraging "still watching, come back after you play" reply, not a bare empty state.
+- Account scheduled for deletion → see [pending-deletion 403 handling](#read-commands-defer-degradation-and-access-path) below.
 - Read-only — never creates a `users` row (unlike `/register`/`/login`).
 
 ### `/recent`
@@ -72,6 +74,7 @@ Reports the caller's last 5 non-ongoing sessions (`GET /sessions?status=COMPLETE
 
 - Unregistered caller → `NOT_REGISTERED` reply, no API call made.
 - Registered but no history yet → an encouraging empty-state reply, same bar as `/stats`.
+- Account scheduled for deletion → see [pending-deletion 403 handling](#read-commands-defer-degradation-and-access-path) below.
 - Requests `library_only=true`, so sessions on ignored games or unaccepted `NEEDS_REVIEW` stubs are excluded, matching what the Dashboard "Recents" tile shows.
 - Read-only — never creates a `users` row.
 
@@ -92,6 +95,8 @@ Posts the onboarding panel (see [Onboarding panel](#onboarding-panel) below) as 
 `/stats` and `/recent` call `interaction.response.defer(ephemeral=True)` before any I/O — a cold container's DB lookup plus the HTTP round-trip to the API can exceed Discord's ~3-second ack deadline, which would otherwise surface as a false "this interaction failed" to the user. `/help` does neither DB lookup nor defer since it has no I/O to wait on.
 
 Both read commands call the API via `app/bot/api_client.py` using the [bot service credential](api.md#bot-service-credential-internal) (`X-Bot-Service-Secret` + `X-Discord-Id`), authenticated server-side by `get_bot_user`/`get_current_or_bot_user`. If the API is unreachable, times out (5s), or returns a non-2xx/non-JSON response, the command catches `BotApiError` and replies with a friendly Polish failure message (`Nie udało się pobrać statystyk...` / `Nie udało się pobrać ostatnich sesji...`) instead of raising. **This failure mode is isolated to the two read commands** — presence recording (`on_presence_update`) talks to Postgres directly and is completely unaffected by the API being down.
+
+**Pending-deletion 403 is a distinct case, not a generic failure.** `get_bot_user` 403s an account scheduled for deletion with a structured body (`{"detail": {"detail": "Account scheduled for deletion", "purge_at": ..., "days_left": ...}}` — see [`/profile/me/deletion`](api.md)). `api_client._get` recognises this exact shape and raises `PendingDeletionError` (a `BotApiError` subclass) instead of the generic error; `stats_command`/`recent_command` catch it *before* the generic `except BotApiError` and reply with copy naming the purge date and pointing at the app to cancel, instead of the opaque "couldn't fetch" message. A 403 that doesn't match the marker shape (e.g. a genuine authorization failure) falls through to the generic `BotApiError` path unchanged — the distinction is made on body content, not status code alone.
 
 ### Timezone resolution in `/recent`
 

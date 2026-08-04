@@ -24,12 +24,62 @@ _transport: httpx.BaseTransport | None = None
 class BotApiError(Exception):
     """Raised when a bot→API call fails: timeout, unreachable host, or non-2xx response."""
 
+    def __init__(self, message: str, *, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class PendingDeletionError(BotApiError):
+    """Raised instead of BotApiError when the API's 403 body identifies the
+    account as scheduled for deletion (see `_pending_deletion_error` in
+    app/api/v1/endpoints/auth.py). Carries the fields the bot needs to
+    explain the state, so command handlers don't have to re-parse the
+    nested {"detail": {"detail": ..., "purge_at": ..., "days_left": ...}}
+    body themselves.
+
+    A subclass of BotApiError (not a sibling) so existing `except
+    BotApiError` call sites keep working unchanged if they don't care about
+    the distinction; callers that DO care must catch this first, since
+    `except BotApiError` alone would also swallow it.
+    """
+
+    def __init__(self, *, purge_at: str, days_left: int):
+        super().__init__("Account scheduled for deletion", status_code=403)
+        self.purge_at = purge_at
+        self.days_left = days_left
+
 
 def _headers(discord_id: str) -> dict[str, str]:
     return {
         "X-Bot-Service-Secret": settings.bot_service_secret,
         "X-Discord-Id": discord_id,
     }
+
+
+def _parse_pending_deletion(response: httpx.Response) -> PendingDeletionError | None:
+    """Return a PendingDeletionError if `response` is the specific
+    pending-deletion 403 shape, else None. Deliberately narrow — only a body
+    matching this exact marker is treated as pending-deletion, so a genuine
+    authorization failure that happens to also be a 403 is never
+    mislabelled.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if not isinstance(detail, dict):
+        return None
+    if detail.get("detail") != "Account scheduled for deletion":
+        return None
+
+    purge_at = detail.get("purge_at")
+    days_left = detail.get("days_left")
+    if not isinstance(purge_at, str) or not isinstance(days_left, int):
+        return None
+
+    return PendingDeletionError(purge_at=purge_at, days_left=days_left)
 
 
 async def _get(path: str, discord_id: str, params=None):
@@ -45,7 +95,11 @@ async def _get(path: str, discord_id: str, params=None):
         raise BotApiError(f"Unreachable calling {path}") from exc
 
     if not response.is_success:
-        raise BotApiError(f"{path} returned {response.status_code}")
+        if response.status_code == 403:
+            pending = _parse_pending_deletion(response)
+            if pending is not None:
+                raise pending
+        raise BotApiError(f"{path} returned {response.status_code}", status_code=response.status_code)
 
     try:
         return response.json()

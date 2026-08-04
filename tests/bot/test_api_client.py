@@ -158,3 +158,80 @@ async def test_2xx_missing_total_field_raises_bot_api_error():
 
     with pytest.raises(api_client.BotApiError):
         await api_client.get_review_count(DISCORD_ID)
+
+
+# ── Pending-deletion 403 (nested body, distinguished from other 403s) ────────
+
+async def test_pending_deletion_403_raises_pending_deletion_error_with_fields():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "detail": {
+                    "detail": "Account scheduled for deletion",
+                    "deletion_requested_at": "2026-08-01T00:00:00+00:00",
+                    "purge_at": "2026-08-15T00:00:00+00:00",
+                    "days_left": 4,
+                }
+            },
+        )
+
+    _install_transport(handler)
+
+    with pytest.raises(api_client.PendingDeletionError) as exc_info:
+        await api_client.get_summary(DISCORD_ID)
+
+    assert exc_info.value.purge_at == "2026-08-15T00:00:00+00:00"
+    assert exc_info.value.days_left == 4
+    assert exc_info.value.status_code == 403
+
+
+async def test_pending_deletion_error_is_also_a_bot_api_error():
+    # Existing `except BotApiError` call sites must keep working unchanged.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "detail": {
+                    "detail": "Account scheduled for deletion",
+                    "purge_at": "2026-08-15T00:00:00+00:00",
+                    "days_left": 1,
+                }
+            },
+        )
+
+    _install_transport(handler)
+
+    with pytest.raises(api_client.BotApiError):
+        await api_client.get_summary(DISCORD_ID)
+
+
+async def test_generic_403_does_not_raise_pending_deletion_error():
+    # A genuine authorization failure must not be mislabelled as pending
+    # deletion just because it happens to also be a 403.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"detail": "Admin privileges required"})
+
+    _install_transport(handler)
+
+    with pytest.raises(api_client.BotApiError) as exc_info:
+        await api_client.get_summary(DISCORD_ID)
+
+    assert not isinstance(exc_info.value, api_client.PendingDeletionError)
+    assert exc_info.value.status_code == 403
+
+
+async def test_403_with_dict_detail_but_wrong_marker_is_not_pending_deletion():
+    # Nested dict `detail` that doesn't match the exact marker string must
+    # still fall through to the generic error, not be misparsed.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403, json={"detail": {"detail": "Something else entirely"}}
+        )
+
+    _install_transport(handler)
+
+    with pytest.raises(api_client.BotApiError) as exc_info:
+        await api_client.get_summary(DISCORD_ID)
+
+    assert not isinstance(exc_info.value, api_client.PendingDeletionError)

@@ -1,15 +1,28 @@
 """Discord slash command logic — testable without discord.py."""
 import logging
+import math
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
 from app.bot import api_client, replies
-from app.bot.api_client import BotApiError
+from app.bot.api_client import BotApiError, PendingDeletionError
 from app.core.config import settings
 from app.models.user import User, UserAuthToken
 from app.services import link_codes
 
 logger = logging.getLogger(__name__)
+
+
+def _days_left(purge_at: datetime) -> int:
+    """Ceiling of the time remaining until purge_at, in whole days. Mirrors
+    `_days_left` in app/api/v1/endpoints/auth.py — duplicated rather than
+    imported since the bot and API are separate deployables; both must stay
+    in sync if the rounding rule ever changes.
+    """
+    now = datetime.now(timezone.utc)
+    delta = purge_at - now
+    return max(1, math.ceil(delta.total_seconds() / 86400))
 
 
 async def _upsert_user(db, discord_id: str, username: str) -> bool:
@@ -30,11 +43,26 @@ def _format_code(code: str) -> str:
 
 
 async def register_user(db, discord_id: str, username: str) -> str:
+    existing = await db.get(User, discord_id)
+    pending_deletion = existing is not None and existing.purge_at is not None
+
     created = await _upsert_user(db, discord_id, username)
     if created:
         logger.info("New user registered via /register: %s (%s)", username, discord_id)
     else:
         logger.info("Existing user /register: %s (%s)", username, discord_id)
+
+    if pending_deletion:
+        # Account row still exists, so _upsert_user reports created=False —
+        # but "already registered" would be actively misleading for an
+        # account queued for erasure. existing.purge_at/deletion_requested_at
+        # are pre-upsert values; _upsert_user only ever touches username.
+        return replies.register_pending_deletion_reply(
+            purge_at=existing.purge_at.isoformat(),
+            days_left=_days_left(existing.purge_at),
+            user_timezone=existing.timezone,
+        )
+
     return replies.register_reply(created=created)
 
 
@@ -81,6 +109,13 @@ async def stats_command(db, discord_id: str) -> str:
     try:
         summary = await api_client.get_summary(discord_id)
         review_count = await api_client.get_review_count(discord_id)
+    except PendingDeletionError as exc:
+        # Must be caught before BotApiError — PendingDeletionError is a
+        # subclass, so a blanket `except BotApiError` here would also catch
+        # it and mislabel it as a generic failure.
+        return replies.pending_deletion_reply(
+            purge_at=exc.purge_at, days_left=exc.days_left, user_timezone=user.timezone
+        )
     except BotApiError:
         logger.warning("Failed to fetch /stats data for %s", discord_id, exc_info=True)
         return replies.STATS_FAILURE
@@ -111,6 +146,11 @@ async def recent_command(db, discord_id: str) -> str:
 
     try:
         sessions = await api_client.get_recent_sessions(discord_id)
+    except PendingDeletionError as exc:
+        # Same catch-order note as stats_command: subclass before base class.
+        return replies.pending_deletion_reply(
+            purge_at=exc.purge_at, days_left=exc.days_left, user_timezone=user.timezone
+        )
     except BotApiError:
         logger.warning("Failed to fetch /recent data for %s", discord_id, exc_info=True)
         return replies.RECENT_FAILURE
