@@ -49,6 +49,10 @@ celery_app.conf.update(
             "task": "tasks.purge_flicker_sessions",
             "schedule": crontab(hour=4, minute=0),
         },
+        "purge_deleted_accounts": {
+            "task": "tasks.purge_deleted_accounts",
+            "schedule": crontab(hour=3, minute=45),
+        },
     },
 )
 

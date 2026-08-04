@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.celery_app import celery_app
 from app.core.config import settings
 from app.models.session import GameSession, SessionStatus
-from app.models.user import UserDevice
+from app.models.user import User, UserDevice
 
 logger = logging.getLogger(__name__)
 
@@ -103,3 +103,38 @@ async def _run_flicker_with_engine() -> int:
 @celery_app.task(name="tasks.purge_flicker_sessions")
 def purge_flicker_sessions() -> int:
     return asyncio.run(_run_flicker_with_engine())
+
+
+async def _run_purge(db: AsyncSession) -> int:
+    """Permanently remove accounts whose grace period has expired.
+
+    A single `DELETE FROM users WHERE purge_at <= now` — every user-owned
+    table (game_sessions, user_game_preferences, user_auth_tokens,
+    user_devices, reports, voice_usage) has `ondelete="CASCADE"` on its FK to
+    users.discord_id, so the database removes all of it. Catalog `games` has
+    no FK to users and is never touched.
+    """
+    now = datetime.now(timezone.utc)
+    deleted = (
+        await db.execute(delete(User).where(User.purge_at <= now))
+    ).rowcount or 0
+    await db.commit()
+    logger.info("account_deletion_purged", extra={"count": deleted})
+    return deleted
+
+
+async def _run_purge_with_engine() -> int:
+    engine = create_async_engine(settings.database_url, echo=False)
+    SessionLocal = async_sessionmaker(
+        bind=engine, class_=AsyncSession, expire_on_commit=False
+    )
+    try:
+        async with SessionLocal() as db:
+            return await _run_purge(db)
+    finally:
+        await engine.dispose()
+
+
+@celery_app.task(name="tasks.purge_deleted_accounts")
+def purge_deleted_accounts() -> int:
+    return asyncio.run(_run_purge_with_engine())
