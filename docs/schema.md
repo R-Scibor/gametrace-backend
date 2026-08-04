@@ -202,6 +202,9 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 
 | Task | Schedule (UTC) | Purpose |
 |---|---|---|
-| `tasks.weekly_report` | Monday 09:00 | FCM digest for users with `weekly_report_enabled` and `push_enabled` |
+| `tasks.weekly_report` | Monday 09:00 | FCM digest for users with `weekly_report_enabled` and `push_enabled`; skips accounts scheduled for deletion (`purge_at IS NOT NULL`) |
 | `tasks.hard_delete_sweep` | Daily 03:30 | Purge trashed sessions older than `TRASH_RETENTION_DAYS` (default 7); purge FCM tokens idle 6+ months |
+| `tasks.purge_deleted_accounts` | Daily 03:45 | Permanently delete every `users` row whose `purge_at` has passed (`DELETE FROM users WHERE purge_at <= now`). `ON DELETE CASCADE` on `user_id` erases that account's sessions, preferences, tokens, devices, reports, and voice usage along with it. Catalog `games` rows have no FK to `users` and are never touched. |
 | `tasks.purge_flicker_sessions` | Daily 04:00 | Hard-delete `COMPLETED` flicker rows whose `end_time` is older than `SESSION_FLICKER_GC_MARGIN_SECONDS` (default 86400s). Runs after `hard_delete_sweep` to keep the two sweepers separate. |
+
+The account-deletion grace period (`users.deletion_requested_at` → `purge_at`) is 7 days (`ACCOUNT_DELETION_GRACE_DAYS`, default 7). Because `tasks.purge_deleted_accounts` only runs once nightly, the actual purge lands up to ~24h after the 7-day mark — never before it. Purging removes the row from the live database only; any existing database backups taken before the purge expire on their own separate retention schedule.
