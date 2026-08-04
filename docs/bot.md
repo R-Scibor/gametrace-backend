@@ -33,7 +33,7 @@ Upserts a `users` row (new users get `settings.default_timezone`, not the `UTC` 
 
 - New user → INSERT, reply includes a short onboarding blurb about what GameTrace does (and a link to the web app, if `GAMETRACE_WEB_URL` is set).
 - Existing user → sync the `username` field in case the user renamed on Discord; terse reply: "Już jesteś zarejestrowany."
-- Existing user **scheduled for deletion** → the `users` row still exists (deletion is a grace-period sweep, not immediate), so the plain "already registered" reply would be actively misleading. Instead the reply states the account is scheduled for deletion, the purge date, and that cancelling happens by logging into the app — never "already registered".
+- Existing user **scheduled for deletion** → the `users` row still exists (deletion is a grace-period sweep, not immediate), so the plain "already registered" reply would be actively misleading. Instead the reply states the account is scheduled for deletion and the purge date, and directs the user to log into the app **and then** cancel the deletion in settings — two explicit steps, never "already registered". Logging in alone does not cancel anything (see [`/profile/me/deletion`](api.md)).
 
 Use this when a user wants to be tracked by the bot without logging into the mobile app yet.
 
@@ -57,7 +57,7 @@ Revokes **all** active app sessions for the user:
 1. Deletes every `user_auth_tokens` row for the user's `discord_id`.
 2. Discards any pending link code in Redis.
 
-Reply: `Wylogowano. Unieważniono N sesji w aplikacji.` (or `Nie jesteś zarejestrowany.` if the user has no `users` row).
+Reply: `Wylogowano. Unieważniono N tokenów logowania w aplikacji.` (or `Nie jesteś zarejestrowany.` if the user has no `users` row).
 
 ### `/stats`
 
@@ -96,7 +96,7 @@ Posts the onboarding panel (see [Onboarding panel](#onboarding-panel) below) as 
 
 Both read commands call the API via `app/bot/api_client.py` using the [bot service credential](api.md#bot-service-credential-internal) (`X-Bot-Service-Secret` + `X-Discord-Id`), authenticated server-side by `get_bot_user`/`get_current_or_bot_user`. If the API is unreachable, times out (5s), or returns a non-2xx/non-JSON response, the command catches `BotApiError` and replies with a friendly Polish failure message (`Nie udało się pobrać statystyk...` / `Nie udało się pobrać ostatnich sesji...`) instead of raising. **This failure mode is isolated to the two read commands** — presence recording (`on_presence_update`) talks to Postgres directly and is completely unaffected by the API being down.
 
-**Pending-deletion 403 is a distinct case, not a generic failure.** `get_bot_user` 403s an account scheduled for deletion with a structured body (`{"detail": {"detail": "Account scheduled for deletion", "purge_at": ..., "days_left": ...}}` — see [`/profile/me/deletion`](api.md)). `api_client._get` recognises this exact shape and raises `PendingDeletionError` (a `BotApiError` subclass) instead of the generic error; `stats_command`/`recent_command` catch it *before* the generic `except BotApiError` and reply with copy naming the purge date and pointing at the app to cancel, instead of the opaque "couldn't fetch" message. A 403 that doesn't match the marker shape (e.g. a genuine authorization failure) falls through to the generic `BotApiError` path unchanged — the distinction is made on body content, not status code alone.
+**Pending-deletion 403 is a distinct case, not a generic failure.** `get_bot_user` 403s an account scheduled for deletion with a structured body (`{"detail": {"detail": "Account scheduled for deletion", "purge_at": ..., "days_left": ...}}` — see [`/profile/me/deletion`](api.md)). `api_client._get` recognises this exact shape and raises `PendingDeletionError` (a `BotApiError` subclass) instead of the generic error; `stats_command`/`recent_command` catch it *before* the generic `except BotApiError` and reply with copy naming the purge date and directing the user to log into the app and cancel the deletion there explicitly, instead of the opaque "couldn't fetch" message. A 403 that doesn't match the marker shape (e.g. a genuine authorization failure) falls through to the generic `BotApiError` path unchanged — the distinction is made on body content, not status code alone.
 
 ### Timezone resolution in `/recent`
 
