@@ -143,7 +143,7 @@ Required permissions in that channel:
 `on_presence_update` fires whenever any cached member changes activity. The `on_presence_update` handler does:
 
 1. **Filter:** ignore bots; ignore presence changes that didn't change the playing-game name.
-2. **Gate:** look up the user in `users`. If they haven't run `/register` or `/login`, return — the bot is "blind" to non-registered users.
+2. **Gate:** look up the user in `users` via `get_user_if_tracked`. If they haven't run `/register` or `/login`, return — the bot is "blind" to non-registered users. Accounts scheduled for deletion (`purge_at IS NOT NULL`) are treated the same way — `get_user_if_tracked` returns `None` for them, so presence writes stop the instant a deletion is scheduled.
 3. **Resolve game:** for an active game name, find or create a `games` row via `game_aliases.discord_process_name`. New games are inserted as a stub (just the process name) and queued for async enrichment via Celery.
 4. **Apply transition** to the user's current `ONGOING` session (if any):
 
@@ -215,6 +215,7 @@ The 12h ceiling is intentionally generous — it's a backstop for "user fell asl
 - **No graceful shutdown of `ONGOING` on bot stop.** A bot restart that closes sessions on the way down would split one continuous play session into two whenever the container redeploys — which it does often. Leaving ONGOING alone and reconciling on startup gives seamless continuation in the common case.
 - **`notes` is system-owned.** Self-Healing writes the human-readable reason (`"switched from X to Y"`, `"no longer in-game"`, `"12h threshold"`) into `game_sessions.notes`. The frontend surfaces this read-only in the Napraw/Odrzuć flow so the user knows why a session needs attention.
 - **`source=BOT` distinction.** Manual sessions (`source=MANUAL`) are written by the API, skip the state machine, and land directly as `COMPLETED`. Self-Healing only touches `source=BOT, status=ONGOING`.
+- **Accounts scheduled for deletion never get a new `ONGOING` session.** Self-Healing never calls `get_user_if_tracked`, so it needs its own check: it joins `users` on each `ONGOING` row and, on the switched-game branch, still errors the stale session but skips `start_session` when that user's `purge_at` is set. This closes a race the presence gate alone can't: a presence event already in flight when a deletion is scheduled can leave an `ONGOING` session behind, and a later bot restart would otherwise reopen it as a fresh session for an account queued for erasure.
 
 ## Failure modes worth knowing
 
