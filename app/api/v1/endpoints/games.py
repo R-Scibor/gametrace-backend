@@ -374,6 +374,31 @@ async def resolve_game(
 # GET /suggest
 # ---------------------------------------------------------------------------
 
+# Score floors. The strict path earns the low floor from its prefilter: every
+# token matched, so a weak score is a genuine-but-loose hit. The any-token
+# fallback has no such guarantee — against the live catalog its noise scored
+# 0.30–0.45 while real typo rescues ("hades zzzznomatch" → Hades) scored 0.75+,
+# so it needs a floor above that noise band.
+_SUGGEST_FLOOR = 0.3
+_SUGGEST_FALLBACK_FLOOR = 0.6
+
+# POSIX ERE metacharacters. Escaped rather than using re.escape(), whose
+# output targets Python's engine — Postgres reads these patterns, and user
+# input reaches the operator directly.
+_ERE_METACHARS = r".^$*+?()[]{}|\\"
+
+
+def _word_prefix_pattern(token: str) -> str:
+    r"""Build a Postgres regex matching *token* at the start of a word.
+
+    ``\m`` anchors to a word boundary, so `the` matches "The Division" and
+    "Theme Park" but not "Wu*the*ring Waves". Prefix rather than whole-word
+    semantics: the last token of a typeahead query is usually half-typed.
+    """
+    escaped = "".join("\\" + ch if ch in _ERE_METACHARS else ch for ch in token)
+    return r"\m" + escaped
+
+
 @router.get("/suggest", response_model=GameSuggestResponse)
 async def suggest_games(
     q: str = Query(..., min_length=1),
@@ -386,9 +411,18 @@ async def suggest_games(
     Fuzzy-search the global games catalog by name.
 
     Scope: ALL games (not restricted to the caller's library).
-    Prefilters with ILIKE-any-token over primary_name and aliases, then
-    scores each candidate with _confidence() (max over primary_name + all
-    aliases for that game). Drops score < 0.3, sorts descending, paginates.
+
+    Precision comes from the prefilter, not the score. Every token must match
+    at a word boundary in primary_name or one of the aliases; survivors are
+    then scored with _confidence() (max over primary_name + all aliases),
+    dropped below the floor for the pass that found them, sorted descending,
+    paginated.
+
+    _confidence() is the enrichment scorer, tuned for `witcher3.exe` →
+    canonical title — it strips whitespace and leans on partial ratios, so it
+    scores short typeahead queries generously against unrelated titles
+    ("the division" vs "Wuthering Waves" = 0.48). No floor separates that from
+    real hits, which is why the prefilter has to carry the precision.
     """
     q = q.strip()
     if not q:
@@ -396,20 +430,39 @@ async def suggest_games(
 
     tokens = q.split()
 
-    # Build ILIKE prefilter: any token matches primary_name or any alias
-    ilike_conditions = []
+    # One condition per token: matches primary_name or any alias of the game.
+    token_conditions = []
     for token in tokens:
-        ilike_conditions.append(Game.primary_name.ilike(f"%{token}%"))
-        ilike_conditions.append(GameAlias.discord_process_name.ilike(f"%{token}%"))
+        pattern = _word_prefix_pattern(token)
+        token_conditions.append(
+            or_(
+                Game.primary_name.op("~*")(pattern),
+                GameAlias.discord_process_name.op("~*")(pattern),
+            )
+        )
 
-    # Step 1: get distinct game IDs that survive the prefilter
-    id_query = (
-        select(Game.id)
-        .outerjoin(GameAlias, GameAlias.game_id == Game.id)
-        .where(or_(*ilike_conditions))
-        .distinct()
-    )
-    matched_ids = (await db.execute(id_query)).scalars().all()
+    def _id_query(predicate):
+        return (
+            select(Game.id)
+            .outerjoin(GameAlias, GameAlias.game_id == Game.id)
+            .where(predicate)
+            .distinct()
+        )
+
+    # Step 1: require every token to match somewhere on the game. A single
+    # weak token must not be enough to admit one.
+    matched_ids = (
+        await db.execute(_id_query(and_(*token_conditions)))
+    ).scalars().all()
+
+    # A typo in any one token would otherwise zero out the whole result set,
+    # so fall back to any-token once — recall only when strict found nothing.
+    floor = _SUGGEST_FLOOR
+    if not matched_ids and len(token_conditions) > 1:
+        matched_ids = (
+            await db.execute(_id_query(or_(*token_conditions)))
+        ).scalars().all()
+        floor = _SUGGEST_FALLBACK_FLOOR
 
     if not matched_ids:
         return GameSuggestResponse(total=0, items=[])
@@ -430,7 +483,7 @@ async def suggest_games(
             [_confidence(q, game.primary_name)]
             + [_confidence(q, alias) for alias in alias_names]
         )
-        if score >= 0.3:
+        if score >= floor:
             scored.append((game, score))
 
     scored.sort(key=lambda x: x[1], reverse=True)
