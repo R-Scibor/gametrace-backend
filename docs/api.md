@@ -192,6 +192,10 @@ If no game matches every token, the filter retries once accepting **any** token,
 
 Survivors are scored with `_confidence()` (max over `primary_name` and all `game_aliases`), sorted descending by score, and paginated. The score floor depends on which pass produced the candidates: **0.3** for the strict all-token pass, **0.7** for the any-token fallback. The strict pass earns the low floor from its prefilter — every token matched, so a weak score is a loose-but-genuine hit. The fallback has no such guarantee: its noise measures 0.30–0.60 while genuine typo rescues (`hades zzzznomatch` → *Hades*) measure 0.75+, so the higher floor sits between the two bands. The top of the noise band is alias-admitted: a game can enter the fallback on a word-boundary match in one of its aliases and then be scored on its unrelated primary name.
 
+The fallback floor has only **0.05 of headroom** and cannot simply be raised. A typeahead query rarely contains digits, so any match against a numbered title (*Hades II*, *Red Dead Redemption 2*) is capped at 0.75 by the enrichment scorer's sequel guard — however good the match. A floor of 0.8 would silently delete typo rescue for every numbered sequel in the catalog. See [game-matching.md](game-matching.md) § `_confidence` has two consumers.
+
+Single-token queries never take the fallback path (it is gated on more than one token), so the 0.7 floor does not apply to them.
+
 Precision comes from the prefilter, not the score floor. `_confidence()` is the enrichment scorer — tuned for `witcher3.exe` → canonical title, so it strips whitespace and leans on partial ratios. Short typeahead queries score generously against unrelated titles (`the division` vs "Wuthering Waves" = 0.48), and no single floor cleanly separates those from real hits, so raising the global floor is not a way to reduce noise here.
 
 Note this endpoint has **no typo tolerance** on the strict pass: a prefilter match is mandatory, and scoring only re-ranks rows that already matched literally. An alias-based hit like `witcher` → *Wiedźmin* works only because an alias literally contains "witcher".

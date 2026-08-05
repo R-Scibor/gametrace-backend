@@ -111,6 +111,47 @@ Architecture and API-version numbers embedded in process names contain digits:
 
 If the canonical IGDB game name has no number, these trigger a false cap and the enrichment falls through to Steam or `NEEDS_REVIEW`. Platform token stripping is not implemented — the assumption is that Discord rich presence typically exposes the game's display name, not the raw process name.
 
+## `_confidence` has two consumers
+
+Everything above describes the **enrichment** path, which is what the scorer was built for: one raw process name vs a handful of IGDB candidates, accept at ≥ 0.85. But `_confidence` is also called by `GET /api/v1/games/suggest` to rank the whole local catalog against a half-typed search box. The two workloads pull differently, and the scorer is tuned for the first one.
+
+| | Enrichment | Suggest (typeahead) |
+|---|---|---|
+| Input `a` | Full process name from Discord | A partial query, often 1–2 short words |
+| Input `b` | ~5 IGDB candidates | Every catalog game surviving the prefilter |
+| Decision | Accept ≥ `CONFIDENCE_THRESHOLD` (0.85) | Rank, then drop below a floor (0.3 / 0.7) |
+| Wrong answer costs | Bad cover + metadata on a row | A junk row in a picker list |
+
+**The property that matters for suggest: short queries score generously against almost anything.** `partial_ratio` (plus WRatio's length-ratio boost) is exactly the behaviour that makes `witcher3.exe` match *The Witcher 3: Wild Hunt* — and it does not distinguish a real prefix from an accidental one. Measured against the live catalog:
+
+| Query | Candidate | Score |
+|---|---|---|
+| `the` | Wuthering Waves | 0.90 |
+| `the division` | Wuthering Waves | 0.48 |
+| `the division` | Skyrim Special Edition | 0.60 |
+| `hades` | Shadow of the Tomb Raider | 0.60 |
+| `hades` | Hades II | 0.75 |
+| `witcher` | The Witcher 3: Wild Hunt | 0.75 |
+
+Note there is no floor that separates the junk from the real hits — 0.60 noise sits above nothing, and 0.75 real hits sit just above it. **This is why `/games/suggest` gets its precision from its prefilter (word-boundary token matching), not from a score threshold.** Do not try to fix suggest noise by raising a floor; see [api.md](api.md) § `GET /games/suggest`.
+
+### The number guard sets a ceiling on suggest's fallback floor
+
+The suggest fallback path (any-token, used when no game matches every token) applies a 0.7 floor. That floor cannot be raised much, and the reason comes from Step 3 above rather than from suggest itself.
+
+A typeahead query usually has no digits in it. A large share of catalog titles do (`Hades II`, `Red Dead Redemption 2`, `Baldur's Gate 3`). So the digit sets differ, and **every such match is capped at `_NUMBER_MISMATCH_CAP` = 0.75, however good it otherwise is**:
+
+```
+'red dead redemtion'   -> Red Dead Redemption 2    0.75  (capped)
+'slay the spir'        -> Slay the Spire II        0.75  (capped)
+'the wicher wild hunt' -> The Witcher 3: Wild Hunt 0.75  (capped)
+'baldurs gat'          -> Baldur's Gate 3          0.75  (capped)
+```
+
+The fallback floor therefore has only **0.05 of headroom** (0.7 → 0.75), and that ceiling is hard. Raising the floor to 0.8 silently deletes typo rescue for every numbered sequel in the catalog while looking like a harmless noise-reduction tweak. Pinned by `test_fallback_floor_stays_below_the_sequel_cap`.
+
+Single-token queries never take the fallback path (it is gated on more than one token), so they are unaffected by this floor entirely — `hades` → *Hades II* at 0.75 is scored against the strict 0.3 floor.
+
 ## Step 4 — IGDB search and `alternative_names`
 
 The query is sent using the sanitized name to strip process-name noise before hitting the API:
@@ -209,3 +250,18 @@ Without `full=true`, `backfill_metadata` only re-queues ENRICHED games that have
 |---|---|---|
 | `CONFIDENCE_THRESHOLD` | `0.85` | Minimum score to accept an IGDB match |
 | `_NUMBER_MISMATCH_CAP` | `0.75` | Score ceiling when digit sets differ |
+| `_SUGGEST_FLOOR` | `0.3` | `/games/suggest` — floor for the strict all-token pass |
+| `_SUGGEST_FALLBACK_FLOOR` | `0.7` | `/games/suggest` — floor for the any-token fallback. Must stay below `_NUMBER_MISMATCH_CAP` |
+
+The two suggest floors live in `app/api/v1/endpoints/games.py`, not in `game_matching.py` — they are consumer policy, not properties of the scorer.
+
+## Open question — how these numbers behave in practice
+
+Every threshold on this page was fitted to a **95-game catalog** and a handful of hand-picked queries. They are reasonable, not validated. Things worth watching as the catalog and user base grow:
+
+- **Does the suggest fallback earn its keep?** It exists to rescue typos, but it fires whenever the catalog simply lacks the game — the common case in the wizard, where the right answer is to escalate to IGDB search. If it mostly produces empty-after-floor results, deleting it is simpler than tuning it.
+- **Does the 0.3 strict floor still do anything?** With the word-boundary prefilter carrying precision, it may now be dead weight — or it may be the only thing stopping a long query from surfacing junk.
+- **Does the 0.75 sequel cap fire too often on suggest?** It was designed to stop *Hades* enriching as *Hades II*. On a typeahead it penalises every digitless query against a numbered title, which is a different situation with a different cost.
+- **Does word-prefix matching prove too strict for real typing?** A prefix match cannot rescue a typo in the *first* letters of a token (`wtcher` finds nothing). Trigram similarity (`pg_trgm`) is the obvious escalation if that bites.
+
+Revisit with real query logs rather than more hand-picked examples.
