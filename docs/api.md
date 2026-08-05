@@ -93,7 +93,7 @@ Session state machine — see the [README session state machine](../README.md#se
 | `GET` | `/api/v1/games` | List games the user has at least one session for. Main library excludes `is_ignored` games and unaccepted `NEEDS_REVIEW` stubs. `?in_library=false` returns the out-of-library tab (ignored ∪ unaccepted `NEEDS_REVIEW`). `?status=NEEDS_REVIEW` returns the Unrecognized inbox (`is_accepted` not true). `?is_ignored=true` returns hidden games only. Optional `?q=<string>` for server-side case-insensitive substring search on `primary_name`. Filterable by facet — `?genre=`, `?theme=`, `?developer=`, `?publisher=` (exact, case-sensitive), `?release_decade=2010s`. Sortable via `?sort=name\|playtime\|last_played` + `?order=asc\|desc`. Paginated (`?skip=`/`?limit=`, max 100). Response: `{"total": <int>, "items": [...]}` — each item includes `is_ignored`, `is_accepted`, `total_seconds`, and `last_played`. Also reachable via the [bot service credential](#bot-service-credential-internal). |
 | `POST` | `/api/v1/games` | Create a new global `Game` row or link to an existing one. Two modes (exactly one): **igdb_id mode** — dedupes by `external_api_id` (returns `200` if already known with no IGDB call, else fetches IGDB metadata and creates an `ENRICHED` row → `201`; IGDB miss → `404`; rate-limited → `503`). **Unrecognized mode** (`unrecognized: true` + non-blank `name`) — inserts a `NEEDS_REVIEW` stub with `name` itself stored as a `GameAlias` → `201`. In igdb_id mode, optional `query` is stored as a `GameAlias` for future `/resolve` lookups (ignored in unrecognized mode). Both/neither mode active → `422`. |
 | `GET` | `/api/v1/games/resolve?name=<string>` | Map a free-text name to `{game_id, name}` from the user's library (games with at least one non-soft-deleted session — `ERROR` counts, ignored games still resolve). Exact case-insensitive match on `primary_name`, then on `game_aliases.discord_process_name`. Returns `200` with body `null` on miss. Voice-flow prefill. |
-| `GET` | `/api/v1/games/suggest?q=<string>` | Fuzzy-search the **global** games catalog (all users' games, not restricted to the caller's library). Pre-filters with ILIKE-any-token on `primary_name` and aliases, scores each candidate with `_confidence()` (max across name + aliases), drops score < 0.3, sorts descending, paginates. Returns `{"total": <int>, "items": [<GameSuggestItem>]}` — each item includes `game_id`, `primary_name`, `cover_image_url`, `enrichment_status`, `score`. `422` if `q` is blank or whitespace. |
+| `GET` | `/api/v1/games/suggest?q=<string>` | Fuzzy-search the **global** games catalog (all users' games, not restricted to the caller's library). Pre-filters by word-prefix match of every token on `primary_name` or aliases (falling back to any-token if nothing matches all), scores each candidate with `_confidence()` (max across name + aliases), drops score below the floor (0.3 strict / 0.7 fallback), sorts descending, paginates. Returns `{"total": <int>, "items": [<GameSuggestItem>]}` — each item includes `game_id`, `primary_name`, `cover_image_url`, `enrichment_status`, `score`. `422` if `q` is blank or whitespace. |
 | `POST` | `/api/v1/games/match` | Synchronous IGDB candidate search — no DB write. Body: `{"query": "<string>"}`. Returns `list[IGDBCandidateOut]` (`igdb_id`, `name`, `year\|null`, `cover_url\|null`, `score`). Use when suggest has no usable match; pass the chosen `igdb_id` to `POST /games`. `503` rate-limited; `502` other IGDB error. |
 | `GET` | `/api/v1/games/{id}` | Single game by id, same `GameResponse` shape as `GET /games` list items (`is_ignored`, `is_accepted`, `total_seconds`, `last_played`). Access is session-derived: `404` unless the caller has at least one visible session for the game (also covers a non-existent `id`). `is_ignored` / library-visibility filters do not apply — the caller navigated by id, so an ignored or `NEEDS_REVIEW` game still resolves. `total_seconds`/`last_played` match the library card (COMPLETED + ONGOING counted live). For deep links to `/library/:id` (refresh, bookmark, post-merge redirect) without needing to page the list. |
 | `GET` | `/api/v1/games/{id}/sessions` | Paginated session list for a game. `is_ignored` does not apply — same visibility rules as other session reads (soft-deleted and flicker rows excluded). |
@@ -186,7 +186,19 @@ Fields: `id`, `primary_name`, `cover_image_url`, `cover_source`, `enrichment_sta
 
 Fuzzy-search the global games catalog by name. Scope is **all games** in the DB, not restricted to the caller's library. Intended as the first step in the manual game discovery wizard — before escalating to a live IGDB query.
 
-Pre-filters candidates with ILIKE-any-token (a game is included if any whitespace-split token matches `primary_name` or at least one alias). Scores each candidate with `_confidence()` (max over `primary_name` and all `game_aliases`). Drops score < 0.3. Sorts descending by score. Paginates.
+Pre-filters candidates by **word-prefix match on every token**: `q` is split on whitespace, and a game is included only if *each* token matches the start of a word in `primary_name` or in at least one alias. So `the` matches "**The** Division" and "**The**me Park" but not "Wu*the*ring Waves". Prefix rather than whole-word, because the last token of a typeahead query is usually half-typed — `the div` still finds "The Division".
+
+If no game matches every token, the filter retries once accepting **any** token, so a typo in one word does not empty the result set.
+
+Survivors are scored with `_confidence()` (max over `primary_name` and all `game_aliases`), sorted descending by score, and paginated. The score floor depends on which pass produced the candidates: **0.3** for the strict all-token pass, **0.7** for the any-token fallback. The strict pass earns the low floor from its prefilter — every token matched, so a weak score is a loose-but-genuine hit. The fallback has no such guarantee: its noise measures 0.30–0.60 while genuine typo rescues (`hades zzzznomatch` → *Hades*) measure 0.75+, so the higher floor sits between the two bands. The top of the noise band is alias-admitted: a game can enter the fallback on a word-boundary match in one of its aliases and then be scored on its unrelated primary name.
+
+The fallback floor has only **0.05 of headroom** and cannot simply be raised. A typeahead query rarely contains digits, so any match against a numbered title (*Hades II*, *Red Dead Redemption 2*) is capped at 0.75 by the enrichment scorer's sequel guard — however good the match. A floor of 0.8 would silently delete typo rescue for every numbered sequel in the catalog. See [game-matching.md](game-matching.md) § `_confidence` has two consumers.
+
+Single-token queries never take the fallback path (it is gated on more than one token), so the 0.7 floor does not apply to them.
+
+Precision comes from the prefilter, not the score floor. `_confidence()` is the enrichment scorer — tuned for `witcher3.exe` → canonical title, so it strips whitespace and leans on partial ratios. Short typeahead queries score generously against unrelated titles (`the division` vs "Wuthering Waves" = 0.48), and no single floor cleanly separates those from real hits, so raising the global floor is not a way to reduce noise here.
+
+Note this endpoint has **no typo tolerance** on the strict pass: a prefilter match is mandatory, and scoring only re-ranks rows that already matched literally. An alias-based hit like `witcher` → *Wiedźmin* works only because an alias literally contains "witcher".
 
 **Query parameters**
 
@@ -202,7 +214,7 @@ Pre-filters candidates with ILIKE-any-token (a game is included if any whitespac
 { "total": <int>, "items": [<GameSuggestItem>, …] }
 ```
 
-- `total` — number of candidates surviving the 0.3 score floor across all pages.
+- `total` — number of candidates surviving the score floor across all pages.
 - `items` — current page; each row is `GameSuggestItem`:
 
 | Field | Type | Description |
@@ -211,7 +223,7 @@ Pre-filters candidates with ILIKE-any-token (a game is included if any whitespac
 | `primary_name` | `string` | Canonical game title |
 | `cover_image_url` | `string\|null` | Cover art URL (IGDB-sourced or null) |
 | `enrichment_status` | `string` | `ENRICHED`, `NEEDS_REVIEW`, or `PENDING` |
-| `score` | `float` | Relevance score (0.3–1.0) |
+| `score` | `float` | Relevance score — at or above the applied floor (0.3 strict pass, 0.7 fallback pass), up to 1.0 |
 
 Returns `401` without a valid bearer token. Returns `422` if `q` is blank or whitespace.
 

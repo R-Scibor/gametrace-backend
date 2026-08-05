@@ -101,6 +101,147 @@ async def test_pagination(authed_client, db, user):
     assert data["total"] >= 2
 
 
+# ── prefilter precision ───────────────────────────────────────────────────────
+
+async def test_mid_word_token_does_not_match(authed_client, db, user):
+    """A token must match at a word boundary, not anywhere inside a word.
+
+    Regression: `the` matched as a substring inside `Wu*the*ring Waves`, which
+    then scored 0.48 — above the floor — so junk surfaced in the picker while
+    typing. Raising the floor cannot fix this; the prefilter has to.
+    """
+    noise = await make_game(db, "Wuthering Waves")
+    hit = await make_game(db, "Tom Clancy's The Division")
+
+    resp = await authed_client.get(
+        "/api/v1/games/suggest", params={"q": "the Division"}
+    )
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert noise.id not in ids
+    assert hit.id in ids
+
+
+async def test_prefix_typing_still_matches(authed_client, db, user):
+    """A partially typed trailing token still matches by word prefix."""
+    hit = await make_game(db, "Tom Clancy's The Division")
+
+    resp = await authed_client.get("/api/v1/games/suggest", params={"q": "the Div"})
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert hit.id in ids
+
+
+async def test_all_tokens_must_match(authed_client, db, user):
+    """One matching token is not enough to admit a game when others exist.
+
+    'The Sims 4' matches `the` as a whole word and scores 0.53 — above the
+    floor — so under the old any-token prefilter it surfaced for 'the
+    division'. It matches no other token, so it must now be dropped.
+    """
+    partial = await make_game(db, "The Sims 4")
+    hit = await make_game(db, "The Division")
+
+    resp = await authed_client.get(
+        "/api/v1/games/suggest", params={"q": "the division"}
+    )
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert partial.id not in ids
+    assert hit.id in ids
+
+
+async def test_falls_back_to_any_token_when_nothing_matches_all(
+    authed_client, db, user
+):
+    """A typo in one token must not zero out the whole result set."""
+    hit = await make_game(db, "Hades")
+
+    resp = await authed_client.get(
+        "/api/v1/games/suggest", params={"q": "hades zzzznomatch"}
+    )
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert hit.id in ids
+
+
+async def test_fallback_applies_a_higher_floor(authed_client, db, user):
+    """The any-token fallback must not re-admit the noise the AND rule removed.
+
+    When the catalog has no game matching every token — the normal case for
+    the wizard, where the game usually isn't in the catalog yet — the fallback
+    fires and any game matching just `the` is back in play. Measured against
+    the live catalog those score 0.30–0.45, while genuine typo rescues score
+    0.75+, so the fallback path uses a 0.6 floor instead of 0.3.
+    """
+    await make_game(db, "The Witcher 3: Wild Hunt")
+
+    resp = await authed_client.get(
+        "/api/v1/games/suggest", params={"q": "the Division"}
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 0
+    assert data["items"] == []
+
+
+async def test_fallback_floor_clears_alias_admitted_noise(authed_client, db, user):
+    """Alias-admitted noise sits higher than name-only noise — the floor must clear it.
+
+    'Skyrim Special Edition' enters the fallback via its alias ("The Elder
+    Scrolls V: Skyrim - Special Edition" — a real word-boundary `The`), then
+    scores 0.6 on its *primary name* against 'the Division'. That is the top
+    of the measured noise band; genuine rescues start at 0.75.
+    """
+    game = await make_game(db, "Skyrim Special Edition")
+    await make_alias(db, game.id, "The Elder Scrolls V: Skyrim - Special Edition")
+
+    resp = await authed_client.get(
+        "/api/v1/games/suggest", params={"q": "the Division"}
+    )
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert game.id not in ids
+
+
+async def test_fallback_floor_stays_below_the_sequel_cap(authed_client, db, user):
+    """Pins the ceiling the fallback floor must stay under.
+
+    A typo'd token sends this to the fallback. _confidence caps any digitless
+    query against a numbered title at _NUMBER_MISMATCH_CAP (0.75), so *every*
+    numbered-sequel typo rescue scores exactly 0.75 — never higher, however
+    good the match. The fallback floor therefore has only 0.05 of headroom;
+    raising it to 0.8 would silently drop this whole class of rescue.
+    """
+    game = await make_game(db, "Red Dead Redemption 2")
+
+    resp = await authed_client.get(
+        "/api/v1/games/suggest", params={"q": "red dead redemtion"}
+    )
+
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert game.id in [item["game_id"] for item in items]
+    assert items[0]["score"] == 0.75
+
+
+async def test_regex_metacharacters_in_q_are_escaped(authed_client, db, user):
+    """User input reaches a regex operator — it must be escaped, not executed."""
+    await make_game(db, "Hades")
+
+    resp = await authed_client.get(
+        "/api/v1/games/suggest", params={"q": "hades ((("}
+    )
+
+    assert resp.status_code == 200
+
+
 # ── auth + validation ─────────────────────────────────────────────────────────
 
 async def test_requires_auth(client, db, user):
