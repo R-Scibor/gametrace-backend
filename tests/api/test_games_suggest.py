@@ -190,6 +190,26 @@ async def test_fallback_applies_a_higher_floor(authed_client, db, user):
     assert data["items"] == []
 
 
+async def test_fallback_floor_clears_alias_admitted_noise(authed_client, db, user):
+    """Alias-admitted noise sits higher than name-only noise — the floor must clear it.
+
+    'Skyrim Special Edition' enters the fallback via its alias ("The Elder
+    Scrolls V: Skyrim - Special Edition" — a real word-boundary `The`), then
+    scores 0.6 on its *primary name* against 'the Division'. That is the top
+    of the measured noise band; genuine rescues start at 0.75.
+    """
+    game = await make_game(db, "Skyrim Special Edition")
+    await make_alias(db, game.id, "The Elder Scrolls V: Skyrim - Special Edition")
+
+    resp = await authed_client.get(
+        "/api/v1/games/suggest", params={"q": "the Division"}
+    )
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert game.id not in ids
+
+
 async def test_regex_metacharacters_in_q_are_escaped(authed_client, db, user):
     """User input reaches a regex operator — it must be escaped, not executed."""
     await make_game(db, "Hades")

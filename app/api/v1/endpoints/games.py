@@ -376,11 +376,16 @@ async def resolve_game(
 
 # Score floors. The strict path earns the low floor from its prefilter: every
 # token matched, so a weak score is a genuine-but-loose hit. The any-token
-# fallback has no such guarantee — against the live catalog its noise scored
-# 0.30–0.45 while real typo rescues ("hades zzzznomatch" → Hades) scored 0.75+,
-# so it needs a floor above that noise band.
+# fallback has no such guarantee, so it needs a floor above its noise band.
+#
+# Both bands measured against the live catalog for "the Division". Noise runs
+# 0.30–0.60 — the top of it is alias-admitted: "Skyrim Special Edition" enters
+# on its alias "The Elder Scrolls V: Skyrim - Special Edition" (a real
+# word-boundary `The`) and then scores 0.6 on its *primary name*. Genuine
+# rescues ("hades zzzznomatch" → Hades, "the divison" → The Division) run
+# 0.75–0.95. 0.7 sits between the bands with margin on both sides.
 _SUGGEST_FLOOR = 0.3
-_SUGGEST_FALLBACK_FLOOR = 0.6
+_SUGGEST_FALLBACK_FLOOR = 0.7
 
 # POSIX ERE metacharacters. Escaped rather than using re.escape(), whose
 # output targets Python's engine — Postgres reads these patterns, and user
