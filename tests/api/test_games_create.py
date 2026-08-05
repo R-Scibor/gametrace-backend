@@ -9,6 +9,7 @@ hit the real IGDB API.
 from datetime import date
 from unittest.mock import patch
 
+import pytest
 from sqlalchemy import func, select
 
 from app.models.game import EnrichmentStatus, Game, GameAlias
@@ -180,3 +181,32 @@ async def test_requires_auth(client):
     """`client` has no Bearer token — expect 403."""
     resp = await client.post(URL, json={"igdb_id": 1942})
     assert resp.status_code == 403
+
+
+# ── rate limiting ─────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def rate_limit_enabled():
+    """Enable the limiter for one test. authed_client mints a fresh random token
+    per test, so each test gets its own limiter bucket — no reset needed."""
+    from app.main import app
+    limiter = app.state.limiter
+    limiter.enabled = True
+    yield
+    limiter.enabled = False
+
+
+async def test_rate_limited_after_60(authed_client, rate_limit_enabled):
+    """Looser than /match: igdb_id mode dedupes before calling IGDB and
+    unrecognized mode never calls it, so a genuine library backfill must fit.
+    The cap exists to bound a looping client, not to pace honest use."""
+    with patch(PATCH_TARGET, return_value=("The Witcher 3", _META)):
+        statuses = [
+            (await authed_client.post(
+                URL, json={"unrecognized": True, "name": f"Stub {i}"},
+            )).status_code
+            for i in range(61)
+        ]
+
+    assert statuses[:60] == [201] * 60
+    assert statuses[60] == 429

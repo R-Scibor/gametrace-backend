@@ -144,3 +144,26 @@ async def test_stats_api_error_returns_friendly_polish_copy(mock_summary, mock_r
     msg = await stats_command(db, _DISCORD_ID)
 
     assert "nie udało się" in msg.lower()
+
+
+@patch("app.bot.commands.api_client.get_review_count", new_callable=AsyncMock)
+@patch("app.bot.commands.api_client.get_summary", new_callable=AsyncMock)
+async def test_stats_pending_deletion_is_not_reported_as_generic_failure(
+    mock_summary, mock_review, db
+):
+    # Mechanism check: PendingDeletionError is a BotApiError subclass, so this
+    # verifies stats_command routes it to the dedicated branch instead of
+    # falling into the generic `except BotApiError` -> STATS_FAILURE path.
+    from app.bot.api_client import PendingDeletionError
+    from app.bot import replies
+
+    await make_user(db, discord_id=_DISCORD_ID, username=_USERNAME)
+    mock_summary.side_effect = PendingDeletionError(
+        purge_at="2026-08-15T00:00:00+00:00", days_left=4
+    )
+    mock_review.return_value = 0
+
+    msg = await stats_command(db, _DISCORD_ID)
+
+    assert msg != replies.STATS_FAILURE
+    assert "nie udało się" not in msg.lower()

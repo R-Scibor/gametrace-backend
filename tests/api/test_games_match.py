@@ -116,3 +116,49 @@ async def test_empty_query_is_422(authed_client):
         json={"query": ""},
     )
     assert resp.status_code == 422
+
+
+# ── rate limiting ─────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def rate_limit_enabled():
+    """Enable the limiter for one test. authed_client mints a fresh random token
+    per test, so each test gets its own limiter bucket — no reset needed."""
+    from app.main import app
+    limiter = app.state.limiter
+    limiter.enabled = True
+    yield
+    limiter.enabled = False
+
+
+async def test_rate_limited_after_20(authed_client, rate_limit_enabled):
+    """IGDB throttles per Client ID, shared by every user and the enrichment
+    worker — cap a runaway client before it drains the bucket."""
+    with patch(PATCH_TARGET, return_value=[_CANDIDATE_A]):
+        statuses = [
+            (await authed_client.post(
+                "/api/v1/games/match", json={"query": "hades"},
+            )).status_code
+            for _ in range(21)
+        ]
+
+    assert statuses[:20] == [200] * 20
+    assert statuses[20] == 429
+
+
+async def test_rate_limit_is_per_credential(db, client, user, admin_user, rate_limit_enabled):
+    """Exhausting one token's budget does not block a different token."""
+    from tests.factories import make_token
+
+    user_token = await make_token(db, user.discord_id)
+    admin_token = await make_token(db, admin_user.discord_id)
+
+    with patch(PATCH_TARGET, return_value=[_CANDIDATE_A]):
+        client.headers["Authorization"] = f"Bearer {user_token}"
+        for _ in range(21):
+            await client.post("/api/v1/games/match", json={"query": "hades"})
+
+        client.headers["Authorization"] = f"Bearer {admin_token}"
+        resp = await client.post("/api/v1/games/match", json={"query": "hades"})
+
+    assert resp.status_code == 200

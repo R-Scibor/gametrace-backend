@@ -176,7 +176,10 @@ def _igdb_search_candidates(name: str) -> list[IGDBCandidate]:
                 'genres.name,themes.name,'
                 'involved_companies.company.name,involved_companies.developer,'
                 'involved_companies.publisher,first_release_date; '
-                'limit 5;'
+                # 10, not 5: this is a human-reviewed pick-list, and `limit` is
+                # part of the query body — still one request, just a bigger
+                # payload. _igdb_search stays at 5 (unattended matching).
+                'limit 10;'
             ),
         )
 
@@ -312,6 +315,9 @@ def _igdb_search(name: str) -> IGDBResult:
                 'involved_companies.company.name,involved_companies.company.parent.name,'
                 'involved_companies.developer,'
                 'involved_companies.publisher,first_release_date; '
+                # Stays at 5 — this feeds the unattended enrichment worker,
+                # which auto-accepts above 0.85 confidence. Changing the pool
+                # changes which stubs auto-match. See _igdb_search_candidates.
                 'limit 5;'
             ),
         )

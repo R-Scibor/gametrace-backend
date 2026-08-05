@@ -2,7 +2,7 @@ import pytest
 
 from app.core.config import settings
 from app.services import discord_oauth
-from tests.factories import make_user
+from tests.factories import dt, make_user
 
 REDIRECT = "gametrace://redirect"
 
@@ -63,6 +63,35 @@ async def test_existing_user_username_synced(client, db, monkeypatch):
     from app.models.user import User
     refreshed = await db.get(User, "555")
     assert refreshed.username == "newname"
+
+
+async def test_new_user_pending_deletion_is_null(client, db, monkeypatch):
+    _patch_discord(monkeypatch, identity={"id": "555", "username": "newbie"}, guilds={"123"})
+
+    resp = await client.post("/api/v1/auth/discord", json=_body())
+
+    assert resp.status_code == 200
+    assert resp.json()["pending_deletion"] is None
+
+
+async def test_scheduled_user_returns_pending_deletion(client, db, monkeypatch):
+    purge_at = dt(hours_from_now=25)  # 25h out -> ceil to 2 days
+    await make_user(
+        db,
+        discord_id="555",
+        username="oldname",
+        deletion_requested_at=dt(hours_ago=2),
+        purge_at=purge_at,
+    )
+    _patch_discord(monkeypatch, identity={"id": "555", "username": "newname"}, guilds={"123"})
+
+    resp = await client.post("/api/v1/auth/discord", json=_body())
+
+    assert resp.status_code == 200
+    pending = resp.json()["pending_deletion"]
+    assert pending is not None
+    assert pending["days_left"] == 2
+    assert pending["purge_at"] is not None
 
 
 async def test_not_in_guild_sets_needs_server_join(client, db, monkeypatch):

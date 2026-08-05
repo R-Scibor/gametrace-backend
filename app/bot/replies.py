@@ -18,6 +18,13 @@ RECENT_FAILURE = "Nie udało się pobrać ostatnich sesji. Spróbuj ponownie za 
 LINK_CODES_UNCONFIGURED = "Kody logowania nie są skonfigurowane."
 
 
+def _day_word(days_left: int) -> str:
+    # Simplified Polish plural: exact grammar needs 1 / 2-4 / 5+ (with
+    # 12-14 exceptions), but days_left is always a small positive ceiling
+    # here and "dzień" vs "dni" reads fine without the full declension.
+    return "dzień" if days_left == 1 else "dni"
+
+
 def _web_hint() -> str:
     return f" {settings.gametrace_web_url}" if settings.gametrace_web_url else ""
 
@@ -267,6 +274,51 @@ def login_reply(*, code: str, created: bool) -> str:
         f"{intro}\n\n"
         f"👉 Aplikacja: {settings.gametrace_web_url}/welcome — kreator "
         f"przeprowadzi Cię krok po kroku."
+    )
+
+
+def pending_deletion_reply(
+    *, purge_at: str, days_left: int, user_timezone: str | None = None
+) -> str:
+    """Shared `/stats` and `/recent` reply when the API's bot-credential path
+    403s because the account is scheduled for deletion (see
+    `api_client.PendingDeletionError`). Explains the state instead of the
+    bare "returned 403" a caller would otherwise surface.
+
+    Cancelling is app-only (`DELETE /profile/me/deletion`) — there's no bot
+    slash command for it — so this points at the app rather than claiming a
+    Discord-side fix.
+    """
+    tz = _resolve_tz(user_timezone)
+    dt = _parse_iso(purge_at)
+    date_str = dt.astimezone(tz).strftime("%d.%m.%Y") if dt else "?"
+
+    return (
+        f"To konto jest zaplanowane do usunięcia — dane zostaną trwale "
+        f"skasowane {date_str} (za {days_left} {_day_word(days_left)}).\n\n"
+        f"Żeby to anulować, zaloguj się w aplikacji i cofnij usunięcie "
+        f"konta w ustawieniach.{_web_hint()}"
+    )
+
+
+def register_pending_deletion_reply(
+    *, purge_at: str, days_left: int, user_timezone: str | None = None
+) -> str:
+    """`/register` reply for an account that still exists but is scheduled
+    for deletion — deliberately NOT `register_reply(created=False)`, since
+    "already registered" would misleadingly suggest the account is in
+    normal standing.
+    """
+    tz = _resolve_tz(user_timezone)
+    dt = _parse_iso(purge_at)
+    date_str = dt.astimezone(tz).strftime("%d.%m.%Y") if dt else "?"
+
+    return (
+        f"To konto jest zaplanowane do usunięcia — dane zostaną trwale "
+        f"skasowane {date_str} (za {days_left} {_day_word(days_left)}). "
+        f"Rejestracja nie jest tu potrzebna.\n\n"
+        f"Żeby dalej korzystać z konta, zaloguj się w aplikacji i cofnij "
+        f"usunięcie w ustawieniach.{_web_hint()}"
     )
 
 

@@ -19,8 +19,14 @@ logger = logging.getLogger(__name__)
 
 
 async def get_user_if_tracked(db: AsyncSession, discord_id: str) -> User | None:
-    """Return User only if they have already logged into the app (exist in users table)."""
-    return await db.get(User, discord_id)
+    """
+    Return User only if they have already logged into the app (exist in users
+    table) and are not scheduled for account deletion.
+    """
+    user = await db.get(User, discord_id)
+    if user is not None and user.purge_at is not None:
+        return None
+    return user
 
 
 async def get_or_create_game(db: AsyncSession, process_name: str) -> tuple[Game, bool]:

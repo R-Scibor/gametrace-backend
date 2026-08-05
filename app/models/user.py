@@ -29,6 +29,10 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    purge_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     auth_tokens: Mapped[list["UserAuthToken"]] = relationship(back_populates="user")
     devices: Mapped[list["UserDevice"]] = relationship(back_populates="user")

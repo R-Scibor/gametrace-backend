@@ -55,6 +55,7 @@ class Settings(BaseSettings):
 
     session_token_expire_days: int = 30
     trash_retention_days: int = 7
+    account_deletion_grace_days: int = 7
 
     # Debounce the per-request last_active / sliding-expiry write in get_current_user:
     # only persist when last_active is older than this. 0 restores per-request writes.

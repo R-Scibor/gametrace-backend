@@ -10,19 +10,19 @@ Grouped by code — see endpoint sections below for path-specific detail. Authed
 
 | Code | When |
 |---|---|
-| `200` | Successful read or update (`GET`, `PATCH`, `PUT`, `POST /auth/link`, `POST /auth/login`, `POST /sessions/{id}/restore`). `GET /games/resolve` also returns `200` with body `null` on miss. `POST /games` returns `200` when the game already exists (deduplication by `igdb_id`). `POST /admin/games/{id}/aliases` returns `200` when the alias already exists on the same game (idempotent, no audit log). |
+| `200` | Successful read or update (`GET`, `PATCH`, `PUT`, `POST /auth/link`, `POST /auth/login`, `POST /sessions/{id}/restore`). `GET /games/resolve` also returns `200` with body `null` on miss. `POST /games` returns `200` when the game already exists (deduplication by `igdb_id`). `POST /admin/games/{id}/aliases` returns `200` when the alias already exists on the same game (idempotent, no audit log). `DELETE /profile/me/deletion` — scheduled deletion cancelled. |
 | `201` | `POST /sessions` — manual session created. `POST /games` — new game row created (either mode). `POST /reports` — feedback report stored. `POST /admin/games/{id}/aliases` — new alias attached. |
-| `202` | `POST /admin/games/{id}/enrich` — Celery enrichment task re-queued (no row reset). |
+| `202` | `POST /admin/games/{id}/enrich` — Celery enrichment task re-queued (no row reset). `POST /profile/me/deletion` — account scheduled for deletion. |
 | `204` | Successful delete with no body (`POST /auth/logout`, `DELETE /sessions/{id}`, `DELETE /user/preferences/{game_id}`, `DELETE /notifications/register-token`, `POST /admin/games/{id}/merge/{target_id}`, `DELETE /admin/reports/{id}`). |
 | `400` | Client input rejected — e.g. self-merge (`POST /admin/games/{id}/merge/{target_id}`), empty audio upload (`POST /voice/transcribe`), `redirect_uri` not allowlisted (`POST /auth/discord`). |
 | `401` | Invalid or expired bearer token (`get_current_user`), or unknown token on `POST /auth/logout`, invalid or expired link code (`POST /auth/link`), or bad/expired Discord code (`POST /auth/discord`). On `GET /sessions`, `GET /games`, and `GET /stats/summary` only: also returned when the `Authorization` header is absent entirely and the bot-service credential is missing, invalid, or unconfigured — these three routes fail closed to `401` rather than `403` in that case (see [Bot service credential](#bot-service-credential-internal)). |
-| `403` | A valid but non-admin bearer token on any `/admin/*` route (`require_admin`), including `PUT /admin/games/{id}/cover`. Also `PATCH` or soft `DELETE` on an `ONGOING` session (bot-managed row). Also missing bearer token on any other authed route (e.g. `POST /reports`) — `HTTPBearer` raises `403` when the `Authorization` header itself is absent, distinct from `401` for an invalid/expired token. Does **not** apply to `GET /sessions`, `GET /games`, or `GET /stats/summary` — see the `401` row. |
-| `404` | Resource not found or not owned by the caller — user not registered (`POST /auth/login`), session/game missing, game missing on preference upsert, report missing on triage (`PATCH /admin/reports/{id}`) or delete (`DELETE /admin/reports/{id}`, including a second delete of the same id), game missing on admin catalog writes (`POST /admin/games/{id}/enrich`, `POST /admin/games/{id}/igdb-link`, `POST /admin/games/{id}/aliases`), or IGDB id not found on `POST /admin/games/{id}/igdb-link`. Soft-deleting an already-trashed session also returns `404` (same as not found). |
+| `403` | A valid but non-admin bearer token on any `/admin/*` route (`require_admin`), including `PUT /admin/games/{id}/cover`. Also `PATCH` or soft `DELETE` on an `ONGOING` session (bot-managed row). Also missing bearer token on any other authed route (e.g. `POST /reports`) — `HTTPBearer` raises `403` when the `Authorization` header itself is absent, distinct from `401` for an invalid/expired token. Also an admin account calling `POST /profile/me/deletion` — admins are seeded manually and cannot self-delete. Also every other authed route once the account is scheduled for deletion, with a nested body — see [Profile](#profile). Does **not** apply to `GET /sessions`, `GET /games`, or `GET /stats/summary` — see the `401` row. |
+| `404` | Resource not found or not owned by the caller — user not registered (`POST /auth/login`), session/game missing, game missing on preference upsert, report missing on triage (`PATCH /admin/reports/{id}`) or delete (`DELETE /admin/reports/{id}`, including a second delete of the same id), game missing on admin catalog writes (`POST /admin/games/{id}/enrich`, `POST /admin/games/{id}/igdb-link`, `POST /admin/games/{id}/aliases`), or IGDB id not found on `POST /admin/games/{id}/igdb-link`. Soft-deleting an already-trashed session also returns `404` (same as not found). `DELETE /profile/me/deletion` when the account has no deletion scheduled. |
 | `409` | Session time overlap — `POST /sessions`, `PATCH /sessions/{id}`, `POST /sessions/{id}/restore` (body: `{detail: {detail, conflicting_session}}`). IGDB id already linked to another game on `POST /admin/games/{id}/igdb-link` (body: `{detail: {message, conflicting_game_id}}`). Discord process name already owned by another game on `POST /admin/games/{id}/aliases` (body: `{detail: {conflicting_game_id}}`). |
 | `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone or unsupported `language` (not `"pl"`/`"en"`) on `PUT /profile/settings` (Pydantic). Link `code` not exactly 6 digits (`POST /auth/link`, Pydantic). Blank/whitespace-only or over-4000-char `message`, or a missing `context` field, on `POST /reports` (Pydantic). Unsupported/invalid `extension` or malformed `image_base64` on `PUT /admin/games/{id}/cover`. Invalid `status` query value on `GET /admin/reports`, `GET /admin/reports/facets`, or `GET /admin/games`, or a body `status` other than `"open"`/`"triaged"`/`"closed"` on `PATCH /admin/reports/{id}` (Pydantic). `q` over 200 chars on `GET /admin/reports` (Pydantic). An empty body with neither `status` nor `admin_note` present, an explicit `"status": null`, or an `admin_note` over 4000 chars, on `PATCH /admin/reports/{id}`. Blank/whitespace-only `discord_process_name` on `POST /admin/games/{id}/aliases`. |
 | `500` | Unhandled server error (global handler in `app/main.py`). |
 | `502` | Upstream voice failure — OpenAI Whisper or Vertex Gemini error (`POST /voice/transcribe`). Discord OAuth upstream failure (`POST /auth/discord`). IGDB upstream error — non-rate-limit failure (`POST /games/match`, `POST /admin/games/match`). |
-| `429` | Too many failed link-code attempts (`POST /auth/link`) — per-IP or global lockout; response includes `Retry-After` (seconds). |
+| `429` | Too many failed link-code attempts (`POST /auth/link`) — per-IP or global lockout; response includes `Retry-After` (seconds). Per-credential rate limit exceeded on `POST /voice/transcribe` (10/hour), `POST /games/match` (20/hour), or `POST /games` (60/hour). |
 | `503` | Voice pipeline not configured — `OPENAI_API_KEY` or `GCP_PROJECT` unset (`POST /voice/transcribe`). Link codes not configured (`LINK_CODE_SECRET` unset) or Redis unreachable (`POST /auth/link`). IGDB rate-limited or auth expired (`POST /games/match`, `POST /games` with `igdb_id`, `POST /admin/games/match`, `POST /admin/games/{id}/igdb-link`). |
 
 `GET /health` and `GET /api/v1/health` always return `200`; bot offline or Redis loss is reflected in the JSON payload (`bot.status`: `offline` / `unknown`), not the HTTP status.
@@ -30,6 +30,8 @@ Grouped by code — see endpoint sections below for path-specific detail. Authed
 ## Auth
 
 Three login paths exist: link code (`/auth/link` — primary mobile flow), legacy username (`/auth/login`), and Discord OAuth2 (`/auth/discord`). OAuth requires the user to be a member of a configured bot server for presence tracking to produce data; non-members can still log in but receive `needs_server_join: true`.
+
+All three issue `LoginResponse.pending_deletion` — `null` for a normal account, or `{deletion_requested_at, purge_at, days_left}` when the account is scheduled for deletion (`days_left` is a ceiling, never `0` while the account still exists). Logging in on a scheduled account does **not** cancel the deletion — only `DELETE /profile/me/deletion` does. The client is expected to show a cancel-deletion dialog when this field is non-null.
 
 ### Discord OAuth2 setup
 
@@ -44,10 +46,10 @@ Also required in `.env`: `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET` (OAuth2
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/auth/link` | Redeem a one-time 6-digit code from the Discord `/login` slash command. Body `{code, timezone?}` — `code` must be exactly 6 digits (whitespace trimmed); `timezone` is optional IANA (default `UTC`, max 64 chars); non-`UTC` values are persisted on the user row. Issues a session token. Response: `token`, `discord_id`, `username`, `timezone`, `is_admin`. `401` if the code is invalid or expired (or the user row is missing — same opaque message). `422` if `code` is not exactly 6 digits. `429` after too many failed attempts (per-IP or global lockout) with `Retry-After` header (seconds). `503` if `LINK_CODE_SECRET` is unset or Redis is unreachable. |
-| `POST` | `/api/v1/auth/login` | **Dev-only** — login by Discord username (user must be pre-registered via `/login` or `/register` on Discord). Gated by a shared secret: disabled entirely (returns `404 Not Found`) unless `DEV_LOGIN_SECRET` is set, and when set the caller must send it in the `X-Dev-Login-Secret` header — a missing/wrong secret also returns `404` so the endpoint reveals nothing when the API is exposed. Once past the gate, issues a session token; returns `404` with "User not found. Run /login on Discord first." if the user isn't registered. Accepts optional `timezone` (IANA); non-`UTC` values are persisted on the user row. Response: `token`, `discord_id`, `username`, `timezone`, `is_admin`. |
+| `POST` | `/api/v1/auth/link` | Redeem a one-time 6-digit code from the Discord `/login` slash command. Body `{code, timezone?}` — `code` must be exactly 6 digits (whitespace trimmed); `timezone` is optional IANA (default `UTC`, max 64 chars); non-`UTC` values are persisted on the user row. Issues a session token. Response: `token`, `discord_id`, `username`, `timezone`, `is_admin`, `pending_deletion`. `401` if the code is invalid or expired (or the user row is missing — same opaque message). `422` if `code` is not exactly 6 digits. `429` after too many failed attempts (per-IP or global lockout) with `Retry-After` header (seconds). `503` if `LINK_CODE_SECRET` is unset or Redis is unreachable. |
+| `POST` | `/api/v1/auth/login` | **Dev-only** — login by Discord username (user must be pre-registered via `/login` or `/register` on Discord). Gated by a shared secret: disabled entirely (returns `404 Not Found`) unless `DEV_LOGIN_SECRET` is set, and when set the caller must send it in the `X-Dev-Login-Secret` header — a missing/wrong secret also returns `404` so the endpoint reveals nothing when the API is exposed. Once past the gate, issues a session token; returns `404` with "User not found. Run /login on Discord first." if the user isn't registered. Accepts optional `timezone` (IANA); non-`UTC` values are persisted on the user row. Response: `token`, `discord_id`, `username`, `timezone`, `is_admin`, `pending_deletion`. |
 | `POST` | `/api/v1/auth/logout` | Invalidate the current bearer token server-side. |
-| `POST` | `/api/v1/auth/discord` | Discord OAuth2 login (code + PKCE). Body `{code, code_verifier, redirect_uri}`. Backend exchanges the code server-side, reads `/users/@me`, and issues a session token. Auto-creates the user on first login (verified `discord_id` + `username`). Response includes `is_admin` and `needs_server_join: true` when the user is in none of the configured bot servers — the app should prompt them to join so presence tracking works. `400` if `redirect_uri` is not allowlisted; `401` on bad/expired code; `502` if Discord is unreachable. |
+| `POST` | `/api/v1/auth/discord` | Discord OAuth2 login (code + PKCE). Body `{code, code_verifier, redirect_uri}`. Backend exchanges the code server-side, reads `/users/@me`, and issues a session token. Auto-creates the user on first login (verified `discord_id` + `username`). Response includes `is_admin`, `pending_deletion`, and `needs_server_join: true` when the user is in none of the configured bot servers — the app should prompt them to join so presence tracking works. `400` if `redirect_uri` is not allowlisted; `401` on bad/expired code; `502` if Discord is unreachable. |
 
 Tokens expire after `SESSION_TOKEN_EXPIRE_DAYS` of inactivity (sliding window — every authenticated request bumps `expires_at`). On expiry the token row is deleted and subsequent calls return `401`.
 
@@ -68,6 +70,27 @@ If both an `Authorization` bearer token and the bot headers are present, the bea
 |---|---|---|
 | `GET` | `/api/v1/profile/me` | Current user's profile (`discord_id`, `username`, `timezone`, `language`, notification toggles, `is_admin`). `language` is the mobile UI language (`"pl"`/`"en"`, default `"pl"`). |
 | `PUT` | `/api/v1/profile/settings` | Update `timezone`, `language`, and/or notification toggles (`weekly_report_enabled`, `push_enabled`). Partial update — unset fields are left alone. `language` must be one of `"pl"`/`"en"` (else `422`). |
+| `POST` | `/api/v1/profile/me/deletion` | Schedule the current account for deletion. No request body. Stamps `deletion_requested_at = now`, `purge_at = now + ACCOUNT_DELETION_GRACE_DAYS` — a 7-day grace period — revokes every `UserAuthToken` and `UserDevice` for the user, transitions any `ONGOING` session to `ERROR`, and best-effort flushes any pending login-link code. `COMPLETED`/`ERROR` sessions are untouched. Idempotent — calling again while already scheduled returns the existing `deletion_requested_at`/`purge_at` unchanged, no re-work. `403` if the caller is an admin (see below). Returns `202` `DeletionStatusResponse`: `{deletion_requested_at, purge_at, days_left}`. The account remains readable/usable during the grace period only via this endpoint and `POST /auth/logout`; every other authed route 403s once `purge_at` is set (see below). A nightly scheduled task permanently purges the row once `purge_at` passes — see [schema.md](schema.md#scheduled-tasks-celery-beat). |
+| `DELETE` | `/api/v1/profile/me/deletion` | Cancel a scheduled deletion — the only thing that reverses one; logging in never cancels it implicitly. No request body. Clears `deletion_requested_at` and `purge_at` back to `null`, restoring normal access to every authed route immediately. Returns `200 {detail}`. `404` if the account has no deletion scheduled — clients must not report success for cancelling nothing. Does **not** restore what `POST /me/deletion` already destroyed: auth tokens and FCM device registrations stay revoked (the app must sign back in; push re-registers itself on next app start), and any session that was transitioned to `ERROR` when deletion was requested stays `ERROR`. |
+
+Admins cannot self-delete: `is_admin` is seeded manually (no self-service toggle), so a self-deleting admin would leave the admin dashboard unreachable without direct `psql` access. `POST /profile/me/deletion` returns `403` for any caller with `is_admin: true`.
+
+**While scheduled, every other authed route returns `403`** with a nested body instead of a plain string detail:
+
+```json
+{
+  "detail": {
+    "detail": "Account scheduled for deletion",
+    "deletion_requested_at": "2026-08-04T12:00:00+00:00",
+    "purge_at": "2026-08-11T12:00:00+00:00",
+    "days_left": 7
+  }
+}
+```
+
+`days_left` is a ceiling of the time remaining — it never reads `0` while the account still exists, and it's the same value carried in `LoginResponse.pending_deletion` (see [Auth](#auth)) and used by the Discord bot's pending-deletion replies (see [bot.md](bot.md)). `POST /auth/logout` is exempt from this guard and still works normally during the grace period.
+
+The 7-day figure is the grace period, not the exact purge time: the sweeper that hard-deletes expired accounts runs once nightly, so an account can be purged up to ~24h after its `purge_at` timestamp, never before it. Purging removes the row from the live database only — any existing database backups taken before the purge expire on their own separate retention schedule, not this one.
 
 ## Sessions
 
@@ -94,7 +117,7 @@ Session state machine — see the [README session state machine](../README.md#se
 | `POST` | `/api/v1/games` | Create a new global `Game` row or link to an existing one. Two modes (exactly one): **igdb_id mode** — dedupes by `external_api_id` (returns `200` if already known with no IGDB call, else fetches IGDB metadata and creates an `ENRICHED` row → `201`; IGDB miss → `404`; rate-limited → `503`). **Unrecognized mode** (`unrecognized: true` + non-blank `name`) — inserts a `NEEDS_REVIEW` stub with `name` itself stored as a `GameAlias` → `201`. In igdb_id mode, optional `query` is stored as a `GameAlias` for future `/resolve` lookups (ignored in unrecognized mode). Both/neither mode active → `422`. |
 | `GET` | `/api/v1/games/resolve?name=<string>` | Map a free-text name to `{game_id, name}` from the user's library (games with at least one non-soft-deleted session — `ERROR` counts, ignored games still resolve). Exact case-insensitive match on `primary_name`, then on `game_aliases.discord_process_name`. Returns `200` with body `null` on miss. Voice-flow prefill. |
 | `GET` | `/api/v1/games/suggest?q=<string>` | Fuzzy-search the **global** games catalog (all users' games, not restricted to the caller's library). Pre-filters by word-prefix match of every token on `primary_name` or aliases (falling back to any-token if nothing matches all), scores each candidate with `_confidence()` (max across name + aliases), drops score below the floor (0.3 strict / 0.7 fallback), sorts descending, paginates. Returns `{"total": <int>, "items": [<GameSuggestItem>]}` — each item includes `game_id`, `primary_name`, `cover_image_url`, `enrichment_status`, `score`. `422` if `q` is blank or whitespace. |
-| `POST` | `/api/v1/games/match` | Synchronous IGDB candidate search — no DB write. Body: `{"query": "<string>"}`. Returns `list[IGDBCandidateOut]` (`igdb_id`, `name`, `year\|null`, `cover_url\|null`, `score`). Use when suggest has no usable match; pass the chosen `igdb_id` to `POST /games`. `503` rate-limited; `502` other IGDB error. |
+| `POST` | `/api/v1/games/match` | Synchronous IGDB candidate search — no DB write. Body: `{"query": "<string>"}`. Returns `list[IGDBCandidateOut]` (`igdb_id`, `name`, `year\|null`, `cover_url\|null`, `score`). Use when suggest has no usable match; pass the chosen `igdb_id` to `POST /games`. Rate limited to 20/hour per credential (`429`). `503` rate-limited; `502` other IGDB error. |
 | `GET` | `/api/v1/games/{id}` | Single game by id, same `GameResponse` shape as `GET /games` list items (`is_ignored`, `is_accepted`, `total_seconds`, `last_played`). Access is session-derived: `404` unless the caller has at least one visible session for the game (also covers a non-existent `id`). `is_ignored` / library-visibility filters do not apply — the caller navigated by id, so an ignored or `NEEDS_REVIEW` game still resolves. `total_seconds`/`last_played` match the library card (COMPLETED + ONGOING counted live). For deep links to `/library/:id` (refresh, bookmark, post-merge redirect) without needing to page the list. |
 | `GET` | `/api/v1/games/{id}/sessions` | Paginated session list for a game. `is_ignored` does not apply — same visibility rules as other session reads (soft-deleted and flicker rows excluded). |
 | `GET` | `/api/v1/games/{id}/stats` | Lifetime playtime stats for a single game — `total_seconds` (ONGOING counted live via `now() - start_time`), `session_count`, `first_played`, `last_played`. `404` when the caller has no visible sessions for the game (also covers a non-existent `game_id`). |
@@ -180,7 +203,10 @@ Fields: `id`, `primary_name`, `cover_image_url`, `cover_source`, `enrichment_sta
 | `201` | New game row created (either mode) |
 | `404` | IGDB has no record for the provided `igdb_id` |
 | `422` | Both modes active, neither mode active, or `name` is blank with `unrecognized: true` |
+| `429` | Caller exceeded 60 requests/hour (per credential) |
 | `503` | IGDB rate-limited or auth expired (igdb_id mode only) |
+
+Rate limited to **60/hour per credential**. Looser than `POST /games/match` because igdb_id mode deduplicates before calling IGDB and unrecognized mode never calls it — the cap bounds a looping client without blocking a genuine library backfill.
 
 ### `GET /games/suggest` — global catalog fuzzy search
 
@@ -231,6 +257,8 @@ Returns `401` without a valid bearer token. Returns `422` if `q` is blank or whi
 
 Search IGDB synchronously and return ranked candidates for `query`. No DB write — callers display the pick-list and submit the chosen `igdb_id` to `POST /games`. Intended for the manual discovery wizard's "search online" step when the local catalog suggest has no usable match.
 
+Returns **up to 10** candidates, relevance-ranked by IGDB. (The enrichment worker's separate search still takes 5 — see [game-matching.md](game-matching.md).)
+
 **Request body**
 
 | Field | Type | Required | Description |
@@ -248,6 +276,8 @@ Search IGDB synchronously and return ranked candidates for `query`. No DB write 
 | `score` | `float` | Ranking confidence score |
 
 Returns `401` without a valid bearer token. Returns `503` when IGDB is rate-limited or the Twitch auth token has expired. Returns `502` on any other IGDB failure (logged server-side).
+
+Rate limited to **20/hour per credential** — `429` past that. Every call spends one request from the IGDB budget, which Twitch throttles per Client ID and which the Celery enrichment worker draws from too, so one looping client would otherwise starve the whole deployment.
 
 ## Admin
 

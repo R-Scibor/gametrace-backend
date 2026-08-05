@@ -73,6 +73,25 @@ async def test_skips_user_with_push_disabled(db, patch_redis, mock_send):
     mock_send.assert_not_called()
 
 
+async def test_skips_user_scheduled_for_deletion(db, patch_redis, mock_send):
+    now = datetime.now(timezone.utc)
+    user = await make_user(
+        db,
+        discord_id="900000000000000006",
+        username="pending_deletion",
+        deletion_requested_at=now,
+        purge_at=now + timedelta(days=6),
+    )
+    game = await make_game(db, primary_name="Hades")
+    start = now - timedelta(days=2)
+    await make_session(db, user.discord_id, game.id, start, start + timedelta(hours=3))
+
+    sent = await wr._run_weekly_report(db)
+
+    assert sent == 0
+    mock_send.assert_not_called()
+
+
 async def test_sends_to_enabled_user(db, patch_redis, mock_send):
     user = await make_user(
         db, discord_id="900000000000000003", username="enabled"

@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.deletion import PendingDeletion
+
 
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=100)
@@ -13,6 +15,7 @@ class LoginResponse(BaseModel):
     timezone: str
     is_admin: bool
     needs_server_join: bool = False
+    pending_deletion: PendingDeletion | None = None
 
 
 class LinkCodeRequest(BaseModel):

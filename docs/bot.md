@@ -33,6 +33,7 @@ Upserts a `users` row (new users get `settings.default_timezone`, not the `UTC` 
 
 - New user → INSERT, reply includes a short onboarding blurb about what GameTrace does (and a link to the web app, if `GAMETRACE_WEB_URL` is set).
 - Existing user → sync the `username` field in case the user renamed on Discord; terse reply: "Już jesteś zarejestrowany."
+- Existing user **scheduled for deletion** → the `users` row still exists (deletion is a grace-period sweep, not immediate), so the plain "already registered" reply would be actively misleading. Instead the reply states the account is scheduled for deletion and the purge date, and directs the user to log into the app **and then** cancel the deletion in settings — two explicit steps, never "already registered". Logging in alone does not cancel anything (see [`/profile/me/deletion`](api.md)).
 
 Use this when a user wants to be tracked by the bot without logging into the mobile app yet.
 
@@ -56,7 +57,7 @@ Revokes **all** active app sessions for the user:
 1. Deletes every `user_auth_tokens` row for the user's `discord_id`.
 2. Discards any pending link code in Redis.
 
-Reply: `Wylogowano. Unieważniono N sesji w aplikacji.` (or `Nie jesteś zarejestrowany.` if the user has no `users` row).
+Reply: `Wylogowano. Unieważniono N tokenów logowania w aplikacji.` (or `Nie jesteś zarejestrowany.` if the user has no `users` row).
 
 ### `/stats`
 
@@ -64,6 +65,7 @@ Reports the caller's last 7 days, mirroring `GET /stats/summary?days=7`: total p
 
 - Unregistered caller → `NOT_REGISTERED` reply ("Nie jesteś zarejestrowany..."), no API call made.
 - Registered but nothing played in the window → an encouraging "still watching, come back after you play" reply, not a bare empty state.
+- Account scheduled for deletion → see [pending-deletion 403 handling](#read-commands-defer-degradation-and-access-path) below.
 - Read-only — never creates a `users` row (unlike `/register`/`/login`).
 
 ### `/recent`
@@ -72,6 +74,7 @@ Reports the caller's last 5 non-ongoing sessions (`GET /sessions?status=COMPLETE
 
 - Unregistered caller → `NOT_REGISTERED` reply, no API call made.
 - Registered but no history yet → an encouraging empty-state reply, same bar as `/stats`.
+- Account scheduled for deletion → see [pending-deletion 403 handling](#read-commands-defer-degradation-and-access-path) below.
 - Requests `library_only=true`, so sessions on ignored games or unaccepted `NEEDS_REVIEW` stubs are excluded, matching what the Dashboard "Recents" tile shows.
 - Read-only — never creates a `users` row.
 
@@ -92,6 +95,8 @@ Posts the onboarding panel (see [Onboarding panel](#onboarding-panel) below) as 
 `/stats` and `/recent` call `interaction.response.defer(ephemeral=True)` before any I/O — a cold container's DB lookup plus the HTTP round-trip to the API can exceed Discord's ~3-second ack deadline, which would otherwise surface as a false "this interaction failed" to the user. `/help` does neither DB lookup nor defer since it has no I/O to wait on.
 
 Both read commands call the API via `app/bot/api_client.py` using the [bot service credential](api.md#bot-service-credential-internal) (`X-Bot-Service-Secret` + `X-Discord-Id`), authenticated server-side by `get_bot_user`/`get_current_or_bot_user`. If the API is unreachable, times out (5s), or returns a non-2xx/non-JSON response, the command catches `BotApiError` and replies with a friendly Polish failure message (`Nie udało się pobrać statystyk...` / `Nie udało się pobrać ostatnich sesji...`) instead of raising. **This failure mode is isolated to the two read commands** — presence recording (`on_presence_update`) talks to Postgres directly and is completely unaffected by the API being down.
+
+**Pending-deletion 403 is a distinct case, not a generic failure.** `get_bot_user` 403s an account scheduled for deletion with a structured body (`{"detail": {"detail": "Account scheduled for deletion", "purge_at": ..., "days_left": ...}}` — see [`/profile/me/deletion`](api.md)). `api_client._get` recognises this exact shape and raises `PendingDeletionError` (a `BotApiError` subclass) instead of the generic error; `stats_command`/`recent_command` catch it *before* the generic `except BotApiError` and reply with copy naming the purge date and directing the user to log into the app and cancel the deletion there explicitly, instead of the opaque "couldn't fetch" message. A 403 that doesn't match the marker shape (e.g. a genuine authorization failure) falls through to the generic `BotApiError` path unchanged — the distinction is made on body content, not status code alone.
 
 ### Timezone resolution in `/recent`
 
@@ -143,7 +148,7 @@ Required permissions in that channel:
 `on_presence_update` fires whenever any cached member changes activity. The `on_presence_update` handler does:
 
 1. **Filter:** ignore bots; ignore presence changes that didn't change the playing-game name.
-2. **Gate:** look up the user in `users`. If they haven't run `/register` or `/login`, return — the bot is "blind" to non-registered users.
+2. **Gate:** look up the user in `users` via `get_user_if_tracked`. If they haven't run `/register` or `/login`, return — the bot is "blind" to non-registered users. Accounts scheduled for deletion (`purge_at IS NOT NULL`) are treated the same way — `get_user_if_tracked` returns `None` for them, so presence writes stop the instant a deletion is scheduled.
 3. **Resolve game:** for an active game name, find or create a `games` row via `game_aliases.discord_process_name`. New games are inserted as a stub (just the process name) and queued for async enrichment via Celery.
 4. **Apply transition** to the user's current `ONGOING` session (if any):
 
@@ -215,6 +220,7 @@ The 12h ceiling is intentionally generous — it's a backstop for "user fell asl
 - **No graceful shutdown of `ONGOING` on bot stop.** A bot restart that closes sessions on the way down would split one continuous play session into two whenever the container redeploys — which it does often. Leaving ONGOING alone and reconciling on startup gives seamless continuation in the common case.
 - **`notes` is system-owned.** Self-Healing writes the human-readable reason (`"switched from X to Y"`, `"no longer in-game"`, `"12h threshold"`) into `game_sessions.notes`. The frontend surfaces this read-only in the Napraw/Odrzuć flow so the user knows why a session needs attention.
 - **`source=BOT` distinction.** Manual sessions (`source=MANUAL`) are written by the API, skip the state machine, and land directly as `COMPLETED`. Self-Healing only touches `source=BOT, status=ONGOING`.
+- **Accounts scheduled for deletion never get a new `ONGOING` session.** Self-Healing never calls `get_user_if_tracked`, so it needs its own check: it joins `users` on each `ONGOING` row and, on the switched-game branch, still errors the stale session but skips `start_session` when that user's `purge_at` is set. This closes a race the presence gate alone can't: a presence event already in flight when a deletion is scheduled can leave an `ONGOING` session behind, and a later bot restart would otherwise reopen it as a fresh session for an account queued for erasure.
 
 ## Failure modes worth knowing
 

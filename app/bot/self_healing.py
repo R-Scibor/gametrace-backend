@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.session_lock import user_session_lock
 from app.bot.session_manager import error_session, get_or_create_game, start_session
 from app.models.session import GameSession, SessionStatus
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +50,18 @@ async def run_self_healing(db: AsyncSession, guilds: list[discord.Guild]) -> Non
     logger.info("Self-Healing: starting reconciliation...")
 
     result = await db.execute(
-        select(GameSession).where(
+        select(GameSession, User.purge_at)
+        .join(User, User.discord_id == GameSession.user_id)
+        .where(
             GameSession.status == SessionStatus.ONGOING,
             GameSession.deleted_at.is_(None),
         )
     )
-    ongoing_sessions: list[GameSession] = list(result.scalars().all())
+    rows = list(result.all())
+    ongoing_sessions: list[GameSession] = [row[0] for row in rows]
+    scheduled_for_deletion: dict[int, bool] = {
+        row[0].id: row[1] is not None for row in rows
+    }
 
     if not ongoing_sessions:
         logger.info("Self-Healing: no ONGOING sessions found, nothing to do.")
@@ -109,6 +116,14 @@ async def run_self_healing(db: AsyncSession, guilds: list[discord.Guild]) -> Non
                     session,
                     f"Self-Healing: bot restarted, player switched from {session_game_name!r} to {current_game!r}.",
                 )
+                if scheduled_for_deletion.get(session.id):
+                    logger.info(
+                        "Self-Healing: session_id=%d ERROR, new session skipped — "
+                        "user %s is scheduled for deletion.",
+                        session.id,
+                        session.user_id,
+                    )
+                    continue
                 new_game, _ = await get_or_create_game(db, current_game)
                 await start_session(db, session.user_id, new_game.id)
                 logger.info(

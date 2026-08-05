@@ -4,7 +4,7 @@ import pytest
 
 from app.core.config import settings
 from app.models.user import UserAuthToken
-from tests.factories import make_token, make_user
+from tests.factories import dt, make_token, make_user
 
 DEV_SECRET = "test-dev-secret"
 DEV_HEADERS = {"X-Dev-Login-Secret": DEV_SECRET}
@@ -97,6 +97,36 @@ async def test_login_utc_timezone_not_stored(client, db, dev_login_enabled):
 
     assert resp.status_code == 200
     assert resp.json()["timezone"] == "Europe/Warsaw"
+
+
+async def test_login_unscheduled_user_pending_deletion_is_null(client, db, dev_login_enabled):
+    await make_user(db)
+
+    resp = await client.post(
+        "/api/v1/auth/login", json={"username": "testuser"}, headers=DEV_HEADERS
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["pending_deletion"] is None
+
+
+async def test_login_scheduled_user_returns_pending_deletion(client, db, dev_login_enabled):
+    purge_at = dt(hours_from_now=25)  # 25h out -> ceil to 2 days
+    await make_user(
+        db,
+        deletion_requested_at=dt(hours_ago=2),
+        purge_at=purge_at,
+    )
+
+    resp = await client.post(
+        "/api/v1/auth/login", json={"username": "testuser"}, headers=DEV_HEADERS
+    )
+
+    assert resp.status_code == 200
+    pending = resp.json()["pending_deletion"]
+    assert pending is not None
+    assert pending["days_left"] == 2
+    assert pending["purge_at"] is not None
 
 
 async def test_login_disabled_when_secret_unset_returns_404(client, db, monkeypatch):

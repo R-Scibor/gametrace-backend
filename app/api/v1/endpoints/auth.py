@@ -20,7 +20,9 @@ from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
 )
+from app.schemas.deletion import PendingDeletion
 from app.services import discord_oauth, link_codes
+from app.services.account_deletion import days_left as _days_left
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,33 @@ _bearer_scheme_optional = HTTPBearer(auto_error=False)
 
 def _token_expiry() -> datetime:
     return datetime.now(timezone.utc) + timedelta(days=settings.session_token_expire_days)
+
+
+def _login_response(
+    user: User, token_value: str, *, needs_server_join: bool = False
+) -> LoginResponse:
+    """Shared builder for all three login paths (/login, /link, /discord).
+
+    Logging in never cancels a scheduled deletion — it only surfaces it here
+    so the client can offer a cancel dialog. pending_deletion stays None for
+    normal accounts.
+    """
+    pending_deletion = None
+    if user.purge_at is not None:
+        pending_deletion = PendingDeletion(
+            deletion_requested_at=user.deletion_requested_at,
+            purge_at=user.purge_at,
+            days_left=_days_left(user.purge_at),
+        )
+    return LoginResponse(
+        token=token_value,
+        discord_id=user.discord_id,
+        username=user.username,
+        timezone=user.timezone,
+        is_admin=user.is_admin,
+        needs_server_join=needs_server_join,
+        pending_deletion=pending_deletion,
+    )
 
 
 @router.post("/login", response_model=LoginResponse, status_code=status.HTTP_200_OK)
@@ -76,13 +105,7 @@ async def login(
     await db.commit()
     await db.refresh(user)
 
-    return LoginResponse(
-        token=token_value,
-        discord_id=user.discord_id,
-        username=user.username,
-        timezone=user.timezone,
-        is_admin=user.is_admin,
-    )
+    return _login_response(user, token_value)
 
 
 @router.post("/link", response_model=LoginResponse, status_code=status.HTTP_200_OK)
@@ -152,13 +175,7 @@ async def link_login(
     await db.commit()
     await db.refresh(user)
 
-    return LoginResponse(
-        token=token_value,
-        discord_id=user.discord_id,
-        username=user.username,
-        timezone=user.timezone,
-        is_admin=user.is_admin,
-    )
+    return _login_response(user, token_value)
 
 
 @router.post("/discord", response_model=LoginResponse, status_code=status.HTTP_200_OK)
@@ -216,14 +233,7 @@ async def discord_login(payload: DiscordCallbackRequest, db: AsyncSession = Depe
         )
     await db.refresh(user)
 
-    return LoginResponse(
-        token=token_value,
-        discord_id=user.discord_id,
-        username=user.username,
-        timezone=user.timezone,
-        is_admin=user.is_admin,
-        needs_server_join=needs_server_join,
-    )
+    return _login_response(user, token_value, needs_server_join=needs_server_join)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -243,11 +253,30 @@ async def logout(
     await db.commit()
 
 
-async def get_current_user(
+def _pending_deletion_error(user: User) -> HTTPException:
+    """Build the structured 403 for an account scheduled for deletion.
+
+    days_left is a CEILING of the remaining time so it never reads 0 while
+    the account still exists (e.g. 25h left -> 2, not 1).
+    """
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "detail": "Account scheduled for deletion",
+            "deletion_requested_at": user.deletion_requested_at.isoformat(),
+            "purge_at": user.purge_at.isoformat(),
+            "days_left": _days_left(user.purge_at),
+        },
+    )
+
+
+async def get_current_user_allow_pending(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Dependency — resolves Bearer token to a User, refreshes last_active, raises 401 if invalid/expired."""
+    """Dependency — resolves Bearer token to a User, refreshes last_active, raises 401 if
+    invalid/expired. Unlike get_current_user, does NOT reject accounts scheduled for deletion.
+    """
     result = await db.execute(
         select(UserAuthToken).where(
             UserAuthToken.token == UserAuthToken.hash_token(credentials.credentials)
@@ -272,6 +301,17 @@ async def get_current_user(
         await db.commit()
 
     user = await db.get(User, token.user_id)
+    return user
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Dependency — resolves Bearer token to a User, raises 403 if scheduled for deletion."""
+    user = await get_current_user_allow_pending(credentials=credentials, db=db)
+    if user.purge_at is not None:
+        raise _pending_deletion_error(user)
     return user
 
 
@@ -302,6 +342,9 @@ async def get_bot_user(
     user = await db.get(User, x_discord_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if user.purge_at is not None:
+        raise _pending_deletion_error(user)
 
     return user
 

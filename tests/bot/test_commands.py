@@ -1,5 +1,6 @@
 """Bot slash command logic — register, login code, logout."""
 import secrets
+from datetime import datetime, timedelta, timezone
 
 import fakeredis.aioredis
 import pytest
@@ -77,6 +78,41 @@ async def test_register_does_not_overwrite_existing_timezone(db):
 
     user = await db.get(User, _DISCORD_ID)
     assert user.timezone == "America/New_York"
+
+
+async def test_register_scheduled_for_deletion_does_not_claim_already_registered(db):
+    # Mechanism, not wording: an account with purge_at set must not take the
+    # created=False "already registered" branch — that reply would be
+    # actively misleading for an account queued for erasure.
+    purge_at = datetime.now(timezone.utc) + timedelta(days=3)
+    await make_user(
+        db,
+        discord_id=_DISCORD_ID,
+        username="oldname",
+        deletion_requested_at=datetime.now(timezone.utc),
+        purge_at=purge_at,
+    )
+
+    msg = await register_user(db, _DISCORD_ID, "newname")
+
+    assert "już zarejestrowany" not in msg.lower()
+    assert "usunię" in msg.lower()  # scheduled-deletion copy mentions it
+
+
+async def test_register_scheduled_for_deletion_still_syncs_username(db):
+    purge_at = datetime.now(timezone.utc) + timedelta(days=3)
+    await make_user(
+        db,
+        discord_id=_DISCORD_ID,
+        username="oldname",
+        deletion_requested_at=datetime.now(timezone.utc),
+        purge_at=purge_at,
+    )
+
+    await register_user(db, _DISCORD_ID, "newname")
+
+    user = await db.get(User, _DISCORD_ID)
+    assert user.username == "newname"
 
 
 async def test_issue_login_code_creates_user_and_redeemable_code(db, r, monkeypatch):

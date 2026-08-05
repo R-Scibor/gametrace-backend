@@ -63,6 +63,7 @@ async def _run_weekly_report(db: AsyncSession) -> int:
             select(User).where(
                 User.weekly_report_enabled == True,  # noqa: E712
                 User.push_enabled == True,  # noqa: E712
+                User.purge_at.is_(None),
             )
         )
     ).scalars().all()

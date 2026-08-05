@@ -8,6 +8,7 @@ import redis.exceptions
 
 from app.core.config import settings
 from app.services import link_codes
+from tests.factories import dt, make_user
 
 _SECRET = "test-link-code-secret"
 
@@ -44,6 +45,35 @@ async def test_link_happy_path_token_works(client, db, user, redis_client):
         headers={"Authorization": f"Bearer {data['token']}"},
     )
     assert protected.status_code == 200
+
+
+async def test_link_unscheduled_user_pending_deletion_is_null(client, db, user, redis_client):
+    code = await link_codes.issue_code(redis_client, user.discord_id)
+
+    resp = await client.post("/api/v1/auth/link", json={"code": code})
+
+    assert resp.status_code == 200
+    assert resp.json()["pending_deletion"] is None
+
+
+async def test_link_scheduled_user_returns_pending_deletion(client, db, redis_client):
+    purge_at = dt(hours_from_now=25)  # 25h out -> ceil to 2 days
+    scheduled = await make_user(
+        db,
+        discord_id="666666666666666666",
+        username="scheduled-link",
+        deletion_requested_at=dt(hours_ago=2),
+        purge_at=purge_at,
+    )
+    code = await link_codes.issue_code(redis_client, scheduled.discord_id)
+
+    resp = await client.post("/api/v1/auth/link", json={"code": code})
+
+    assert resp.status_code == 200
+    pending = resp.json()["pending_deletion"]
+    assert pending is not None
+    assert pending["days_left"] == 2
+    assert pending["purge_at"] is not None
 
 
 async def test_spaced_code_accepted(client, db, user, redis_client, monkeypatch):

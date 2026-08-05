@@ -133,3 +133,22 @@ async def test_recent_api_error_returns_friendly_polish_copy(mock_recent, db):
     msg = await recent_command(db, _DISCORD_ID)
 
     assert "nie udało się" in msg.lower()
+
+
+@patch("app.bot.commands.api_client.get_recent_sessions", new_callable=AsyncMock)
+async def test_recent_pending_deletion_is_not_reported_as_generic_failure(mock_recent, db):
+    # Mechanism check: PendingDeletionError is a BotApiError subclass, so this
+    # verifies recent_command routes it to the dedicated branch instead of
+    # falling into the generic `except BotApiError` -> RECENT_FAILURE path.
+    from app.bot.api_client import PendingDeletionError
+    from app.bot import replies
+
+    await make_user(db, discord_id=_DISCORD_ID, username=_USERNAME)
+    mock_recent.side_effect = PendingDeletionError(
+        purge_at="2026-08-15T00:00:00+00:00", days_left=4
+    )
+
+    msg = await recent_command(db, _DISCORD_ID)
+
+    assert msg != replies.RECENT_FAILURE
+    assert "nie udało się" not in msg.lower()
