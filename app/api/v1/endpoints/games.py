@@ -3,13 +3,14 @@ import logging
 from datetime import date
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import Integer, and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.v1.endpoints.auth import get_current_or_bot_user, get_current_user
 from app.core.database import get_db
+from app.core.rate_limit import limiter
 from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
@@ -231,7 +232,9 @@ async def list_games(
 # ---------------------------------------------------------------------------
 
 @router.post("", response_model=GameResponse, status_code=201)
+@limiter.limit("60/hour")
 async def create_or_link_game(
+    request: Request,
     body: GameCreateRequest,
     response: Response,
     db: AsyncSession = Depends(get_db),
@@ -247,6 +250,11 @@ async def create_or_link_game(
 
     Optional *query* is stored as a GameAlias so future voice/resolve calls
     can map the typed string to the game.
+
+    Rate limited to 60/hour per credential (429 past that). Looser than
+    /games/match: igdb_id mode dedupes before calling IGDB and unrecognized
+    mode never calls it, so this bounds a looping client without blocking a
+    genuine library backfill. The limiter needs the *request* parameter.
     """
     if body.igdb_id is not None:
         # ── igdb_id mode ────────────────────────────────────────────────────
@@ -458,7 +466,9 @@ async def suggest_games(
 # ---------------------------------------------------------------------------
 
 @router.post("/match", response_model=list[IGDBCandidateOut])
+@limiter.limit("20/hour")
 async def match_game(
+    request: Request,
     body: GameMatchRequest,
     user: User = Depends(get_current_user),
 ):
@@ -469,9 +479,16 @@ async def match_game(
     No DB write — callers receive a pick-list and submit the chosen IGDB id to
     POST /sessions or another endpoint.
 
+    Every call spends one request from the IGDB budget, which Twitch throttles
+    per Client ID (4 req/s) — shared by every user *and* the Celery enrichment
+    worker. Hence the 20/hour per-credential cap: generous for honest wizard
+    use, and it stops one looping client from starving the rest.
+    The limiter requires the *request* parameter.
+
     Errors:
       503 — IGDB rate-limited or auth expired (_RateLimited)
       502 — any other IGDB failure
+      429 — caller exceeded 20/hour
     """
     try:
         candidates = await asyncio.to_thread(_igdb_search_candidates, body.query)
