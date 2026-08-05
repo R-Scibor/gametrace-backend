@@ -261,3 +261,32 @@ class TestIgdbFetchById:
         with _patch_igdb(mock_client):
             with pytest.raises(_RateLimited):
                 _igdb_fetch_by_id(1942)
+
+
+# ---------------------------------------------------------------------------
+# Candidate count — the two search functions must NOT move together
+# ---------------------------------------------------------------------------
+
+class TestCandidateLimits:
+    """`limit` lives in the APIcalypse body, so raising it costs no extra
+    request — IGDB throttles requests, not rows. Only the payload grows."""
+
+    @staticmethod
+    def _query_body(fn, *args) -> str:
+        mock_client = _make_mock_client([])
+        with _patch_igdb(mock_client):
+            fn(*args)
+        return mock_client.post.call_args.kwargs["content"]
+
+    def test_candidates_search_asks_for_10(self):
+        """Human-in-the-loop pick-list — extra rows help ambiguous titles
+        (FIFA, Resident Evil) and cost the user nothing but scrolling."""
+        assert "limit 10;" in self._query_body(_igdb_search_candidates, "witcher 3")
+
+    def test_enrichment_search_still_asks_for_5(self):
+        """_igdb_search feeds the unattended Celery worker, which auto-accepts
+        the best match above 0.85 with no human in the loop. Widening its
+        candidate pool would silently change which stubs auto-match to what."""
+        from app.services.game_matching import _igdb_search
+
+        assert "limit 5;" in self._query_body(_igdb_search, "witcher 3")

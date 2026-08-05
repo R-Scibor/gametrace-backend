@@ -245,6 +245,8 @@ Returns `401` without a valid bearer token. Returns `422` if `q` is blank or whi
 
 Search IGDB synchronously and return ranked candidates for `query`. No DB write — callers display the pick-list and submit the chosen `igdb_id` to `POST /games`. Intended for the manual discovery wizard's "search online" step when the local catalog suggest has no usable match.
 
+Returns **up to 10** candidates, relevance-ranked by IGDB. (The enrichment worker's separate search still takes 5 — see [game-matching.md](game-matching.md).)
+
 **Request body**
 
 | Field | Type | Required | Description |
