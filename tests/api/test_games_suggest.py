@@ -210,6 +210,27 @@ async def test_fallback_floor_clears_alias_admitted_noise(authed_client, db, use
     assert game.id not in ids
 
 
+async def test_fallback_floor_stays_below_the_sequel_cap(authed_client, db, user):
+    """Pins the ceiling the fallback floor must stay under.
+
+    A typo'd token sends this to the fallback. _confidence caps any digitless
+    query against a numbered title at _NUMBER_MISMATCH_CAP (0.75), so *every*
+    numbered-sequel typo rescue scores exactly 0.75 — never higher, however
+    good the match. The fallback floor therefore has only 0.05 of headroom;
+    raising it to 0.8 would silently drop this whole class of rescue.
+    """
+    game = await make_game(db, "Red Dead Redemption 2")
+
+    resp = await authed_client.get(
+        "/api/v1/games/suggest", params={"q": "red dead redemtion"}
+    )
+
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert game.id in [item["game_id"] for item in items]
+    assert items[0]["score"] == 0.75
+
+
 async def test_regex_metacharacters_in_q_are_escaped(authed_client, db, user):
     """User input reaches a regex operator — it must be escaped, not executed."""
     await make_game(db, "Hades")

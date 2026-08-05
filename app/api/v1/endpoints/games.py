@@ -383,7 +383,13 @@ async def resolve_game(
 # on its alias "The Elder Scrolls V: Skyrim - Special Edition" (a real
 # word-boundary `The`) and then scores 0.6 on its *primary name*. Genuine
 # rescues ("hades zzzznomatch" → Hades, "the divison" → The Division) run
-# 0.75–0.95. 0.7 sits between the bands with margin on both sides.
+# 0.75–0.95. 0.7 sits between the bands.
+#
+# Headroom above 0.7 is only 0.05, and it is a hard ceiling: _confidence caps
+# any digitless query against a numbered title at _NUMBER_MISMATCH_CAP (0.75),
+# so every numbered-sequel typo rescue scores exactly 0.75, however good the
+# match. Raising this floor to 0.8 silently drops that whole class — see
+# test_fallback_floor_stays_below_the_sequel_cap.
 _SUGGEST_FLOOR = 0.3
 _SUGGEST_FALLBACK_FLOOR = 0.7
 
