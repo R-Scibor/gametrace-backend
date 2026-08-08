@@ -19,7 +19,7 @@ from app.core.redis import get_redis
 from app.models.account_deletion_event import (
     EVENT_CANCELLED,
     EVENT_REQUESTED,
-    AccountDeletionEvent,
+    record_deletion_event,
 )
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User, UserAuthToken, UserDevice
@@ -49,7 +49,15 @@ def days_left(purge_at: datetime) -> int:
 
 async def schedule_deletion(db: AsyncSession, user: User) -> User:
     """Idempotent — a second call for an already-scheduled account returns the
-    existing `deletion_requested_at`/`purge_at` untouched, no re-work."""
+    existing `deletion_requested_at`/`purge_at` untouched, no re-work.
+
+    Locks the row (`SELECT ... FOR UPDATE`) before the idempotency check so
+    concurrent duplicate requests for the same account serialize instead of
+    both passing the check and each inserting a `requested` audit row.
+    """
+    user = (
+        await db.execute(select(User).where(User.discord_id == user.discord_id).with_for_update())
+    ).scalar_one()
     if user.purge_at is not None:
         return user
 
@@ -59,13 +67,7 @@ async def schedule_deletion(db: AsyncSession, user: User) -> User:
 
     # Insert before token/device deletes and error_session (which commits
     # internally) so the first flush includes the audit row.
-    db.add(
-        AccountDeletionEvent(
-            discord_id=user.discord_id,
-            event=EVENT_REQUESTED,
-            purge_at=user.purge_at,
-        )
-    )
+    record_deletion_event(db, user.discord_id, EVENT_REQUESTED, purge_at=user.purge_at)
 
     await db.execute(delete(UserAuthToken).where(UserAuthToken.user_id == user.discord_id))
     await db.execute(delete(UserDevice).where(UserDevice.user_id == user.discord_id))
@@ -105,17 +107,18 @@ async def cancel_deletion(db: AsyncSession, user: User) -> bool:
     Does NOT restore what schedule_deletion already destroyed: auth tokens and
     device registrations stay revoked, and any session errored out at request
     time stays ERROR. Only the grace-period columns are cleared.
+
+    Locks the row before the check for the same reason as schedule_deletion:
+    concurrent calls must serialize, not both pass and each write a
+    `cancelled` audit row.
     """
+    user = (
+        await db.execute(select(User).where(User.discord_id == user.discord_id).with_for_update())
+    ).scalar_one()
     if user.purge_at is None:
         return False
 
-    db.add(
-        AccountDeletionEvent(
-            discord_id=user.discord_id,
-            event=EVENT_CANCELLED,
-            purge_at=None,
-        )
-    )
+    record_deletion_event(db, user.discord_id, EVENT_CANCELLED)
     user.deletion_requested_at = None
     user.purge_at = None
 
