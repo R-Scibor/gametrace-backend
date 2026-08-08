@@ -16,6 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.session_manager import error_session
 from app.core.config import settings
 from app.core.redis import get_redis
+from app.models.account_deletion_event import (
+    EVENT_CANCELLED,
+    EVENT_REQUESTED,
+    AccountDeletionEvent,
+)
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User, UserAuthToken, UserDevice
 from app.services import link_codes
@@ -51,6 +56,16 @@ async def schedule_deletion(db: AsyncSession, user: User) -> User:
     now = datetime.now(timezone.utc)
     user.deletion_requested_at = now
     user.purge_at = now + timedelta(days=settings.account_deletion_grace_days)
+
+    # Insert before token/device deletes and error_session (which commits
+    # internally) so the first flush includes the audit row.
+    db.add(
+        AccountDeletionEvent(
+            discord_id=user.discord_id,
+            event=EVENT_REQUESTED,
+            purge_at=user.purge_at,
+        )
+    )
 
     await db.execute(delete(UserAuthToken).where(UserAuthToken.user_id == user.discord_id))
     await db.execute(delete(UserDevice).where(UserDevice.user_id == user.discord_id))
@@ -94,6 +109,13 @@ async def cancel_deletion(db: AsyncSession, user: User) -> bool:
     if user.purge_at is None:
         return False
 
+    db.add(
+        AccountDeletionEvent(
+            discord_id=user.discord_id,
+            event=EVENT_CANCELLED,
+            purge_at=None,
+        )
+    )
     user.deletion_requested_at = None
     user.purge_at = None
 
@@ -101,3 +123,4 @@ async def cancel_deletion(db: AsyncSession, user: User) -> bool:
     await db.refresh(user)
 
     return True
+
