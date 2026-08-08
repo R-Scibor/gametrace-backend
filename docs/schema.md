@@ -2,7 +2,7 @@
 
 Source of truth: SQLAlchemy models in `app/models/` and Alembic migrations in `alembic/versions/`.
 
-Eight tables total. All timestamps are stored as `TIMESTAMP WITH TIME ZONE` in UTC. Soft-delete is via `deleted_at` columns where applicable.
+Nine tables total. All timestamps are stored as `TIMESTAMP WITH TIME ZONE` in UTC. Soft-delete is via `deleted_at` columns where applicable.
 
 ## Tables
 
@@ -167,6 +167,39 @@ In-app user feedback submitted via `POST /reports`. Triaged by admins via `GET /
 
 `ON DELETE CASCADE` on `user_id` — deleting a user removes their reports along with them.
 
+### `account_deletion_events`
+
+Append-only Art. 17 erasure audit trail. **No foreign key to `users`** — rows must outlive hard purge of the account. Written when a deletion is requested, cancelled, or completed by the nightly purge task.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `BIGINT` | Primary key, autoincrement |
+| `discord_id` | `VARCHAR(32)` | Discord snowflake of the account. Not an FK — the user row may already be gone. |
+| `event` | `VARCHAR(32)` | One of `requested`, `cancelled`, `purged`. Enforced by `ck_account_deletion_events_event`. |
+| `created_at` | `TIMESTAMPTZ` | Default `NOW()`. When the event was recorded. |
+| `purge_at` | `TIMESTAMPTZ` | Nullable. Snapshot of the scheduled purge time — set on `requested` and carried through to `purged`; NULL only on `cancelled`. |
+
+**Indexes:**
+
+- `ix_account_deletion_events_discord_id_created_at` — composite btree on `(discord_id, created_at)`. Migration `0019`.
+
+**Ops SQL (read-only trail inspection):**
+
+```sql
+-- Full trail for one Discord ID (newest first)
+SELECT id, event, created_at, purge_at
+FROM account_deletion_events
+WHERE discord_id = :discord_id
+ORDER BY created_at DESC;
+
+-- Recent purged accounts
+SELECT discord_id, created_at
+FROM account_deletion_events
+WHERE event = 'purged'
+ORDER BY created_at DESC
+LIMIT 50;
+```
+
 ## Relationships at a glance
 
 ```
@@ -197,6 +230,7 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 | `0014_reports_status.py` | Adds `reports.status` (`String(16)`, default `'open'`, `NOT NULL`) with `ck_reports_status` (`open`/`triaged`/`closed`) and the `ix_reports_status_created_at` index for the admin triage inbox. |
 | `0017_reports_admin_note.py` | Adds `reports.admin_note` (`Text`, nullable, no default) for admin triage notes. |
 | `0018_user_account_deletion.py` | Adds `users.deletion_requested_at` and `users.purge_at` (`TIMESTAMPTZ`, nullable, no default) with the partial index `ix_users_purge_at_partial`. |
+| `0019_account_deletion_events.py` | Adds append-only `account_deletion_events` Art. 17 audit table (`discord_id`, `event`, `created_at`, `purge_at`) with `ck_account_deletion_events_event` and index `ix_account_deletion_events_discord_id_created_at`. No FK to `users`. |
 
 ## Scheduled tasks (Celery Beat)
 
@@ -204,7 +238,7 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 |---|---|---|
 | `tasks.weekly_report` | Monday 09:00 | FCM digest for users with `weekly_report_enabled` and `push_enabled`; skips accounts scheduled for deletion (`purge_at IS NOT NULL`) |
 | `tasks.hard_delete_sweep` | Daily 03:30 | Purge trashed sessions older than `TRASH_RETENTION_DAYS` (default 7); purge FCM tokens idle 6+ months |
-| `tasks.purge_deleted_accounts` | Daily 03:45 | Permanently delete every `users` row whose `purge_at` has passed (`DELETE FROM users WHERE purge_at <= now`). `ON DELETE CASCADE` on `user_id` erases that account's sessions, preferences, tokens, devices, reports, and voice usage along with it. Catalog `games` rows have no FK to `users` and are never touched. |
+| `tasks.purge_deleted_accounts` | Daily 03:45 | Permanently delete every `users` row whose `purge_at` has passed (`DELETE FROM users WHERE purge_at <= now`). `ON DELETE CASCADE` on `user_id` erases that account's sessions, preferences, tokens, devices, reports, and voice usage along with it. Catalog `games` rows have no FK to `users` and are never touched. In the same transaction, the task also inserts one `purged` event per deleted `discord_id` into `account_deletion_events`. |
 | `tasks.purge_flicker_sessions` | Daily 04:00 | Hard-delete `COMPLETED` flicker rows whose `end_time` is older than `SESSION_FLICKER_GC_MARGIN_SECONDS` (default 86400s). Runs after `hard_delete_sweep` to keep the two sweepers separate. |
 
 The account-deletion grace period (`users.deletion_requested_at` → `purge_at`) is 7 days (`ACCOUNT_DELETION_GRACE_DAYS`, default 7). Because `tasks.purge_deleted_accounts` only runs once nightly, the actual purge lands up to ~24h after the 7-day mark — never before it. Purging removes the row from the live database only; any existing database backups taken before the purge expire on their own separate retention schedule.

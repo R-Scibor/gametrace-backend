@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.celery_app import celery_app
 from app.core.config import settings
+from app.models.account_deletion_event import EVENT_PURGED, record_deletion_event
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User, UserDevice
 
@@ -108,19 +109,25 @@ def purge_flicker_sessions() -> int:
 async def _run_purge(db: AsyncSession) -> int:
     """Permanently remove accounts whose grace period has expired.
 
-    A single `DELETE FROM users WHERE purge_at <= now` — every user-owned
-    table (game_sessions, user_game_preferences, user_auth_tokens,
-    user_devices, reports, voice_usage) has `ondelete="CASCADE"` on its FK to
-    users.discord_id, so the database removes all of it. Catalog `games` has
-    no FK to users and is never touched.
+    DELETE … RETURNING, then one account_deletion_events row per id
+    (event=purged) in the same transaction. Catalog games are untouched.
     """
     now = datetime.now(timezone.utc)
-    deleted = (
-        await db.execute(delete(User).where(User.purge_at <= now))
-    ).rowcount or 0
+    result = await db.execute(
+        delete(User)
+        .where(User.purge_at <= now)
+        .returning(User.discord_id, User.purge_at)
+    )
+    rows = result.all()  # list of (discord_id, purge_at)
+    for discord_id, purge_at in rows:
+        record_deletion_event(db, discord_id, EVENT_PURGED, purge_at=purge_at)
     await db.commit()
-    logger.info("account_deletion_purged", extra={"count": deleted})
-    return deleted
+    discord_ids = [discord_id for discord_id, _ in rows]
+    logger.info(
+        "account_deletion_purged",
+        extra={"count": len(discord_ids), "discord_ids": discord_ids},
+    )
+    return len(discord_ids)
 
 
 async def _run_purge_with_engine() -> int:
