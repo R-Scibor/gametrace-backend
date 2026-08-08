@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.celery_app import celery_app
 from app.core.config import settings
-from app.models.account_deletion_event import EVENT_PURGED, AccountDeletionEvent
+from app.models.account_deletion_event import EVENT_PURGED, record_deletion_event
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User, UserDevice
 
@@ -120,13 +120,7 @@ async def _run_purge(db: AsyncSession) -> int:
     )
     rows = result.all()  # list of (discord_id, purge_at)
     for discord_id, purge_at in rows:
-        db.add(
-            AccountDeletionEvent(
-                discord_id=discord_id,
-                event=EVENT_PURGED,
-                purge_at=purge_at,
-            )
-        )
+        record_deletion_event(db, discord_id, EVENT_PURGED, purge_at=purge_at)
     await db.commit()
     discord_ids = [discord_id for discord_id, _ in rows]
     logger.info(

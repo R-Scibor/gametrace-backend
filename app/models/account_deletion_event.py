@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import BigInteger, CheckConstraint, DateTime, Index, String, func
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -37,3 +38,12 @@ class AccountDeletionEvent(Base):
     purge_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+def record_deletion_event(
+    db: AsyncSession, discord_id: str, event: str, purge_at: datetime | None = None
+) -> None:
+    """Stage an audit row on `db` (caller commits). Shared by schedule_deletion,
+    cancel_deletion, and the purge sweep so the row shape only lives in one
+    place."""
+    db.add(AccountDeletionEvent(discord_id=discord_id, event=event, purge_at=purge_at))
