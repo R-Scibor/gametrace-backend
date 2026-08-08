@@ -177,7 +177,7 @@ Append-only Art. 17 erasure audit trail. **No foreign key to `users`** — rows 
 | `discord_id` | `VARCHAR(32)` | Discord snowflake of the account. Not an FK — the user row may already be gone. |
 | `event` | `VARCHAR(32)` | One of `requested`, `cancelled`, `purged`. Enforced by `ck_account_deletion_events_event`. |
 | `created_at` | `TIMESTAMPTZ` | Default `NOW()`. When the event was recorded. |
-| `purge_at` | `TIMESTAMPTZ` | Nullable. Snapshot of the scheduled purge time (set on `requested`; typically NULL on `cancelled` / `purged`). |
+| `purge_at` | `TIMESTAMPTZ` | Nullable. Snapshot of the scheduled purge time — set on `requested` and carried through to `purged`; NULL only on `cancelled`. |
 
 **Indexes:**
 
