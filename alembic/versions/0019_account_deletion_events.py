@@ -11,6 +11,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
+from app.models.account_deletion_event import _VALID_EVENTS
+
 revision: str = "0019"
 down_revision: Union[str, None] = "0018"
 branch_labels: Union[str, Sequence[str], None] = None
@@ -31,7 +33,7 @@ def upgrade() -> None:
         ),
         sa.Column("purge_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
-            "event IN ('requested', 'cancelled', 'purged')",
+            "event IN (" + ", ".join(f"'{e}'" for e in _VALID_EVENTS) + ")",
             name="ck_account_deletion_events_event",
         ),
         sa.PrimaryKeyConstraint("id"),
