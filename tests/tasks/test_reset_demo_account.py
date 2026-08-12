@@ -71,8 +71,20 @@ async def test_newest_session_lands_on_today_in_demo_timezone(db):
     await _make_demo_user(db)
     game = await make_game(db)
 
-    old_base = datetime(2020, 3, 5, 8, 30, tzinfo=timezone.utc)
-    await make_demo_seed_session(db, game.id, start_time=old_base, end_time=old_base + timedelta(hours=1))
+    # Time-of-day is pinned to just after local midnight, and the gap is
+    # kept small (30 days, well within one DST regime) rather than years, so
+    # the test can't collide with the future-clamp in test_restored_session_
+    # never_lands_in_the_future: the shift is a plain timedelta added to a
+    # UTC timestamp, so a multi-year gap can itself drift by the DST hour
+    # and land in the future — a separate, pre-existing property this test
+    # isn't about.
+    demo_tz = ZoneInfo(DEMO_TIMEZONE)
+    old_base = (datetime.now(demo_tz) - timedelta(days=30)).replace(
+        hour=0, minute=0, second=1, microsecond=0
+    )
+    await make_demo_seed_session(
+        db, game.id, start_time=old_base, end_time=old_base + timedelta(minutes=1)
+    )
 
     await _run_demo_reset(db)
 
@@ -81,8 +93,8 @@ async def test_newest_session_lands_on_today_in_demo_timezone(db):
     ).scalars().all()
     assert len(sessions) == 1
 
-    expected_today = datetime.now(ZoneInfo(DEMO_TIMEZONE)).date()
-    restored_date = sessions[0].start_time.astimezone(ZoneInfo(DEMO_TIMEZONE)).date()
+    expected_today = datetime.now(demo_tz).date()
+    restored_date = sessions[0].start_time.astimezone(demo_tz).date()
     assert restored_date == expected_today
 
 
@@ -113,6 +125,38 @@ async def test_relative_spacing_between_sessions_preserved(db):
 
     # Time-of-day is preserved too (whole-day delta only).
     assert sessions[0].start_time.astimezone(timezone.utc).time() == earlier.time()
+
+
+async def test_restored_session_never_lands_in_the_future(db):
+    """A whole-day delta preserves time-of-day, so a session captured with a
+    time-of-day later than 'now' would land in the future after a naive
+    shift onto today. Build exactly that case: an old seed session whose
+    time-of-day is 2h ahead of the current moment, so the date-only delta
+    would overshoot into the future by up to a day."""
+    await _make_demo_user(db)
+    game = await make_game(db)
+
+    demo_tz = ZoneInfo(DEMO_TIMEZONE)
+    future_moment_today = datetime.now(demo_tz) + timedelta(hours=2)
+    seed_start = future_moment_today - timedelta(days=100)
+    seed_end = seed_start + timedelta(hours=1)
+
+    await make_demo_seed_session(db, game.id, start_time=seed_start, end_time=seed_end)
+
+    await _run_demo_reset(db)
+
+    sessions = (
+        await db.execute(select(GameSession).where(GameSession.user_id == DEMO_DISCORD_ID))
+    ).scalars().all()
+    assert len(sessions) == 1
+
+    now = datetime.now(timezone.utc)
+    assert sessions[0].start_time <= now
+    assert sessions[0].end_time <= now
+
+    # The gap between the original start/end time-of-day is untouched —
+    # only the whole-day offset moved, never per-row rebasing.
+    assert (sessions[0].end_time - sessions[0].start_time) == (seed_end - seed_start)
 
 
 async def test_clears_pending_deletion_fields(db):

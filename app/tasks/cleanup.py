@@ -214,6 +214,23 @@ async def _run_demo_reset(db: AsyncSession) -> int:
             today = datetime.now(demo_tz).date()
             delta = timedelta(days=(today - latest_date).days)
 
+            # A whole-day delta preserves time-of-day, so a session that
+            # started late in the evening (e.g. 22:00) can still land in the
+            # future: the task runs at 03:00 UTC, well before 22:00 in any
+            # timezone that day. A manual session created for that evening
+            # would then 409 against a restored session that "hasn't
+            # happened yet". Clamp by reducing the single shared delta a
+            # whole day at a time — never rebase rows individually, since
+            # preserving relative spacing is the entire point of one delta.
+            now = datetime.now(timezone.utc)
+            latest_moment = max(
+                (s.end_time if s.end_time is not None else s.start_time)
+                for s in seed_sessions
+            )
+            latest_moment = max(latest_moment, latest_start)
+            while latest_moment + delta > now:
+                delta -= timedelta(days=1)
+
         for seed in seed_sessions:
             db.add(
                 GameSession(
