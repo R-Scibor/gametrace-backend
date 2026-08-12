@@ -8,6 +8,8 @@ from app.models.game import CoverSource, Game, UserGamePreference
 from tests.factories import (
     dt,
     make_alias,
+    make_demo_seed_preference,
+    make_demo_seed_session,
     make_game,
     make_pref,
     make_session,
@@ -108,6 +110,24 @@ async def test_user_preference_conflict_resolved(admin_client, db, admin_user):
         select(UserGamePreference).where(UserGamePreference.game_id == target.id)
     )
     assert len(result.scalars().all()) == 1
+
+
+async def test_demo_seed_rows_reassigned(admin_client, db, admin_user):
+    """Seed snapshot rows point at the source game's id, which the merge deletes.
+    Without remapping them first, the delete violates the FK (games.id RESTRICT).
+    """
+    source = await make_game(db, "Source")
+    target = await make_game(db, "Target")
+    seed_session = await make_demo_seed_session(db, source.id)
+    seed_pref = await make_demo_seed_preference(db, source.id)
+
+    resp = await admin_client.post(f"/api/v1/admin/games/{source.id}/merge/{target.id}")
+
+    assert resp.status_code == 204
+    await db.refresh(seed_session)
+    await db.refresh(seed_pref)
+    assert seed_session.game_id == target.id
+    assert seed_pref.game_id == target.id
 
 
 async def test_merge_self_returns_400(admin_client, db, admin_user):
