@@ -90,12 +90,28 @@ async def merge_game(
         .values(game_id=target_id)
     )
 
-    # 5. Reassign demo seed preferences (snapshot table, no uniqueness constraint on game_id)
-    await db.execute(
-        update(DemoSeedPreference)
-        .where(DemoSeedPreference.game_id == game_id)
-        .values(game_id=target_id)
-    )
+    # 5. Reassign demo seed preferences. demo_seed_preferences itself has no
+    #    uniqueness constraint on game_id, but its restore destination
+    #    (user_game_preferences) does have UNIQUE(user_id, game_id) — so if
+    #    the target game already has a seed pref row, drop the source's
+    #    rather than create a collision that would wedge the nightly reset.
+    #    (The restore in tasks/cleanup.py also dedupes defensively; this is
+    #    belt-and-suspenders, not the load-bearing guard.)
+    target_has_seed_pref = (
+        await db.execute(
+            select(DemoSeedPreference.id)
+            .where(DemoSeedPreference.game_id == target_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if target_has_seed_pref is not None:
+        await db.execute(delete(DemoSeedPreference).where(DemoSeedPreference.game_id == game_id))
+    else:
+        await db.execute(
+            update(DemoSeedPreference)
+            .where(DemoSeedPreference.game_id == game_id)
+            .values(game_id=target_id)
+        )
 
     # 6. Delete the source game record
     await db.delete(source)

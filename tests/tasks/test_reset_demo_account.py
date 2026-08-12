@@ -263,6 +263,29 @@ async def test_restore_failure_rolls_back(db, monkeypatch):
     assert surviving_demo.username == demo.username
 
 
+async def test_duplicate_seed_prefs_for_same_game_do_not_wedge_reset(db):
+    """A merge (or any future path) can leave two demo_seed_preferences rows
+    pointing at the same game_id. UserGamePreference has UNIQUE(user_id,
+    game_id) at the restore destination, so a raw insert-all would violate
+    it and roll back the whole reset — permanently, since the duplicate is
+    itself part of the frozen snapshot. The restore must dedupe defensively
+    regardless of how the duplicate got there."""
+    await _make_demo_user(db)
+    game = await make_game(db)
+
+    await make_demo_seed_preference(db, game.id, is_ignored=True, custom_tag="first")
+    await make_demo_seed_preference(db, game.id, is_ignored=False, custom_tag="second")
+
+    # Must not raise (no IntegrityError / rollback).
+    await _run_demo_reset(db)
+
+    prefs = (
+        await db.execute(select(UserGamePreference).where(UserGamePreference.user_id == DEMO_DISCORD_ID))
+    ).scalars().all()
+    assert len(prefs) == 1
+    assert prefs[0].game_id == game.id
+
+
 async def test_counts_stable_after_flicker_purge(db):
     await _make_demo_user(db)
     game = await make_game(db)

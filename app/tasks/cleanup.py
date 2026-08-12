@@ -216,7 +216,15 @@ async def _run_demo_reset(db: AsyncSession) -> int:
             )
 
         seed_prefs = (await db.execute(select(DemoSeedPreference))).scalars().all()
-        for seed_pref in seed_prefs:
+        # Dedupe by game_id before restoring. demo_seed_preferences itself
+        # carries no uniqueness constraint, but its restore destination
+        # (user_game_preferences) has UNIQUE(user_id, game_id) — two seed
+        # rows sharing a game_id (e.g. left behind by a game merge) would
+        # violate it and roll back this entire transaction, and since the
+        # duplicate lives in the frozen snapshot itself, every future reset
+        # would fail identically. Last one wins; these are cosmetic fields.
+        deduped_prefs = {seed_pref.game_id: seed_pref for seed_pref in seed_prefs}
+        for seed_pref in deduped_prefs.values():
             db.add(
                 UserGamePreference(
                     user_id=DEMO_DISCORD_ID,
