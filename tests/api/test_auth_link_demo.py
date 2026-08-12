@@ -249,6 +249,68 @@ async def test_feature_inert_when_demo_code_empty(client, demo_user, monkeypatch
     assert await _recorded_failures(redis_client) == 1
 
 
+async def test_demo_rate_limit_blocks_31st_request_per_ip(client, demo_user, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.v1.endpoints.auth.link_codes.get_client_ip", lambda request: "203.0.113.5"
+    )
+
+    for _ in range(link_codes.DEMO_RATE_LIMIT):
+        resp = await client.post("/api/v1/auth/link", json={"code": _DEMO_CODE})
+        assert resp.status_code == 200
+
+    resp = await client.post("/api/v1/auth/link", json={"code": _DEMO_CODE})
+    assert resp.status_code == 429
+    assert "Retry-After" in resp.headers
+
+
+async def test_demo_rate_limit_is_scoped_per_ip(client, demo_user, monkeypatch):
+    current_ip = {"value": "203.0.113.5"}
+    monkeypatch.setattr(
+        "app.api.v1.endpoints.auth.link_codes.get_client_ip",
+        lambda request: current_ip["value"],
+    )
+
+    for _ in range(link_codes.DEMO_RATE_LIMIT):
+        resp = await client.post("/api/v1/auth/link", json={"code": _DEMO_CODE})
+        assert resp.status_code == 200
+    blocked = await client.post("/api/v1/auth/link", json={"code": _DEMO_CODE})
+    assert blocked.status_code == 429
+
+    # A different IP is unaffected by the first IP's exhausted limit.
+    current_ip["value"] = "198.51.100.9"
+    resp = await client.post("/api/v1/auth/link", json={"code": _DEMO_CODE})
+    assert resp.status_code == 200
+
+
+async def test_demo_rate_limit_does_not_apply_to_normal_link_path(
+    client, user, redis_client, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.api.v1.endpoints.auth.link_codes.get_client_ip", lambda request: "203.0.113.5"
+    )
+
+    for _ in range(link_codes.DEMO_RATE_LIMIT + 5):
+        code = await link_codes.issue_code(redis_client, user.discord_id)
+        resp = await client.post("/api/v1/auth/link", json={"code": code})
+        assert resp.status_code == 200
+
+
+async def test_demo_rate_limit_fails_open_when_redis_unavailable(
+    client, demo_user, monkeypatch
+):
+    """Redundant with test_demo_code_works_when_redis_unavailable in spirit,
+    but pins the rate-limit code path specifically: a Redis error inside
+    check_demo_rate_limit must not turn into a 429 or 503."""
+    def _raise():
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr("app.api.v1.endpoints.auth.get_redis", _raise)
+
+    resp = await client.post("/api/v1/auth/link", json={"code": _DEMO_CODE})
+
+    assert resp.status_code == 200
+
+
 async def test_missing_demo_user_returns_401(client):
     """Crash guard: a missing demo users row 401s rather than raising. It
     cannot distinguish the demo branch from the normal path — an unknown code

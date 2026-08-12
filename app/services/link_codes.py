@@ -16,6 +16,17 @@ GLOBAL_FAIL_LIMIT = 100
 GLOBAL_FAIL_WINDOW_SECONDS = 60
 _MAX_COLLISION_RETRIES = 5
 
+# The permanent demo/reviewer code skips check_lockout entirely (see
+# auth.py), so successful redemptions were otherwise unbounded — the first
+# unauthenticated path doing unbounded DB writes. This is a separate, much
+# looser per-IP counter just for that branch. The caller (auth.py) wraps
+# every call to check_demo_rate_limit in the same fail-open try/except it
+# already uses for Redis errors elsewhere: a Redis outage must never lock a
+# Play reviewer out, so this limiter degrades to "no limit" rather than
+# blocking anything.
+DEMO_RATE_LIMIT = 30
+DEMO_RATE_WINDOW_SECONDS = 3600
+
 
 class LinkCodesNotConfigured(Exception):
     """Raised when link_code_secret is empty and issue/redeem is attempted."""
@@ -113,6 +124,27 @@ async def record_failure(r, ip: str) -> None:
     global_count = await r.incr(global_key)
     if global_count == 1:
         await r.expire(global_key, GLOBAL_FAIL_WINDOW_SECONDS)
+
+
+def demo_rate_key(ip: str) -> str:
+    return f"link:demo:ip:{ip}"
+
+
+async def check_demo_rate_limit(r, ip: str) -> int | None:
+    """Increment the per-IP demo-login counter and return Retry-After seconds
+    once it exceeds DEMO_RATE_LIMIT within the hour, else None.
+
+    Not fail-open by itself — any Redis error here propagates to the caller,
+    which is expected to catch it and treat the limit as not exceeded. See
+    the module docstring above DEMO_RATE_LIMIT.
+    """
+    key = demo_rate_key(ip)
+    count = await r.incr(key)
+    if count == 1:
+        await r.expire(key, DEMO_RATE_WINDOW_SECONDS)
+    if count > DEMO_RATE_LIMIT:
+        return max(1, await r.ttl(key))
+    return None
 
 
 def _is_trusted_proxy(ip: str) -> bool:

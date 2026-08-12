@@ -170,6 +170,25 @@ async def link_login(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired code",
             )
+        # Per-IP rate limit (30/hour) on the demo branch itself: it skips
+        # check_lockout above, so successful redemptions were otherwise
+        # unbounded. This MUST fail open — a Redis outage must never lock a
+        # reviewer out (see test_demo_code_works_when_redis_unavailable) —
+        # so any Redis error here is swallowed and the request proceeds as
+        # if unlimited.
+        retry_after = None
+        try:
+            r = get_redis()
+            ip = link_codes.get_client_ip(request)
+            retry_after = await link_codes.check_demo_rate_limit(r, ip)
+        except (redis.exceptions.RedisError, ConnectionError, OSError):
+            retry_after = None
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many requests",
+                headers={"Retry-After": str(retry_after)},
+            )
         # payload.timezone is deliberately NOT applied: the demo account's
         # timezone is pinned and drives the nightly data rebase, so a
         # reviewer's device timezone must not move it.
