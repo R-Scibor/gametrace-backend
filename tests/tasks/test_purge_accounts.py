@@ -66,6 +66,40 @@ async def test_leaves_user_with_future_purge_at(db):
     assert remaining is not None
 
 
+async def test_purge_skips_demo_account(db):
+    from app.services.demo import DEMO_DISCORD_ID
+
+    now = datetime.now(timezone.utc)
+    past = now - timedelta(hours=1)
+
+    demo = await make_user(
+        db, discord_id=DEMO_DISCORD_ID, username="demo", purge_at=past
+    )
+    expired = await make_user(
+        db, discord_id="800000000000000003", username="expired", purge_at=past
+    )
+
+    deleted = await _run_purge(db)
+
+    assert deleted == 1
+
+    remaining_ids = {
+        row.discord_id
+        for row in (await db.execute(select(User))).scalars().all()
+    }
+    assert demo.discord_id in remaining_ids
+    assert expired.discord_id not in remaining_ids
+
+    demo_events = (
+        await db.execute(
+            select(AccountDeletionEvent).where(
+                AccountDeletionEvent.discord_id == DEMO_DISCORD_ID
+            )
+        )
+    ).scalars().all()
+    assert demo_events == []
+
+
 async def test_leaves_unscheduled_user(db, user):
     deleted = await _run_purge(db)
 

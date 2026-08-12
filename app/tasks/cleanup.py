@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.models.account_deletion_event import EVENT_PURGED, record_deletion_event
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User, UserDevice
+from app.services.demo import DEMO_DISCORD_ID
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,12 @@ async def _run_purge(db: AsyncSession) -> int:
     now = datetime.now(timezone.utc)
     result = await db.execute(
         delete(User)
-        .where(User.purge_at <= now)
+        # purge_at is set 7 days out, so this can't save the demo account from
+        # a same-night deletion — that's not what it's for. It's a backstop
+        # for the case where the nightly demo-reset task (which clears
+        # purge_at on the demo account) has been silently failing for a week
+        # or more and nobody noticed.
+        .where(User.purge_at <= now, User.discord_id != DEMO_DISCORD_ID)
         .returning(User.discord_id, User.purge_at)
     )
     rows = result.all()  # list of (discord_id, purge_at)
