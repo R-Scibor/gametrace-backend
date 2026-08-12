@@ -43,6 +43,12 @@ async def _build_source_user(db):
         now - timedelta(hours=1),
         status=SessionStatus.ONGOING,
     )
+    error = await make_session(
+        db, source_user.discord_id, game.id,
+        now - timedelta(hours=6),
+        status=SessionStatus.ERROR,
+        notes="self-healing: bot restarted mid-session",
+    )
     pref = await make_pref(db, source_user.discord_id, game.id, is_ignored=True)
 
     return source_user, game, {
@@ -50,6 +56,7 @@ async def _build_source_user(db):
         "deleted": deleted,
         "flicker": flicker,
         "ongoing": ongoing,
+        "error": error,
         "pref": pref,
     }
 
@@ -69,6 +76,7 @@ async def test_captures_only_eligible_sessions_and_preferences(db):
     assert seed.status == SessionStatus.COMPLETED.value
     assert seed.start_time == rows["completed"].start_time
     assert seed.end_time == rows["completed"].end_time
+    assert all(s.status != SessionStatus.ERROR.value for s in seed_sessions)
 
     seed_prefs = (await db.execute(select(DemoSeedPreference))).scalars().all()
     assert len(seed_prefs) == 1

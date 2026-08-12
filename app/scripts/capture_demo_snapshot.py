@@ -13,8 +13,12 @@ Exclusions (each has a distinct reason — see docs/internal spec):
 - is_flicker = true: the nightly flicker purge would delete restored rows
   again within a day (restore re-bases dates into the past), breaking
   restore row counts every night.
-- status = ONGOING: has no end_time, would appear to grow unbounded between
-  nightly restores; also collides with the one-ONGOING-per-user index.
+- Only status = COMPLETED is captured (a positive selection, not an
+  exclusion list, so a future status defaults to excluded rather than
+  silently admitted). Both ONGOING and ERROR rows have a NULL end_time,
+  which would render as an unbounded-looking session after restore; ERROR
+  rows additionally lose their explanatory text, since `notes` (where the
+  self-healer records the error) is deliberately not copied.
 
 `notes` is deliberately not copied — it's system-owned (self-healing writes
 error text into it) and there is no destination column for it.
@@ -51,7 +55,7 @@ async def capture(db: AsyncSession, source_discord_id: str) -> tuple[int, int]:
                 GameSession.user_id == source_discord_id,
                 GameSession.deleted_at.is_(None),
                 GameSession.is_flicker.is_(False),
-                GameSession.status != SessionStatus.ONGOING,
+                GameSession.status == SessionStatus.COMPLETED,
             )
         )
     ).scalars().all()
