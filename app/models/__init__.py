@@ -4,6 +4,7 @@ from app.models.session import GameSession
 from app.models.report import Report
 from app.models.voice_usage import VoiceUsage
 from app.models.account_deletion_event import AccountDeletionEvent
+from app.models.demo_seed import DemoSeedSession, DemoSeedPreference
 
 __all__ = [
     "User",
@@ -16,4 +17,6 @@ __all__ = [
     "Report",
     "VoiceUsage",
     "AccountDeletionEvent",
+    "DemoSeedSession",
+    "DemoSeedPreference",
 ]
