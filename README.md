@@ -26,7 +26,7 @@ docker compose up
 
 API at `http://localhost:8010`. Interactive Swagger docs at `http://localhost:8010/docs`.
 
-**Required secrets:** `DISCORD_BOT_TOKEN`, `LINK_CODE_SECRET` (login codes — generate with `openssl rand -hex 32`), `IGDB_CLIENT_ID` / `IGDB_CLIENT_SECRET` (Twitch dev console). **Discord OAuth2 login** additionally needs `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_OAUTH_REDIRECT_URIS`, and `DISCORD_GUILD_IDS` — register the same redirect URIs in the Discord Developer Portal → OAuth2 → Redirects. **Voice pipeline** additionally needs `OPENAI_API_KEY`, `GCP_PROJECT`, and a mounted GCP service-account JSON. **Push notifications** need `credentials/firebase-cred.json`. Features with missing config return `503` (voice, link codes) or silently skip (FCM, Sentry).
+**Required secrets:** `DISCORD_BOT_TOKEN`, `LINK_CODE_SECRET` (login codes — generate with `openssl rand -hex 32`), `IGDB_CLIENT_ID` / `IGDB_CLIENT_SECRET` (Twitch dev console). **Discord OAuth2 login** additionally needs `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_OAUTH_REDIRECT_URIS`, and `DISCORD_GUILD_IDS` — register the same redirect URIs in the Discord Developer Portal → OAuth2 → Redirects. **Voice pipeline** additionally needs `OPENAI_API_KEY`, `GCP_PROJECT`, and a mounted GCP service-account JSON. **Push notifications** need `credentials/firebase-cred.json`. **Permanent reviewer login** (optional, for Google Play review — see [docs/api.md](docs/api.md#permanent-reviewer-login)) needs `DEMO_LINK_CODE`; empty disables it. Features with missing config return `503` (voice, link codes) or silently skip (FCM, Sentry).
 
 ## Services
 

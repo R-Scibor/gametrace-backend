@@ -5,6 +5,7 @@ so flushed-but-not-committed data is visible to all DB queries within a test.
 """
 from datetime import datetime, timedelta, timezone
 
+from app.models.demo_seed import DemoSeedPreference, DemoSeedSession
 from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.report import Report
 from app.models.session import GameSession, SessionSource, SessionStatus
@@ -163,6 +164,46 @@ async def make_report(
     db.add(report)
     await db.flush()
     return report
+
+
+async def make_demo_seed_session(
+    db,
+    game_id: int,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    duration_seconds: int | None = None,
+    status: str = "COMPLETED",
+    source: str = "MANUAL",
+) -> DemoSeedSession:
+    seed_session = DemoSeedSession(
+        game_id=game_id,
+        start_time=start_time or dt(hours_ago=3),
+        end_time=end_time,
+        duration_seconds=duration_seconds,
+        status=status,
+        source=source,
+    )
+    db.add(seed_session)
+    await db.flush()
+    return seed_session
+
+
+async def make_demo_seed_preference(
+    db,
+    game_id: int,
+    is_ignored: bool = False,
+    is_accepted: bool | None = None,
+    custom_tag: str | None = None,
+) -> DemoSeedPreference:
+    seed_pref = DemoSeedPreference(
+        game_id=game_id,
+        is_ignored=is_ignored,
+        is_accepted=is_accepted,
+        custom_tag=custom_tag,
+    )
+    db.add(seed_pref)
+    await db.flush()
+    return seed_pref
 
 
 def dt(hours_ago: float = 0, hours_from_now: float = 0) -> datetime:

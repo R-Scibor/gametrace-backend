@@ -53,6 +53,10 @@ celery_app.conf.update(
             "task": "tasks.purge_deleted_accounts",
             "schedule": crontab(hour=3, minute=45),
         },
+        "reset_demo_account": {
+            "task": "tasks.reset_demo_account",
+            "schedule": crontab(hour=3, minute=0),
+        },
     },
 )
 

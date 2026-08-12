@@ -13,8 +13,9 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models.game import EnrichmentStatus, Game, GameAlias
+from app.services.demo import DEMO_DISCORD_ID, DEMO_USERNAME
 from app.services.game_matching import IGDBResult
-from tests.factories import make_alias, make_game
+from tests.factories import make_alias, make_game, make_token, make_user
 
 PATCH_TARGET = "app.api.v1.endpoints.games._igdb_fetch_by_id"
 URL = "/api/v1/games"
@@ -210,3 +211,87 @@ async def test_rate_limited_after_60(authed_client, rate_limit_enabled):
 
     assert statuses[:60] == [201] * 60
     assert statuses[60] == 429
+
+
+# ── demo account alias suppression ──────────────────────────────────────────
+
+@pytest.fixture
+async def demo_client(db, client):
+    """HTTP client authed as the shared reviewer/demo account."""
+    demo_user = await make_user(db, discord_id=DEMO_DISCORD_ID, username=DEMO_USERNAME)
+    token = await make_token(db, demo_user.discord_id)
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    return client
+
+
+async def test_demo_unrecognized_creates_game_no_alias(demo_client, db):
+    """Demo user, unrecognized mode → 201 and game created, but no GameAlias row."""
+    resp = await demo_client.post(
+        URL, json={"unrecognized": True, "name": "Reviewer Indie"}
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["enrichment_status"] == "NEEDS_REVIEW"
+
+    game = (
+        await db.execute(select(Game).where(Game.primary_name == "Reviewer Indie"))
+    ).scalar_one()
+    assert game.enrichment_status == EnrichmentStatus.NEEDS_REVIEW
+
+    alias_count = (
+        await db.execute(
+            select(func.count()).where(
+                GameAlias.discord_process_name == "Reviewer Indie"
+            )
+        )
+    ).scalar_one()
+    assert alias_count == 0
+
+
+async def test_demo_igdb_query_creates_game_no_alias(demo_client, db):
+    """Demo user, igdb_id mode + query → game created, no alias for the query."""
+    with patch(PATCH_TARGET, return_value=("The Witcher 3", _META)):
+        resp = await demo_client.post(
+            URL, json={"igdb_id": 1942, "query": "reviewer query"}
+        )
+
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["primary_name"] == "The Witcher 3"
+
+    alias_count = (
+        await db.execute(
+            select(func.count()).where(
+                GameAlias.discord_process_name == "reviewer query"
+            )
+        )
+    ).scalar_one()
+    assert alias_count == 0
+
+
+async def test_normal_user_still_gets_alias_both_modes(authed_client, db):
+    """Regression guard: a normal (non-demo) user is unaffected in either mode."""
+    resp1 = await authed_client.post(
+        URL, json={"unrecognized": True, "name": "Normal User Game"}
+    )
+    assert resp1.status_code == 201
+    alias1 = (
+        await db.execute(
+            select(GameAlias).where(
+                GameAlias.discord_process_name == "Normal User Game"
+            )
+        )
+    ).scalar_one()
+    assert alias1 is not None
+
+    with patch(PATCH_TARGET, return_value=("The Witcher 3", _META)):
+        resp2 = await authed_client.post(
+            URL, json={"igdb_id": 1942, "query": "normal query"}
+        )
+    assert resp2.status_code == 201
+    alias2 = (
+        await db.execute(
+            select(GameAlias).where(GameAlias.discord_process_name == "normal query")
+        )
+    ).scalar_one()
+    assert alias2 is not None

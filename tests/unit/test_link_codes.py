@@ -234,3 +234,11 @@ def test_get_client_ip_trust_matrix(monkeypatch, trusted_proxy_ips, client_host,
     monkeypatch.setattr(settings, "trusted_proxy_ips", trusted_proxy_ips)
     request = _make_request(client_host, xff)
     assert link_codes.get_client_ip(request) == expected
+
+
+async def test_issue_code_never_returns_reserved_demo_code(r, monkeypatch):
+    monkeypatch.setattr(settings, "demo_link_code", "555555")
+    codes = iter(["555555", "111111"])
+    monkeypatch.setattr(link_codes, "_generate_code", lambda: next(codes))
+    code = await link_codes.issue_code(r, _DISCORD_ID)
+    assert code == "111111"

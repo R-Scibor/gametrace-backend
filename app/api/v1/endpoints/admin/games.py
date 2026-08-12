@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.endpoints.auth import require_admin
 from app.core.database import get_db
 from app.core.observability import log_admin_action
+from app.models.demo_seed import DemoSeedPreference, DemoSeedSession
 from app.models.game import CoverSource, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession
 from app.models.user import User
@@ -35,7 +36,9 @@ async def merge_game(
     1. Reassign all game_aliases → target_id
     2. Reassign all game_sessions → target_id
     3. Merge user_game_preferences (drop conflicts, reassign rest)
-    4. Delete source game record
+    4. Reassign all demo_seed_sessions → target_id
+    5. Reassign all demo_seed_preferences → target_id
+    6. Delete source game record
 
     Returns 204 No Content on success.
     Returns 404 if either game does not exist.
@@ -80,7 +83,37 @@ async def merge_game(
         .values(game_id=target_id)
     )
 
-    # 4. Delete the source game record
+    # 4. Reassign demo seed sessions (snapshot table, no uniqueness constraint on game_id)
+    await db.execute(
+        update(DemoSeedSession)
+        .where(DemoSeedSession.game_id == game_id)
+        .values(game_id=target_id)
+    )
+
+    # 5. Reassign demo seed preferences. demo_seed_preferences itself has no
+    #    uniqueness constraint on game_id, but its restore destination
+    #    (user_game_preferences) does have UNIQUE(user_id, game_id) — so if
+    #    the target game already has a seed pref row, drop the source's
+    #    rather than create a collision that would wedge the nightly reset.
+    #    (The restore in tasks/cleanup.py also dedupes defensively; this is
+    #    belt-and-suspenders, not the load-bearing guard.)
+    target_has_seed_pref = (
+        await db.execute(
+            select(DemoSeedPreference.id)
+            .where(DemoSeedPreference.game_id == target_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if target_has_seed_pref is not None:
+        await db.execute(delete(DemoSeedPreference).where(DemoSeedPreference.game_id == game_id))
+    else:
+        await db.execute(
+            update(DemoSeedPreference)
+            .where(DemoSeedPreference.game_id == game_id)
+            .values(game_id=target_id)
+        )
+
+    # 6. Delete the source game record
     await db.delete(source)
     await db.commit()
 

@@ -1,3 +1,4 @@
+import re
 from ipaddress import IPv4Network, IPv6Network, ip_network
 
 from pydantic import model_validator
@@ -34,6 +35,7 @@ class Settings(BaseSettings):
     link_code_secret: str = ""  # HMAC key for /login codes; empty disables the feature
     dev_login_secret: str = ""  # shared secret gating name-only /auth/login; empty disables it
     bot_service_secret: str = ""  # shared secret letting the Discord bot read-as-any-user; empty disables it
+    demo_link_code: str = ""  # permanent 6-digit /login code for the Play reviewer demo account; empty disables it
     api_base_url: str = "http://api:8010"  # bot → API base URL for read commands (/stats, /recent)
     gametrace_web_url: str = ""  # public web app URL, for links in bot embeds
     gametrace_privacy_url: str = ""  # privacy policy URL, for the onboarding panel disclosure; empty until the doc exists
@@ -109,6 +111,19 @@ class Settings(BaseSettings):
                 "still eligible to be a stitch target "
                 f"(got gc_margin={self.session_flicker_gc_margin_seconds}, "
                 f"stitch_window={self.session_stitch_window_seconds})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _demo_link_code_must_be_six_digits(self) -> "Settings":
+        # Empty leaves the reviewer login disabled. Anything else must be exactly
+        # a 6-digit code after stripping — catches a trailing newline or a pasted
+        # "XXX XXX" at boot rather than a silently-wrong value at request time.
+        stripped = self.demo_link_code.strip()
+        if stripped and not re.fullmatch(r"[0-9]{6}", stripped):
+            raise ValueError(
+                "demo_link_code must be empty (feature off) or exactly 6 digits "
+                f"after stripping whitespace (got {self.demo_link_code!r})"
             )
         return self
 

@@ -6,7 +6,7 @@ import httpx
 import redis.exceptions
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +23,7 @@ from app.schemas.auth import (
 from app.schemas.deletion import PendingDeletion
 from app.services import discord_oauth, link_codes
 from app.services.account_deletion import days_left as _days_left
+from app.services.demo import DEMO_DISCORD_ID, DEMO_MAX_TOKENS, is_demo_code
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,43 @@ def _login_response(
         needs_server_join=needs_server_join,
         pending_deletion=pending_deletion,
     )
+
+
+async def _issue_token(db: AsyncSession, user: User) -> str:
+    """Mint a session token for `user`, commit, and return the raw value."""
+    token_value = UserAuthToken.generate_token()
+    token = UserAuthToken(
+        user_id=user.discord_id,
+        token=UserAuthToken.hash_token(token_value),
+        expires_at=_token_expiry(),
+    )
+    db.add(token)
+    await db.commit()
+    await db.refresh(user)
+    return token_value
+
+
+async def _cap_demo_tokens(db: AsyncSession) -> None:
+    """Keep only the DEMO_MAX_TOKENS newest tokens for the demo account.
+
+    The reviewer code is public by design, so successful redemptions are
+    unbounded; this caps how many live sessions a leaked code can hold open.
+    Scoped to DEMO_DISCORD_ID only — no other account is ever touched.
+    `id` breaks ties, since several tokens can share a created_at timestamp.
+    """
+    keep = (
+        select(UserAuthToken.id)
+        .where(UserAuthToken.user_id == DEMO_DISCORD_ID)
+        .order_by(UserAuthToken.created_at.desc(), UserAuthToken.id.desc())
+        .limit(DEMO_MAX_TOKENS)
+        .scalar_subquery()
+    )
+    await db.execute(
+        delete(UserAuthToken)
+        .where(UserAuthToken.user_id == DEMO_DISCORD_ID)
+        .where(UserAuthToken.id.not_in(keep))
+    )
+    await db.commit()
 
 
 @router.post("/login", response_model=LoginResponse, status_code=status.HTTP_200_OK)
@@ -114,6 +152,50 @@ async def link_login(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
+    # Permanent reviewer code — checked before the link_code_secret guard,
+    # before get_redis() and before check_lockout, and it never calls
+    # redeem_code. That ordering is load-bearing:
+    #   * redeem_code does a Redis GETDEL, so routing the demo code through it
+    #     would let a spray consume real users' live 300s codes (DoS on logins);
+    #   * an unset secret or a Redis outage 503s this endpoint, and the
+    #     reviewer's only way in must not depend on either;
+    #   * an unrelated attacker tripping the global failure counter must not
+    #     lock a reviewer out mid-review. Only a correct code skips the gate;
+    #     wrong codes still hit record_failure and are rate-limited as before.
+    # is_demo_code is False whenever demo_link_code is empty (feature off).
+    if is_demo_code(payload.code):
+        user = await db.get(User, DEMO_DISCORD_ID)
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired code",
+            )
+        # Per-IP rate limit (30/hour) on the demo branch itself: it skips
+        # check_lockout above, so successful redemptions were otherwise
+        # unbounded. This MUST fail open — a Redis outage must never lock a
+        # reviewer out (see test_demo_code_works_when_redis_unavailable) —
+        # so any Redis error here is swallowed and the request proceeds as
+        # if unlimited.
+        retry_after = None
+        try:
+            r = get_redis()
+            ip = link_codes.get_client_ip(request)
+            retry_after = await link_codes.check_demo_rate_limit(r, ip)
+        except (redis.exceptions.RedisError, ConnectionError, OSError):
+            retry_after = None
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many requests",
+                headers={"Retry-After": str(retry_after)},
+            )
+        # payload.timezone is deliberately NOT applied: the demo account's
+        # timezone is pinned and drives the nightly data rebase, so a
+        # reviewer's device timezone must not move it.
+        token_value = await _issue_token(db, user)
+        await _cap_demo_tokens(db)
+        return _login_response(user, token_value)
+
     if not settings.link_code_secret:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -165,15 +247,7 @@ async def link_login(
     if payload.timezone != "UTC":
         user.timezone = payload.timezone
 
-    token_value = UserAuthToken.generate_token()
-    token = UserAuthToken(
-        user_id=user.discord_id,
-        token=UserAuthToken.hash_token(token_value),
-        expires_at=_token_expiry(),
-    )
-    db.add(token)
-    await db.commit()
-    await db.refresh(user)
+    token_value = await _issue_token(db, user)
 
     return _login_response(user, token_value)
 
