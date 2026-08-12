@@ -2,7 +2,7 @@
 
 Source of truth: SQLAlchemy models in `app/models/` and Alembic migrations in `alembic/versions/`.
 
-Nine tables total. All timestamps are stored as `TIMESTAMP WITH TIME ZONE` in UTC. Soft-delete is via `deleted_at` columns where applicable.
+Eleven tables total. All timestamps are stored as `TIMESTAMP WITH TIME ZONE` in UTC. Soft-delete is via `deleted_at` columns where applicable.
 
 ## Tables
 
@@ -23,6 +23,8 @@ The root identity table. Keyed on Discord ID (a snowflake — string, not intege
 | `purge_at` | `TIMESTAMPTZ` | NULL = no pending deletion. `deletion_requested_at` + `ACCOUNT_DELETION_GRACE_DAYS` (default 7). The account becomes eligible for permanent purge at this timestamp. |
 
 A user must exist here before the bot will track their presence — the bot is intentionally blind to non-registered users.
+
+Migration `0020` inserts one reserved row: `discord_id='1'` (a value far below the Discord snowflake range, so it can never collide with a real account), username `GameTrace Reviewer`, timezone `Europe/Warsaw`, `language='en'`, `is_admin=false`. This is the account the permanent Google Play reviewer login code resolves to (see [api.md](api.md#permanent-reviewer-login)). The insert is `ON CONFLICT (discord_id) DO NOTHING`, and `tasks.reset_demo_account` (below) upserts this row back to the same canonical values every night, so it self-heals if ever deleted.
 
 **Indexes:**
 
@@ -200,6 +202,38 @@ ORDER BY created_at DESC
 LIMIT 50;
 ```
 
+### `demo_seed_sessions`
+
+Frozen snapshot of `game_sessions` rows for the permanent Google Play reviewer demo account, captured once by `app/scripts/capture_demo_snapshot.py`. `tasks.reset_demo_account` (below) restores the demo account's live `game_sessions` from this table every night.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `INTEGER` | Primary key |
+| `game_id` | `INTEGER` | FK → `games.id`, no cascade — the catalog is shared, so seed rows ride along with whatever the catalog already holds rather than duplicating game data. |
+| `start_time` | `TIMESTAMPTZ` | Shifted by a single delta at restore time so the most recent session lands on the current day. |
+| `end_time` | `TIMESTAMPTZ` | Nullable — but the capture script excludes `ONGOING` sessions, so in practice every row here has one. |
+| `duration_seconds` | `INTEGER` | Nullable, matching `game_sessions`. |
+| `status` | `VARCHAR(16)` | |
+| `source` | `VARCHAR(16)` | |
+
+No `user_id` column — the demo account is a singleton, so there is nothing to key rows to. No `is_flicker` column — the capture script drops flicker rows outright rather than snapshotting them, since the flicker GC sweep (`tasks.purge_flicker_sessions`, 04:00) would otherwise delete most of them again the morning after every restore.
+
+### `demo_seed_preferences`
+
+Frozen snapshot of `user_game_preferences` rows for the same demo account, restored alongside `demo_seed_sessions`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `INTEGER` | Primary key |
+| `game_id` | `INTEGER` | FK → `games.id`, no cascade |
+| `is_ignored` | `BOOLEAN` | Default `false` |
+| `is_accepted` | `BOOLEAN` | Nullable |
+| `custom_tag` | `VARCHAR(64)` | Nullable |
+
+No `user_id` column, for the same reason as `demo_seed_sessions`.
+
+Both seed tables gain two extra remap statements in the game-merge transaction (`POST /api/v1/admin/games/{id}/merge/{target_id}`), alongside the three existing ones for `game_aliases`, `game_sessions`, and `user_game_preferences`. `game_sessions.game_id` has no `ON DELETE CASCADE`, and merge deletes the source `games` row, so without this a merge touching a snapshotted game would either fail outright or (under cascade) silently drop seed rows, breaking the next reset.
+
 ## Relationships at a glance
 
 ```
@@ -231,6 +265,7 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 | `0017_reports_admin_note.py` | Adds `reports.admin_note` (`Text`, nullable, no default) for admin triage notes. |
 | `0018_user_account_deletion.py` | Adds `users.deletion_requested_at` and `users.purge_at` (`TIMESTAMPTZ`, nullable, no default) with the partial index `ix_users_purge_at_partial`. |
 | `0019_account_deletion_events.py` | Adds append-only `account_deletion_events` Art. 17 audit table (`discord_id`, `event`, `created_at`, `purge_at`) with `ck_account_deletion_events_event` and index `ix_account_deletion_events_discord_id_created_at`. No FK to `users`. |
+| `0020_demo_account.py` | Adds `demo_seed_sessions` and `demo_seed_preferences` (see above), and inserts the reserved demo `users` row (`discord_id='1'`, `ON CONFLICT DO NOTHING`). The demo identity literals are duplicated in the migration rather than imported from `app.services.demo`, since migrations must not depend on app code that can change after the migration is frozen in history. |
 
 ## Scheduled tasks (Celery Beat)
 
@@ -240,5 +275,6 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 | `tasks.hard_delete_sweep` | Daily 03:30 | Purge trashed sessions older than `TRASH_RETENTION_DAYS` (default 7); purge FCM tokens idle 6+ months |
 | `tasks.purge_deleted_accounts` | Daily 03:45 | Permanently delete every `users` row whose `purge_at` has passed (`DELETE FROM users WHERE purge_at <= now`). `ON DELETE CASCADE` on `user_id` erases that account's sessions, preferences, tokens, devices, reports, and voice usage along with it. Catalog `games` rows have no FK to `users` and are never touched. In the same transaction, the task also inserts one `purged` event per deleted `discord_id` into `account_deletion_events`. |
 | `tasks.purge_flicker_sessions` | Daily 04:00 | Hard-delete `COMPLETED` flicker rows whose `end_time` is older than `SESSION_FLICKER_GC_MARGIN_SECONDS` (default 86400s). Runs after `hard_delete_sweep` to keep the two sweepers separate. |
+| `tasks.reset_demo_account` | Daily 03:00 | Restore the permanent Google Play reviewer demo account (`users.discord_id='1'`) to a known-good state: delete its `game_sessions`, `user_game_preferences`, `user_devices`, `voice_usage`, and `reports` rows, restore `game_sessions` / `user_game_preferences` from `demo_seed_sessions` / `demo_seed_preferences` with every timestamp shifted by a single delta so the newest session lands on the current day, and upsert the `users` row back to its canonical state (`is_admin=false`, pinned username/timezone/language, `deletion_requested_at`/`purge_at` cleared). Runs as one transaction — a failure partway rolls back entirely rather than leaving the account emptied. Does not touch `user_auth_tokens`; those are bounded instead by the 5-live-token cap on redemption (see [api.md](api.md#permanent-reviewer-login)). |
 
 The account-deletion grace period (`users.deletion_requested_at` → `purge_at`) is 7 days (`ACCOUNT_DELETION_GRACE_DAYS`, default 7). Because `tasks.purge_deleted_accounts` only runs once nightly, the actual purge lands up to ~24h after the 7-day mark — never before it. Purging removes the row from the live database only; any existing database backups taken before the purge expire on their own separate retention schedule.

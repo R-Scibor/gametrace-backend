@@ -46,12 +46,24 @@ Also required in `.env`: `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET` (OAuth2
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/auth/link` | Redeem a one-time 6-digit code from the Discord `/login` slash command. Body `{code, timezone?}` — `code` must be exactly 6 digits (whitespace trimmed); `timezone` is optional IANA (default `UTC`, max 64 chars); non-`UTC` values are persisted on the user row. Issues a session token. Response: `token`, `discord_id`, `username`, `timezone`, `is_admin`, `pending_deletion`. `401` if the code is invalid or expired (or the user row is missing — same opaque message). `422` if `code` is not exactly 6 digits. `429` after too many failed attempts (per-IP or global lockout) with `Retry-After` header (seconds). `503` if `LINK_CODE_SECRET` is unset or Redis is unreachable. |
+| `POST` | `/api/v1/auth/link` | Redeem a one-time 6-digit code from the Discord `/login` slash command — or the permanent reviewer code, see [below](#permanent-reviewer-login). Body `{code, timezone?}` — `code` must be exactly 6 digits (whitespace trimmed); `timezone` is optional IANA (default `UTC`, max 64 chars); non-`UTC` values are persisted on the user row. Issues a session token. Response: `token`, `discord_id`, `username`, `timezone`, `is_admin`, `pending_deletion`. `401` if the code is invalid or expired (or the user row is missing — same opaque message). `422` if `code` is not exactly 6 digits. `429` after too many failed attempts (per-IP or global lockout) with `Retry-After` header (seconds). `503` if `LINK_CODE_SECRET` is unset or Redis is unreachable. |
 | `POST` | `/api/v1/auth/login` | **Dev-only** — login by Discord username (user must be pre-registered via `/login` or `/register` on Discord). Gated by a shared secret: disabled entirely (returns `404 Not Found`) unless `DEV_LOGIN_SECRET` is set, and when set the caller must send it in the `X-Dev-Login-Secret` header — a missing/wrong secret also returns `404` so the endpoint reveals nothing when the API is exposed. Once past the gate, issues a session token; returns `404` with "User not found. Run /login on Discord first." if the user isn't registered. Accepts optional `timezone` (IANA); non-`UTC` values are persisted on the user row. Response: `token`, `discord_id`, `username`, `timezone`, `is_admin`, `pending_deletion`. |
 | `POST` | `/api/v1/auth/logout` | Invalidate the current bearer token server-side. |
 | `POST` | `/api/v1/auth/discord` | Discord OAuth2 login (code + PKCE). Body `{code, code_verifier, redirect_uri}`. Backend exchanges the code server-side, reads `/users/@me`, and issues a session token. Auto-creates the user on first login (verified `discord_id` + `username`). Response includes `is_admin`, `pending_deletion`, and `needs_server_join: true` when the user is in none of the configured bot servers — the app should prompt them to join so presence tracking works. `400` if `redirect_uri` is not allowlisted; `401` on bad/expired code; `502` if Discord is unreachable. |
 
 Tokens expire after `SESSION_TOKEN_EXPIRE_DAYS` of inactivity (sliding window — every authenticated request bumps `expires_at`). On expiry the token row is deleted and subsequent calls return `401`.
+
+### Permanent reviewer login
+
+`POST /auth/link` also accepts a second, permanent code reserved for Google Play reviewers, configured as `DEMO_LINK_CODE` in `.env` (the actual value is never written to this repo — treat it as a live credential). When the submitted `code` matches it:
+
+- The per-IP/global lockout check is skipped entirely — an IP that is currently locked out from failed ordinary attempts can still redeem the reviewer code successfully.
+- The request never calls into the ordinary code-redemption path, so it does not touch Redis and does not depend on `LINK_CODE_SECRET` being set — it keeps working even when link codes are unconfigured or Redis is unreachable.
+- It resolves to a fixed, non-admin demo account rather than any Discord-linked user, and is not a one-time code — it is never consumed and can be redeemed indefinitely.
+- The submitted `timezone` is ignored for this account; its timezone is pinned so the account's nightly data restoration stays aligned.
+- Sessions for the demo account are capped at 5 concurrently live tokens — redeeming the code again past that cap signs out the oldest existing session on that same account. No other account's sessions are ever affected.
+
+**Rotating `DEMO_LINK_CODE` breaks every future Google Play review** that relies on it, until the Play Console App access listing is updated with the new code first. It must not be rotated as a security response to a suspected leak — the demo account is a non-admin account holding only already-consented sample data, and its blast radius is bounded by the token cap above, not by code secrecy.
 
 ### Bot service credential (internal)
 
