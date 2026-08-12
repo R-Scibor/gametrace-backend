@@ -7,6 +7,7 @@ from ipaddress import ip_address
 from starlette.requests import Request
 
 from app.core.config import settings
+from app.services.demo import is_demo_code
 
 CODE_TTL_SECONDS = 300
 IP_FAIL_LIMIT = 10
@@ -58,6 +59,8 @@ async def issue_code(r, discord_id: str) -> str:
 
     for _ in range(_MAX_COLLISION_RETRIES):
         code = _generate_code()
+        if is_demo_code(code):
+            continue
         digest = _code_digest(code, secret)
         new_code_key = code_key(digest)
 
