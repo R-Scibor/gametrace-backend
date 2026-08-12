@@ -14,6 +14,7 @@ from app.core.rate_limit import limiter
 from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
+from app.services.demo import DEMO_DISCORD_ID
 from app.services.game_aliases import add_alias
 from app.schemas.game import (
     GameCreateRequest,
@@ -298,8 +299,9 @@ async def create_or_link_game(
         db.add(game)
         await db.flush()
 
-        # 4. Optional query alias
-        if body.query and body.query.strip():
+        # 4. Optional query alias — skipped for the shared demo account, which
+        # must never claim an unclaimed process name in the global alias table.
+        if body.query and body.query.strip() and user.discord_id != DEMO_DISCORD_ID:
             await _add_alias_if_absent(db, game.id, body.query)
 
     else:
@@ -312,8 +314,10 @@ async def create_or_link_game(
         db.add(game)
         await db.flush()
 
-        # 2. Alias using the name itself
-        await _add_alias_if_absent(db, game.id, body.name)  # type: ignore[arg-type]
+        # 2. Alias using the name itself — skipped for the shared demo account
+        # (see comment above).
+        if user.discord_id != DEMO_DISCORD_ID:
+            await _add_alias_if_absent(db, game.id, body.name)  # type: ignore[arg-type]
 
     await db.commit()
     return _game_response(game, None)
