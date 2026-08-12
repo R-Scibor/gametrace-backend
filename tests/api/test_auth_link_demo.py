@@ -3,6 +3,10 @@
 The demo branch must short-circuit before the link_code_secret guard, before
 get_redis() and before check_lockout, and must never call redeem_code.
 
+The load-bearing proof of that is test_demo_code_works_when_redis_unavailable:
+with get_redis() patched to raise, any Redis contact whatsoever on the demo
+path — check_lockout, redeem_code, anything — would surface as a 503.
+
 Patch target for Redis: app.api.v1.endpoints.auth.get_redis
 """
 import fakeredis.aioredis
@@ -115,6 +119,11 @@ async def test_demo_code_works_with_link_secret_unset(client, demo_user, monkeyp
 
 
 async def test_demo_code_works_when_redis_unavailable(client, demo_user, monkeypatch):
+    """The demo path never touches Redis, and therefore never reaches
+    redeem_code. get_redis() raising means any Redis contact at all — the
+    lockout check, a GETDEL of the submitted code, anything — would 503
+    instead of returning 200. This is the strongest proof of that property
+    in the file; the lockout tests below do not establish it."""
     def _raise():
         raise ConnectionError("redis down")
 
@@ -140,8 +149,15 @@ async def test_demo_code_succeeds_while_ip_locked_out(client, demo_user, redis_c
 
 
 async def test_locked_out_ip_does_not_consume_real_code(client, user, demo_user, redis_client):
-    """A locked-out IP presenting a valid ephemeral code still 429s and the
-    Redis key survives — proof redeem_code (GETDEL) was never reached."""
+    """Lockout regression guard for the NORMAL path: check_lockout still runs
+    before redeem_code, so a locked-out request never consumes a live code —
+    the Redis value survives, which a GETDEL would have destroyed.
+
+    This says nothing about the demo branch: the code submitted here is a
+    valid ephemeral one, so an implementation that called redeem_code first
+    and let the demo case fall out would pass this test identically. The
+    demo-branch property is proven by
+    test_demo_code_works_when_redis_unavailable."""
     code = await link_codes.issue_code(redis_client, user.discord_id)
     digest_key = await redis_client.get(link_codes.user_key(user.discord_id))
     assert digest_key is not None
@@ -178,6 +194,10 @@ async def test_demo_login_ignores_supplied_timezone(client, db, demo_user):
 
 
 async def test_token_cap_keeps_only_most_recent(client, db, user, demo_user):
+    """Covers the `id DESC` half of the cap ordering only. The harness runs a
+    test inside one transaction, so server_default func.now() gives every
+    token here the same created_at; the `created_at DESC` component that
+    orders tokens across separate requests in production is not exercised."""
     other_before = await _other_user_token_count(db, user.discord_id)
 
     for _ in range(DEMO_MAX_TOKENS + 2):
@@ -230,6 +250,9 @@ async def test_feature_inert_when_demo_code_empty(client, demo_user, monkeypatch
 
 
 async def test_missing_demo_user_returns_401(client):
+    """Crash guard: a missing demo users row 401s rather than raising. It
+    cannot distinguish the demo branch from the normal path — an unknown code
+    401s either way."""
     resp = await client.post("/api/v1/auth/link", json={"code": _DEMO_CODE})
 
     assert resp.status_code == 401
