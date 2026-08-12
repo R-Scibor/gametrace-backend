@@ -211,7 +211,7 @@ Frozen snapshot of `game_sessions` rows for the permanent Google Play reviewer d
 | `id` | `INTEGER` | Primary key |
 | `game_id` | `INTEGER` | FK → `games.id`, no cascade — the catalog is shared, so seed rows ride along with whatever the catalog already holds rather than duplicating game data. |
 | `start_time` | `TIMESTAMPTZ` | Shifted by a single delta at restore time so the most recent session lands on the current day. |
-| `end_time` | `TIMESTAMPTZ` | Nullable — but the capture script excludes `ONGOING` sessions, so in practice every row here has one. |
+| `end_time` | `TIMESTAMPTZ` | Nullable — but the capture script positively selects `status == COMPLETED` rather than excluding a status list, and both `ONGOING` and `ERROR` rows have a NULL `end_time`, so in practice every row here has one. |
 | `duration_seconds` | `INTEGER` | Nullable, matching `game_sessions`. |
 | `status` | `VARCHAR(16)` | |
 | `source` | `VARCHAR(16)` | |
@@ -233,6 +233,11 @@ Frozen snapshot of `user_game_preferences` rows for the same demo account, resto
 No `user_id` column, for the same reason as `demo_seed_sessions`.
 
 Both seed tables gain two extra remap statements in the game-merge transaction (`POST /api/v1/admin/games/{id}/merge/{target_id}`), alongside the three existing ones for `game_aliases`, `game_sessions`, and `user_game_preferences`. `game_sessions.game_id` has no `ON DELETE CASCADE`, and merge deletes the source `games` row, so without this a merge touching a snapshotted game would either fail outright or (under cascade) silently drop seed rows, breaking the next reset.
+
+**Accepted risks of the demo account, listed together:**
+
+- **Junk catalog rows.** `POST /games` only requires `get_current_user`, so the demo account can create shared `games` rows (e.g. via the manual-session flow), and those rows are visible to every other user through `GET /games/suggest` (global scope by design). Accepted as cosmetic and admin-cleanable — closing it would mean blocking manual session creation for the demo account, a headline feature reviewers should see working. What is *not* accepted: alias creation is blocked for the demo account specifically, since `game_aliases.discord_process_name` is globally UNIQUE and a leaked code could otherwise squat a real process name and capture other users' presence onto a junk game.
+- **Reports reach the admin triage inbox.** `POST /reports` also only requires `get_current_user`, so a leaked code can file reports that land in the same queue as real user feedback. Mitigated, not blocked: `tasks.reset_demo_account` deletes any reports filed by the demo account every night, so the exposure never persists past one day.
 
 ## Relationships at a glance
 
