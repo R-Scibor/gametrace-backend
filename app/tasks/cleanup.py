@@ -17,7 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.celery_app import celery_app
 from app.core.config import settings
-from app.models.account_deletion_event import EVENT_PURGED, record_deletion_event
+from app.models.account_deletion_event import (
+    EVENT_CANCELLED,
+    EVENT_PURGED,
+    record_deletion_event,
+)
 from app.models.demo_seed import DemoSeedPreference, DemoSeedSession
 from app.models.game import UserGamePreference
 from app.models.report import Report
@@ -189,6 +193,14 @@ async def _run_demo_reset(db: AsyncSession) -> int:
         user.is_admin = False
         user.weekly_report_enabled = True
         user.push_enabled = True
+        # schedule_deletion writes EVENT_REQUESTED and cancel_deletion writes
+        # EVENT_CANCELLED (app/services/account_deletion.py); clearing these
+        # columns directly here bypasses both, which would leave an
+        # unterminated `requested` row in account_deletion_events for the
+        # demo account forever. Guard on purge_at actually being set so a
+        # routine reset with nothing pending doesn't emit a spurious event.
+        if user.purge_at is not None:
+            record_deletion_event(db, DEMO_DISCORD_ID, EVENT_CANCELLED)
         user.deletion_requested_at = None
         user.purge_at = None
 

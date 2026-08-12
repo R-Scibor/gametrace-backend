@@ -128,6 +128,40 @@ async def test_clears_pending_deletion_fields(db):
     assert demo.purge_at is None
 
 
+async def test_clearing_pending_deletion_writes_cancelled_event(db):
+    from app.models.account_deletion_event import AccountDeletionEvent
+
+    now = datetime.now(timezone.utc)
+    await _make_demo_user(
+        db, deletion_requested_at=now - timedelta(days=1), purge_at=now + timedelta(days=6)
+    )
+
+    await _run_demo_reset(db)
+
+    events = (
+        await db.execute(
+            select(AccountDeletionEvent).where(AccountDeletionEvent.discord_id == DEMO_DISCORD_ID)
+        )
+    ).scalars().all()
+    assert len(events) == 1
+    assert events[0].event == "cancelled"
+
+
+async def test_reset_with_no_pending_deletion_writes_no_event(db):
+    from app.models.account_deletion_event import AccountDeletionEvent
+
+    await _make_demo_user(db)
+
+    await _run_demo_reset(db)
+
+    events = (
+        await db.execute(
+            select(AccountDeletionEvent).where(AccountDeletionEvent.discord_id == DEMO_DISCORD_ID)
+        )
+    ).scalars().all()
+    assert events == []
+
+
 async def test_recreates_missing_user_row(db):
     # No demo user pre-seeded at all.
     assert (
