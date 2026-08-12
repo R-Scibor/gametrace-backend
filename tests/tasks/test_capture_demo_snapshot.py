@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.models.demo_seed import DemoSeedPreference, DemoSeedSession
 from app.models.session import SessionSource, SessionStatus
-from app.scripts.capture_demo_snapshot import capture
+from app.scripts.capture_demo_snapshot import capture, capture_with_confirmation
 from tests.factories import make_game, make_pref, make_session, make_user
 
 
@@ -131,3 +131,51 @@ async def test_second_run_replaces_rather_than_duplicates(db):
 
     seed_prefs = (await db.execute(select(DemoSeedPreference))).scalars().all()
     assert len(seed_prefs) == 1
+
+
+async def test_confirmation_matching_username_captures(db):
+    source_user, game, rows = await _build_source_user(db)
+
+    result = await capture_with_confirmation(
+        db, source_user.discord_id, confirm=lambda _prompt: source_user.username
+    )
+
+    assert result == (1, 1)
+    assert len((await db.execute(select(DemoSeedSession))).scalars().all()) == 1
+
+
+async def test_confirmation_mismatch_captures_nothing(db):
+    source_user, game, rows = await _build_source_user(db)
+
+    result = await capture_with_confirmation(
+        db, source_user.discord_id, confirm=lambda _prompt: "not-the-username"
+    )
+
+    assert result is None
+    assert (await db.execute(select(DemoSeedSession))).scalars().all() == []
+    assert (await db.execute(select(DemoSeedPreference))).scalars().all() == []
+
+
+async def test_assume_yes_skips_confirmation(db):
+    source_user, game, rows = await _build_source_user(db)
+
+    def _fail_if_called(_prompt):
+        raise AssertionError("confirm() must not be called when assume_yes=True")
+
+    result = await capture_with_confirmation(
+        db, source_user.discord_id, assume_yes=True, confirm=_fail_if_called
+    )
+
+    assert result == (1, 1)
+
+
+async def test_unknown_discord_id_captures_nothing(db):
+    """A mistyped id must abort cleanly rather than truncating the seed
+    tables and capturing nothing from a user that doesn't exist."""
+    await _build_source_user(db)
+
+    result = await capture_with_confirmation(db, "000000000000000000", assume_yes=True)
+
+    assert result is None
+    assert (await db.execute(select(DemoSeedSession))).scalars().all() == []
+    assert (await db.execute(select(DemoSeedPreference))).scalars().all() == []
