@@ -4,9 +4,9 @@ from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import Integer, and_, case, func, or_, select
+from sqlalchemy import Integer, and_, case, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.api.v1.endpoints.auth import get_current_or_bot_user, get_current_user
 from app.core.database import get_db
@@ -428,7 +428,12 @@ async def suggest_games(
     """
     Fuzzy-search the global games catalog by name.
 
-    Scope: ALL games (not restricted to the caller's library).
+    Scope: the global catalog minus unclaimed unresolved rows. The catalog is
+    writable by any authenticated user, so an aliasless NEEDS_REVIEW row is a
+    free-text stub nobody has bound — offensive or gibberish input from one
+    user would otherwise surface in everyone's typeahead. Such a row is hidden
+    unless the caller has claimed it. Everything else, PENDING included, stays
+    globally visible.
 
     Precision comes from the prefilter, not the score. Every token must match
     at a word boundary in primary_name or one of the aliases; survivors are
@@ -459,11 +464,47 @@ async def suggest_games(
             )
         )
 
+    # Visibility: hide unresolved rows nobody has claimed. Only NEEDS_REVIEW is
+    # ever hidden — hiding PENDING too would split libraries, since a bot-created
+    # row is PENDING until the enrichment worker runs and another user, unable to
+    # see it, would create a duplicate the bot never writes to.
+    #
+    # A separate aliased(GameAlias) is required: _id_query already outerjoins
+    # GameAlias for token matching, and a bare exists() would correlate against
+    # that join instead of opening a fresh subquery.
+    _claim_alias = aliased(GameAlias)
+    visible_game = or_(
+        Game.enrichment_status != EnrichmentStatus.NEEDS_REVIEW,
+        # An alias means a bot bound a real process to this row.
+        exists().where(_claim_alias.game_id == Game.id),
+        # deleted_at.is_(None) rather than visible_session() on purpose: flicker
+        # sessions still count as a claim. The question here is "is this game
+        # mine", not "does it count toward stats" — do not harmonize this with
+        # resolve_game.
+        exists().where(
+            and_(
+                GameSession.game_id == Game.id,
+                GameSession.user_id == user.discord_id,
+                GameSession.deleted_at.is_(None),
+            )
+        ),
+        # Any preference row counts, is_ignored=True included: ignoring is a
+        # library-display choice, and suggest exists to attach a session.
+        exists().where(
+            and_(
+                UserGamePreference.game_id == Game.id,
+                UserGamePreference.user_id == user.discord_id,
+            )
+        ),
+    )
+
     def _id_query(predicate):
+        # visible_game is and_ed in here so both the strict and the fallback
+        # pass get it, and `total` reflects the filtered set.
         return (
             select(Game.id)
             .outerjoin(GameAlias, GameAlias.game_id == Game.id)
-            .where(predicate)
+            .where(and_(predicate, visible_game))
             .distinct()
         )
 
