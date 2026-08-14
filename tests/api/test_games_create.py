@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from app.models.game import EnrichmentStatus, Game, GameAlias
 from app.services.demo import DEMO_DISCORD_ID, DEMO_USERNAME
 from app.services.game_matching import IGDBResult
-from tests.factories import make_alias, make_game, make_token, make_user
+from tests.factories import make_game, make_token, make_user
 
 PATCH_TARGET = "app.api.v1.endpoints.games._igdb_fetch_by_id"
 URL = "/api/v1/games"
@@ -90,7 +90,7 @@ async def test_igdb_rate_limited_503(authed_client):
 # ── unrecognized mode ─────────────────────────────────────────────────────────
 
 async def test_unrecognized_creates_needs_review(authed_client, db):
-    """unrecognized + name → 201, NEEDS_REVIEW, no external_api_id, alias exists."""
+    """unrecognized + name → 201, NEEDS_REVIEW, no external_api_id, no alias."""
     resp = await authed_client.post(
         URL, json={"unrecognized": True, "name": "Obscure Indie"}
     )
@@ -104,12 +104,14 @@ async def test_unrecognized_creates_needs_review(authed_client, db):
     assert game.enrichment_status == EnrichmentStatus.NEEDS_REVIEW
     assert game.external_api_id is None
 
-    alias = (
+    alias_count = (
         await db.execute(
-            select(GameAlias).where(GameAlias.discord_process_name == "Obscure Indie")
+            select(func.count()).where(
+                GameAlias.discord_process_name == "Obscure Indie"
+            )
         )
     ).scalar_one()
-    assert alias.game_id == game.id
+    assert alias_count == 0
 
 
 # ── alias logic ───────────────────────────────────────────────────────────────
@@ -131,24 +133,6 @@ async def test_query_stored_as_alias(authed_client, db):
     ).scalar_one()
     assert alias.game_id == game_id
 
-
-async def test_duplicate_alias_not_reinserted(authed_client, db):
-    """Alias already exists globally → create skips insert, no IntegrityError."""
-    g_other = await make_game(db, "Other Game")
-    await make_alias(db, g_other.id, "dup.exe")
-
-    resp = await authed_client.post(
-        URL, json={"unrecognized": True, "name": "dup.exe"}
-    )
-
-    assert resp.status_code == 201
-
-    count = (
-        await db.execute(
-            select(func.count()).where(GameAlias.discord_process_name == "dup.exe")
-        )
-    ).scalar_one()
-    assert count == 1
 
 
 # ── validation ────────────────────────────────────────────────────────────────
@@ -269,20 +253,21 @@ async def test_demo_igdb_query_creates_game_no_alias(demo_client, db):
     assert alias_count == 0
 
 
-async def test_normal_user_still_gets_alias_both_modes(authed_client, db):
-    """Regression guard: a normal (non-demo) user is unaffected in either mode."""
+async def test_normal_user_alias_only_in_igdb_mode(authed_client, db):
+    """Regression guard: a normal (non-demo) user only gets an alias in
+    igdb_id mode; unrecognized mode never writes one, for anyone."""
     resp1 = await authed_client.post(
         URL, json={"unrecognized": True, "name": "Normal User Game"}
     )
     assert resp1.status_code == 201
-    alias1 = (
+    alias1_count = (
         await db.execute(
-            select(GameAlias).where(
+            select(func.count()).where(
                 GameAlias.discord_process_name == "Normal User Game"
             )
         )
     ).scalar_one()
-    assert alias1 is not None
+    assert alias1_count == 0
 
     with patch(PATCH_TARGET, return_value=("The Witcher 3", _META)):
         resp2 = await authed_client.post(

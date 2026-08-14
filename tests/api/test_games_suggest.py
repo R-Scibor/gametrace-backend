@@ -1,4 +1,12 @@
-from tests.factories import make_alias, make_game, make_session, make_user, dt
+from app.models.game import EnrichmentStatus
+from tests.factories import (
+    make_alias,
+    make_game,
+    make_pref,
+    make_session,
+    make_user,
+    dt,
+)
 
 
 # ── happy paths ───────────────────────────────────────────────────────────────
@@ -259,3 +267,167 @@ async def test_whitespace_q_is_422(authed_client):
     """Whitespace-only q passes min_length but must be rejected, not 500."""
     resp = await authed_client.get("/api/v1/games/suggest", params={"q": "   "})
     assert resp.status_code == 422
+
+
+# ── unclaimed unresolved rows ─────────────────────────────────────────────────
+
+async def test_hides_other_users_aliasless_needs_review_stub(authed_client, db, user):
+    """A NEEDS_REVIEW row with no alias is a manual free-text stub — nobody's bot
+    routes to it, so it must not leak into another user's typeahead."""
+    other = await make_user(db, discord_id="222222222222222222", username="other")
+    game = await make_game(db, "Obscure Indie", EnrichmentStatus.NEEDS_REVIEW)
+    await make_session(db, other.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+
+    resp = await authed_client.get("/api/v1/games/suggest", params={"q": "obscure"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 0
+    assert game.id not in [item["game_id"] for item in data["items"]]
+
+
+async def test_shows_other_users_needs_review_stub_with_alias(authed_client, db, user):
+    """An alias means a bot bound a real process to this row.
+
+    Bot-created stubs settle into NEEDS_REVIEW when enrichment fails, and they
+    keep their alias. Hiding those would split libraries: the bot keeps writing
+    sessions onto the stub while another user, unable to see it, creates a
+    second ENRICHED row for the same game.
+    """
+    other = await make_user(db, discord_id="222222222222222222", username="other")
+    game = await make_game(db, "Obscure Indie", EnrichmentStatus.NEEDS_REVIEW)
+    await make_alias(db, game.id, "Obscure Indie")
+    await make_session(db, other.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+
+    resp = await authed_client.get("/api/v1/games/suggest", params={"q": "obscure"})
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert game.id in ids
+
+
+async def test_shows_other_users_pending_stub(authed_client, db, user):
+    """PENDING stays globally visible — only NEEDS_REVIEW is ever hidden.
+
+    Hiding PENDING would recreate the library split at the other unresolved
+    status: a freshly created row is PENDING until the enrichment worker runs.
+    """
+    other = await make_user(db, discord_id="222222222222222222", username="other")
+    game = await make_game(db, "Obscure Indie")
+    await make_session(db, other.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+
+    resp = await authed_client.get("/api/v1/games/suggest", params={"q": "obscure"})
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert game.id in ids
+
+
+async def test_shows_own_aliasless_needs_review_stub_via_session(
+    authed_client, db, user
+):
+    """The caller's own stub stays visible — a session on it is the claim."""
+    game = await make_game(db, "Obscure Indie", EnrichmentStatus.NEEDS_REVIEW)
+    await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+
+    resp = await authed_client.get("/api/v1/games/suggest", params={"q": "obscure"})
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert game.id in ids
+
+
+async def test_shows_own_aliasless_needs_review_stub_via_preference(
+    authed_client, db, user
+):
+    """A preference row is also a claim, even with no session yet."""
+    game = await make_game(db, "Obscure Indie", EnrichmentStatus.NEEDS_REVIEW)
+    await make_pref(db, user.discord_id, game.id)
+
+    resp = await authed_client.get("/api/v1/games/suggest", params={"q": "obscure"})
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert game.id in ids
+
+
+async def test_own_flicker_session_still_claims_stub(authed_client, db, user):
+    """Deliberate: the predicate uses deleted_at.is_(None), not visible_session(),
+    so a flicker session still counts as the caller's claim on the stub. This is
+    intentionally looser than resolve_game's session clause — do not "harmonize"
+    the two without re-reading the design rationale."""
+    game = await make_game(db, "Obscure Indie", EnrichmentStatus.NEEDS_REVIEW)
+    await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        dt(hours_ago=3),
+        dt(hours_ago=2),
+        is_flicker=True,
+    )
+
+    resp = await authed_client.get("/api/v1/games/suggest", params={"q": "obscure"})
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert game.id in ids
+
+
+async def test_own_ignored_preference_still_claims_stub(authed_client, db, user):
+    """Deliberate: any preference row counts as a claim, including is_ignored=True.
+    Ignoring a stub is still an interaction that proves the caller has touched it,
+    so it must not be hidden as an "untouched" junk entry. Do not add an
+    is_ignored.is_(False) guard here without re-reading the design rationale."""
+    game = await make_game(db, "Obscure Indie", EnrichmentStatus.NEEDS_REVIEW)
+    await make_pref(db, user.discord_id, game.id, is_ignored=True)
+
+    resp = await authed_client.get("/api/v1/games/suggest", params={"q": "obscure"})
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert game.id in ids
+
+
+async def test_hidden_stub_excluded_from_total(authed_client, db, user):
+    """The filter runs in SQL, so `total` reflects the filtered set, not the raw one."""
+    other = await make_user(db, discord_id="222222222222222222", username="other")
+    hidden = await make_game(db, "Hades Unofficial", EnrichmentStatus.NEEDS_REVIEW)
+    await make_session(db, other.discord_id, hidden.id, dt(hours_ago=3), dt(hours_ago=2))
+    visible = await make_game(db, "Hades", EnrichmentStatus.ENRICHED)
+
+    resp = await authed_client.get("/api/v1/games/suggest", params={"q": "hades"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    ids = [item["game_id"] for item in data["items"]]
+    assert ids == [visible.id]
+    assert hidden.id not in ids
+
+
+async def test_fallback_still_runs_when_only_hidden_rows_match_strictly(
+    authed_client, db, user
+):
+    """Regression guard: the filter must run *inside* the strict pass.
+
+    The hidden stub matches all three tokens; the ENRICHED game matches only
+    two and needs the any-token fallback to surface (scoring 0.75, above
+    _SUGGEST_FALLBACK_FLOOR). If the visibility filter were applied after
+    scoring, the stub would make the strict pass non-empty, the fallback would
+    never fire, and this would return [].
+    """
+    other = await make_user(db, discord_id="222222222222222222", username="other")
+    hidden = await make_game(
+        db, "Red Dead Redemtion", EnrichmentStatus.NEEDS_REVIEW
+    )
+    await make_session(db, other.discord_id, hidden.id, dt(hours_ago=3), dt(hours_ago=2))
+    visible = await make_game(db, "Red Dead Redemption 2", EnrichmentStatus.ENRICHED)
+
+    resp = await authed_client.get(
+        "/api/v1/games/suggest", params={"q": "red dead redemtion"}
+    )
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert visible.id in ids
+    assert hidden.id not in ids
