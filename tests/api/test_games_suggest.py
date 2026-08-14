@@ -351,6 +351,43 @@ async def test_shows_own_aliasless_needs_review_stub_via_preference(
     assert game.id in ids
 
 
+async def test_own_flicker_session_still_claims_stub(authed_client, db, user):
+    """Deliberate: the predicate uses deleted_at.is_(None), not visible_session(),
+    so a flicker session still counts as the caller's claim on the stub. This is
+    intentionally looser than resolve_game's session clause — do not "harmonize"
+    the two without re-reading the design rationale."""
+    game = await make_game(db, "Obscure Indie", EnrichmentStatus.NEEDS_REVIEW)
+    await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        dt(hours_ago=3),
+        dt(hours_ago=2),
+        is_flicker=True,
+    )
+
+    resp = await authed_client.get("/api/v1/games/suggest", params={"q": "obscure"})
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert game.id in ids
+
+
+async def test_own_ignored_preference_still_claims_stub(authed_client, db, user):
+    """Deliberate: any preference row counts as a claim, including is_ignored=True.
+    Ignoring a stub is still an interaction that proves the caller has touched it,
+    so it must not be hidden as an "untouched" junk entry. Do not add an
+    is_ignored.is_(False) guard here without re-reading the design rationale."""
+    game = await make_game(db, "Obscure Indie", EnrichmentStatus.NEEDS_REVIEW)
+    await make_pref(db, user.discord_id, game.id, is_ignored=True)
+
+    resp = await authed_client.get("/api/v1/games/suggest", params={"q": "obscure"})
+
+    assert resp.status_code == 200
+    ids = [item["game_id"] for item in resp.json()["items"]]
+    assert game.id in ids
+
+
 async def test_hidden_stub_excluded_from_total(authed_client, db, user):
     """The filter runs in SQL, so `total` reflects the filtered set, not the raw one."""
     other = await make_user(db, discord_id="222222222222222222", username="other")

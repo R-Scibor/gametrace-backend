@@ -249,8 +249,9 @@ async def create_or_link_game(
       known), else insert an ENRICHED row (returns 201).
     - unrecognized mode: insert a NEEDS_REVIEW stub (returns 201).
 
-    Optional *query* is stored as a GameAlias so future voice/resolve calls
-    can map the typed string to the game.
+    Optional *query* is stored as a GameAlias in igdb_id mode only, so future
+    voice/resolve calls can map the typed string to the game; unrecognized
+    mode never writes an alias. Skipped entirely for the shared demo account.
 
     Rate limited to 60/hour per credential (429 past that). Looser than
     /games/match: igdb_id mode dedupes before calling IGDB and unrecognized

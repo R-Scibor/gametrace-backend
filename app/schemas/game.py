@@ -64,7 +64,7 @@ class GameCreateRequest(BaseModel):
     """Two modes, exactly one must be active:
     - igdb_id mode: igdb_id is set (integer).
     - unrecognized mode: unrecognized=True AND name is non-empty/non-blank.
-    Optional query (any mode) — stored as a GameAlias for future resolution.
+    Optional query — only honoured (stored as a GameAlias) in igdb_id mode.
     """
     igdb_id: Optional[int] = None
     name: Optional[str] = None

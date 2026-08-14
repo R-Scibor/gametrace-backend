@@ -63,7 +63,7 @@ User attestation that IGDB has no correct match (obscure indie, typo they'll fix
 - no `external_api_id`
 - no `game_aliases` row
 
-Same semantics as a bot stub that failed enrichment, but chosen knowingly. Binding a string to this row (e.g. a Discord process name) is an admin action — `POST /api/v1/admin/games/{id}/aliases` — not something `POST /games` does itself. `POST /api/v1/admin/games/{id}/merge/{target_id}` (admin-only) still handles duplicates.
+Same semantics as a bot stub that failed enrichment, but chosen knowingly. Binding a string to this row (e.g. a Discord process name) is an admin action — `POST /api/v1/admin/games/{id}/aliases` — not something `POST /games` does itself. Because no alias is written, a later bot session for the same game will not auto-attach to this stub — the bot creates its own row (and its own alias) instead, so a manually tracked "Obscure Indie" and a subsequently detected one end up as two separate `games` rows until merged. `POST /api/v1/admin/games/{id}/merge/{target_id}` (admin-only) still handles duplicates.
 
 ## Implemented API surface
 
