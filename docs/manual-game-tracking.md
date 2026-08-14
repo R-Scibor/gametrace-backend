@@ -61,16 +61,16 @@ User attestation that IGDB has no correct match (obscure indie, typo they'll fix
 - `primary_name` = user string
 - `enrichment_status = NEEDS_REVIEW`
 - no `external_api_id`
-- optional `game_aliases` row for future resolve
+- no `game_aliases` row
 
-Same semantics as a bot stub that failed enrichment, but chosen knowingly. `POST /api/v1/admin/games/{id}/merge/{target_id}` (admin-only) still handles duplicates.
+Same semantics as a bot stub that failed enrichment, but chosen knowingly. Binding a string to this row (e.g. a Discord process name) is an admin action — `POST /api/v1/admin/games/{id}/aliases` — not something `POST /games` does itself. `POST /api/v1/admin/games/{id}/merge/{target_id}` (admin-only) still handles duplicates.
 
 ## Implemented API surface
 
 | Step | Endpoint | Scope |
 |---|---|---|
 | Library resolve | `GET /games/resolve?name=…` | Exact match in caller's library (unchanged) |
-| Global catalog suggest | `GET /games/suggest?q=…` | Global games catalog (all users' games); paginated fuzzy match on `primary_name` + aliases, scored, relevance floor 0.3 |
+| Global catalog suggest | `GET /games/suggest?q=…` | Global games catalog (all users' games), except an aliasless `NEEDS_REVIEW` row the caller has never touched — that one is hidden, `PENDING` stays visible; paginated fuzzy match on `primary_name` + aliases, scored, relevance floor 0.3 |
 | IGDB match | `POST /games/match` `{ query }` | Sync IGDB search; returns ranked candidates (`igdb_id`, `name`, `year`, `cover_url`, `score`) — no DB write |
 | Confirm game | `POST /games` `{ igdb_id }` or `{ name, unrecognized: true }` | Create or link global `Game`; IGDB id mode dedupes and creates `ENRICHED`; unrecognized mode creates `NEEDS_REVIEW` stub |
 | Log time | `POST /sessions` | Unchanged — `{ game_id, start_time, end_time }` |
