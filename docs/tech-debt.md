@@ -12,6 +12,27 @@ Minor items left open when the manual-tracking endpoints (`GET /games/suggest`, 
 - **Un-stripped name/alias storage** — `POST /games` stores `primary_name` and the alias from `body.name`/`body.query` without trimming surrounding whitespace, so `"  Foo  "` and `"Foo"` become distinct catalog rows/aliases. Low-impact data hygiene; strip at the boundary when next touched.
 - **Legacy cover-normalization duplication** — `_igdb_search` in `app/services/game_matching.py` keeps an inline cover-URL normalization that duplicates `_normalize_cover_url` (used by the newer `_igdb_search_candidates`/`_igdb_fetch_by_id`). Retire the inline copy when [Enrichment v2](#enrichment-v2--token-subset--llm-adjudicator-design-sketch) touches that path.
 
+## Global catalog conflates shared cache and personal entries (2026-08-14)
+
+`games` is a single global table serving two roles that want opposite things.
+
+- **A shared metadata cache.** `ENRICHED` rows carry cover, genres, developers, release date, and `external_api_id`. Global and deduped is correct here — one row per real game, and IGDB/Steam gatekeep the content.
+- **A personal entry.** A stub created through `POST /games` in unrecognized mode is one user's assertion that something they played is a game. It has no cover, no genres, no external id — no shared payload at all. It is a row about one person's library living in a global table.
+
+Nothing in the schema distinguishes them. `games` has no owner column, so "whose entry is this" has to be reconstructed from `game_sessions` and `user_game_preferences`, and "is this row shared" has to be inferred from `enrichment_status` plus the presence of a `game_aliases` row.
+
+**Why it's debt:** the containment rule — *the catalog is global; unclaimed, unresolved entries are personal* — is enforced by a predicate that every catalog-reading endpoint has to remember, not by structure. `GET /games/suggest` is the first consumer; `app/services/library_visibility.py` already holds the equivalent rule for library reads. Two places now encode overlapping notions of "the user's games" with deliberately different definitions (`resolve_game` uses `visible_session()`; the suggest predicate counts any non-deleted session). A third endpoint that reads the catalog will have to rediscover all of this.
+
+**Deferred alternatives, in increasing size:**
+
+- **Stored scope column on `games`.** One nullable column; visibility becomes a fact on the row rather than a rule each query re-derives, checkable in one place. Cost: a second source of truth sitting beside `enrichment_status`, with no constraint keeping them consistent.
+- **Per-user table for unresolved entries.** Structurally correct — a personal entry could not appear in a shared read. Cost: `game_sessions.game_id` is a single FK that `stats`, `merge`, `resolve`, the library queries, the bot, and the admin catalog all join through, so splitting the referent means every one of those grows a second case. The migration runs against a live database holding session history that cannot be regenerated.
+- **Separate global and per-user alias namespaces.** `game_aliases.discord_process_name` is globally UNIQUE and the bot resolves activity names by exact match against it (`app/bot/session_manager.py`), so the alias table has the same shared/personal conflation as `games`. Splitting it is the structurally correct fix, and it changes the uniqueness contract the bot's resolution depends on.
+
+**Also deferred:** a one-shot sweep of aliases written by unrecognized-mode creates. It cannot key on `enrichment_status` alone — the enrichment worker settles *bot* stubs into `NEEDS_REVIEW` too (`app/tasks/enrichment.py`), and those must keep their real process-name aliases or the bot stops matching them.
+
+Design and reasoning: `docs/superpowers/specs/2026-08-14-catalog-pollution-containment-design.md` (local, untracked).
+
 ## Publisher alias map — hardcoded dict, move to DB table (2026-06-28)
 
 `PUBLISHER_ALIASES` in `app/services/company_resolution.py` is a hardcoded Python dict (casefolded company name → canonical root) used as the fallback when IGDB has no `parent` link for a subsidiary/regional operator. See [game-matching.md](game-matching.md#the-alias-map) for the current behavior and the binding "value must equal the IGDB parent-chain root" rule.
