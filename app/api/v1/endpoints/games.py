@@ -314,11 +314,6 @@ async def create_or_link_game(
         db.add(game)
         await db.flush()
 
-        # 2. Alias using the name itself — skipped for the shared demo account
-        # (see comment above).
-        if user.discord_id != DEMO_DISCORD_ID:
-            await _add_alias_if_absent(db, game.id, body.name)  # type: ignore[arg-type]
-
     await db.commit()
     return _game_response(game, None)
 
