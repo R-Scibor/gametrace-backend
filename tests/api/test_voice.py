@@ -10,11 +10,13 @@ to test the stripping logic inside the function itself.
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import fakeredis.aioredis
+
 import pytest
 from sqlalchemy import func, select
 
 from app.models.voice_usage import VoiceUsage
-from tests.factories import make_token
+from tests.factories import dt, make_token, make_voice_usage
 
 # Minimal bytes that pass the audio magic-byte check (see upload_validation).
 WAV_BYTES = b"RIFF\x00\x00\x00\x00WAVEfmt "
@@ -261,66 +263,188 @@ async def test_usage_write_failure_is_non_fatal(authed_client, db):
     assert resp.status_code == 200
 
 
-# ── Rate limiting ─────────────────────────────────────────────────────────────
+# ── Quota (per user, not per token) ───────────────────────────────────────────
 
-@pytest.fixture
-def rate_limit_enabled():
-    """Enable the limiter for one test. authed_client mints a fresh random token
-    per test, so each test gets its own limiter bucket — no reset needed."""
-    from app.main import app
-    limiter = app.state.limiter
-    limiter.enabled = True
-    yield
-    limiter.enabled = False
+@pytest.fixture(autouse=True)
+def patch_quota_redis(monkeypatch):
+    """Fresh in-memory Redis per test: the hourly quota counter must not leak
+    between tests (make_user reuses a fixed discord_id, and Redis is not rolled
+    back the way the DB is)."""
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    monkeypatch.setattr("app.services.voice_quota.get_redis", lambda: fake)
 
 
-async def test_transcribe_rate_limited_after_10(authed_client, rate_limit_enabled):
+async def _post_audio(client):
+    return await client.post(
+        "/api/v1/voice/transcribe",
+        files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
+    )
+
+
+def _patched_pipeline():
     gemini_result = {
         "game": "Hades", "date": None, "start_time": None,
         "end_time": None, "duration_minutes": None,
     }
-    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
-         patch("app.api.v1.endpoints.voice.AsyncOpenAI",
-               return_value=_mock_openai("Grałem w Hades")), \
-         patch("app.api.v1.endpoints.voice._gemini_parse", return_value=gemini_result):
+    return (
+        patch("app.api.v1.endpoints.voice.settings", _voice_settings()),
+        patch("app.api.v1.endpoints.voice.AsyncOpenAI",
+              return_value=_mock_openai("Grałem w Hades")),
+        patch("app.api.v1.endpoints.voice._gemini_parse", return_value=gemini_result),
+    )
 
+
+async def test_transcribe_blocked_after_hourly_limit(authed_client):
+    from app.services.voice_quota import HOURLY_LIMIT
+
+    settings_p, openai_p, gemini_p = _patched_pipeline()
+    with settings_p, openai_p, gemini_p:
+        statuses = [
+            (await _post_audio(authed_client)).status_code
+            for _ in range(HOURLY_LIMIT + 1)
+        ]
+
+    assert statuses[:HOURLY_LIMIT] == [200] * HOURLY_LIMIT
+    assert statuses[HOURLY_LIMIT] == 429
+
+
+async def test_hourly_429_carries_retry_after(authed_client):
+    from app.services.voice_quota import HOURLY_LIMIT
+
+    settings_p, openai_p, gemini_p = _patched_pipeline()
+    with settings_p, openai_p, gemini_p:
+        for _ in range(HOURLY_LIMIT):
+            await _post_audio(authed_client)
+        resp = await _post_audio(authed_client)
+
+    assert resp.status_code == 429
+    assert int(resp.headers["Retry-After"]) > 0
+
+
+async def test_relogin_does_not_reset_quota(db, client, user):
+    """Regression: the quota used to be keyed on the bearer token, so logging in
+    again minted a fresh bucket. A second token for the SAME user must find the
+    quota already spent."""
+    from app.services.voice_quota import HOURLY_LIMIT
+
+    first_token = await make_token(db, user.discord_id)
+    settings_p, openai_p, gemini_p = _patched_pipeline()
+    with settings_p, openai_p, gemini_p:
+        client.headers["Authorization"] = f"Bearer {first_token}"
+        for _ in range(HOURLY_LIMIT):
+            await _post_audio(client)
+
+        # Re-login: a brand-new, still-valid token for the same user.
+        second_token = await make_token(db, user.discord_id)
+        client.headers["Authorization"] = f"Bearer {second_token}"
+        resp = await _post_audio(client)
+
+    assert second_token != first_token
+    assert resp.status_code == 429
+
+
+async def test_parallel_tokens_share_one_budget(db, client, user):
+    """N valid tokens for one user must not grant N x the allowance: alternating
+    between two live tokens spends a single shared budget."""
+    from app.services.voice_quota import HOURLY_LIMIT
+
+    token_a = await make_token(db, user.discord_id)
+    token_b = await make_token(db, user.discord_id)
+    settings_p, openai_p, gemini_p = _patched_pipeline()
+    with settings_p, openai_p, gemini_p:
         statuses = []
-        for _ in range(11):
+        for i in range(HOURLY_LIMIT + 1):
+            client.headers["Authorization"] = f"Bearer {token_a if i % 2 else token_b}"
+            statuses.append((await _post_audio(client)).status_code)
+
+    assert statuses[:HOURLY_LIMIT] == [200] * HOURLY_LIMIT
+    assert statuses[HOURLY_LIMIT] == 429
+
+
+async def test_quota_is_per_user_not_shared_between_users(db, client, user, admin_user):
+    """Exhausting one user's budget does not block a different user."""
+    from app.services.voice_quota import HOURLY_LIMIT
+
+    user_token = await make_token(db, user.discord_id)
+    other_token = await make_token(db, admin_user.discord_id)
+    settings_p, openai_p, gemini_p = _patched_pipeline()
+    with settings_p, openai_p, gemini_p:
+        client.headers["Authorization"] = f"Bearer {user_token}"
+        for _ in range(HOURLY_LIMIT + 1):
+            await _post_audio(client)
+        client.headers["Authorization"] = f"Bearer {other_token}"
+        resp = await _post_audio(client)
+
+    assert resp.status_code == 200
+
+
+async def test_daily_cap_blocks_on_a_fresh_hour(authed_client, db, user):
+    """40 successful calls spread over the last day exhaust the daily cap even
+    though the hourly counter is empty."""
+    from app.services.voice_quota import DAILY_LIMIT
+
+    for _ in range(DAILY_LIMIT):
+        await make_voice_usage(db, user.discord_id, created_at=dt(hours_ago=5))
+
+    settings_p, openai_p, gemini_p = _patched_pipeline()
+    with settings_p, openai_p, gemini_p:
+        resp = await _post_audio(authed_client)
+
+    assert resp.status_code == 429
+    assert int(resp.headers["Retry-After"]) > 0
+
+
+async def test_daily_cap_survives_relogin(db, client, user):
+    """The daily cap is DB-backed, so a fresh token cannot reset it either."""
+    from app.services.voice_quota import DAILY_LIMIT
+
+    for _ in range(DAILY_LIMIT):
+        await make_voice_usage(db, user.discord_id, created_at=dt(hours_ago=3))
+
+    token = await make_token(db, user.discord_id)
+    settings_p, openai_p, gemini_p = _patched_pipeline()
+    with settings_p, openai_p, gemini_p:
+        client.headers["Authorization"] = f"Bearer {token}"
+        resp = await _post_audio(client)
+
+    assert resp.status_code == 429
+
+
+async def test_failed_transcriptions_consume_hourly_budget(authed_client):
+    """The hourly counter counts ATTEMPTS: a Whisper failure writes no
+    voice_usage row, so only the Redis counter bounds a failure loop."""
+    from app.services.voice_quota import HOURLY_LIMIT
+
+    failing_client = MagicMock()
+    failing_client.audio.transcriptions.create = AsyncMock(side_effect=Exception("boom"))
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
+         patch("app.api.v1.endpoints.voice.AsyncOpenAI", return_value=failing_client):
+        for _ in range(HOURLY_LIMIT):
+            resp = await _post_audio(authed_client)
+            assert resp.status_code == 502
+
+    settings_p, openai_p, gemini_p = _patched_pipeline()
+    with settings_p, openai_p, gemini_p:
+        resp = await _post_audio(authed_client)
+
+    assert resp.status_code == 429
+
+
+async def test_rejected_upload_does_not_consume_quota(authed_client):
+    """A non-audio upload is rejected before the quota check — it spends no
+    money, so it must not spend budget either."""
+    from app.services.voice_quota import HOURLY_LIMIT
+
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()):
+        for _ in range(HOURLY_LIMIT + 3):
             resp = await authed_client.post(
                 "/api/v1/voice/transcribe",
-                files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
+                files={"file": ("notes.txt", b"this is not audio at all", "text/plain")},
             )
-            statuses.append(resp.status_code)
+            assert resp.status_code == 422
 
-    assert statuses[:10] == [200] * 10
-    assert statuses[10] == 429
-
-
-async def test_rate_limit_is_per_credential(
-    db, client, user, admin_user, rate_limit_enabled,
-):
-    """Exhausting one token's budget does not block a different token."""
-    user_token = await make_token(db, user.discord_id)
-    admin_token = await make_token(db, admin_user.discord_id)
-    gemini_result = {
-        "game": "Hades", "date": None, "start_time": None,
-        "end_time": None, "duration_minutes": None,
-    }
-    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
-         patch("app.api.v1.endpoints.voice.AsyncOpenAI",
-               return_value=_mock_openai("Grałem w Hades")), \
-         patch("app.api.v1.endpoints.voice._gemini_parse", return_value=gemini_result):
-
-        client.headers["Authorization"] = f"Bearer {user_token}"
-        for _ in range(11):
-            await client.post(
-                "/api/v1/voice/transcribe",
-                files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
-            )
-        client.headers["Authorization"] = f"Bearer {admin_token}"
-        resp = await client.post(
-            "/api/v1/voice/transcribe",
-            files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
-        )
+    settings_p, openai_p, gemini_p = _patched_pipeline()
+    with settings_p, openai_p, gemini_p:
+        resp = await _post_audio(authed_client)
 
     assert resp.status_code == 200

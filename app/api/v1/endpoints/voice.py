@@ -21,7 +21,7 @@ import os
 import tempfile
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,7 +29,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.endpoints.auth import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.rate_limit import limiter
 from app.models.user import User
 from app.models.voice_usage import VoiceUsage
 from app.services.upload_validation import looks_like_audio
@@ -39,6 +38,7 @@ from app.services.voice_context import (
     fetch_user_library,
     match_candidates,
 )
+from app.services.voice_quota import check_voice_quota
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -124,9 +124,7 @@ def _gemini_parse(
 
 
 @router.post("/transcribe", response_model=TranscribeResponse)
-@limiter.limit("10/hour")
 async def transcribe_audio(
-    request: Request,
     file: UploadFile,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -154,6 +152,17 @@ async def transcribe_audio(
     if not looks_like_audio(audio_bytes):
         raise HTTPException(
             status_code=422, detail="Uploaded file is not a recognized audio format."
+        )
+
+    # Quota last among the cheap checks: everything above rejects without
+    # spending money, so those attempts must not cost the user budget. Keyed on
+    # user_id, so re-logging in or holding several tokens grants nothing extra.
+    retry_after = await check_voice_quota(db, user.discord_id)
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Voice quota exceeded",
+            headers={"Retry-After": str(retry_after)},
         )
 
     filename = file.filename or "audio.m4a"

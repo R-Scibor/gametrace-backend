@@ -10,6 +10,7 @@ from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreferenc
 from app.models.report import Report
 from app.models.session import GameSession, SessionSource, SessionStatus
 from app.models.user import User, UserAuthToken, UserDevice
+from app.models.voice_usage import VoiceUsage
 
 
 async def make_user(
@@ -204,6 +205,31 @@ async def make_demo_seed_preference(
     db.add(seed_pref)
     await db.flush()
     return seed_pref
+
+
+async def make_voice_usage(
+    db,
+    user_id: str,
+    created_at: datetime | None = None,
+    audio_seconds: float | None = 30.0,
+    detected_language: str | None = "pl",
+    game_resolved: bool = True,
+    fields_extracted: int = 3,
+) -> VoiceUsage:
+    """One row per successful /voice/transcribe call — the source the daily
+    voice quota counts from."""
+    usage = VoiceUsage(
+        user_id=user_id,
+        audio_seconds=audio_seconds,
+        detected_language=detected_language,
+        game_resolved=game_resolved,
+        fields_extracted=fields_extracted,
+    )
+    if created_at is not None:
+        usage.created_at = created_at
+    db.add(usage)
+    await db.flush()
+    return usage
 
 
 def dt(hours_ago: float = 0, hours_from_now: float = 0) -> datetime:
