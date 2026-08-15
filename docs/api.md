@@ -22,7 +22,7 @@ Grouped by code — see endpoint sections below for path-specific detail. Authed
 | `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone or unsupported `language` (not `"pl"`/`"en"`) on `PUT /profile/settings` (Pydantic). Link `code` not exactly 6 digits (`POST /auth/link`, Pydantic). Blank/whitespace-only or over-4000-char `message`, or a missing `context` field, on `POST /reports` (Pydantic). Unsupported/invalid `extension` or malformed `image_base64` on `PUT /admin/games/{id}/cover`. Invalid `status` query value on `GET /admin/reports`, `GET /admin/reports/facets`, or `GET /admin/games`, or a body `status` other than `"open"`/`"triaged"`/`"closed"` on `PATCH /admin/reports/{id}` (Pydantic). `q` over 200 chars on `GET /admin/reports` (Pydantic). An empty body with neither `status` nor `admin_note` present, an explicit `"status": null`, or an `admin_note` over 4000 chars, on `PATCH /admin/reports/{id}`. Blank/whitespace-only `discord_process_name` on `POST /admin/games/{id}/aliases`. |
 | `500` | Unhandled server error (global handler in `app/main.py`). |
 | `502` | Upstream voice failure — OpenAI Whisper or Vertex Gemini error (`POST /voice/transcribe`). Discord OAuth upstream failure (`POST /auth/discord`). IGDB upstream error — non-rate-limit failure (`POST /games/match`, `POST /admin/games/match`). |
-| `429` | Too many failed link-code attempts (`POST /auth/link`) — per-IP or global lockout; response includes `Retry-After` (seconds). Voice quota exceeded (`POST /voice/transcribe`) — per-user, 8/hour or 40/day; response includes `Retry-After` (seconds). Per-credential rate limit exceeded on `POST /games/match` (20/hour) or `POST /games` (60/hour). |
+| `429` | Too many failed link-code attempts (`POST /auth/link`) — per-IP or global lockout; response includes `Retry-After` (seconds). Voice quota exceeded (`POST /voice/transcribe`) — per-user, 8/hour or 40/day; response includes `Retry-After` (seconds). Per-user rate limit exceeded on `POST /games/match` (20/hour) or `POST /games` (60/hour); response includes `Retry-After` (seconds). |
 | `503` | Voice pipeline not configured — `OPENAI_API_KEY` or `GCP_PROJECT` unset (`POST /voice/transcribe`). Link codes not configured (`LINK_CODE_SECRET` unset) or Redis unreachable (`POST /auth/link`). IGDB rate-limited or auth expired (`POST /games/match`, `POST /games` with `igdb_id`, `POST /admin/games/match`, `POST /admin/games/{id}/igdb-link`). |
 
 `GET /health` and `GET /api/v1/health` always return `200`; bot offline or Redis loss is reflected in the JSON payload (`bot.status`: `offline` / `unknown`), not the HTTP status.
@@ -129,7 +129,7 @@ Session state machine — see the [README session state machine](../README.md#se
 | `POST` | `/api/v1/games` | Create a new global `Game` row or link to an existing one. Two modes (exactly one): **igdb_id mode** — dedupes by `external_api_id` (returns `200` if already known with no IGDB call, else fetches IGDB metadata and creates an `ENRICHED` row → `201`; IGDB miss → `404`; rate-limited → `503`). **Unrecognized mode** (`unrecognized: true` + non-blank `name`) — inserts a `NEEDS_REVIEW` stub using `name` as `primary_name`, no alias written → `201`. In igdb_id mode, optional `query` is stored as a `GameAlias` for future `/resolve` lookups (ignored in unrecognized mode — binding a string to a game is an admin action, see [Admin](#admin)). Both/neither mode active → `422`. |
 | `GET` | `/api/v1/games/resolve?name=<string>` | Map a free-text name to `{game_id, name}` from the user's library (games with at least one non-soft-deleted session — `ERROR` counts, ignored games still resolve). Exact case-insensitive match on `primary_name`, then on `game_aliases.discord_process_name`. Returns `200` with body `null` on miss. Voice-flow prefill. |
 | `GET` | `/api/v1/games/suggest?q=<string>` | Fuzzy-search the **global** games catalog (all users' games, not restricted to the caller's library), except a `NEEDS_REVIEW` game with no alias that the caller has never touched (no non-deleted session, no preference row) — that one row type is hidden; `PENDING` stays globally visible. Pre-filters by word-prefix match of every token on `primary_name` or aliases (falling back to any-token if nothing matches all), scores each candidate with `_confidence()` (max across name + aliases), drops score below the floor (0.3 strict / 0.7 fallback), sorts descending, paginates. Returns `{"total": <int>, "items": [<GameSuggestItem>]}` — each item includes `game_id`, `primary_name`, `cover_image_url`, `enrichment_status`, `score`. `422` if `q` is blank or whitespace. |
-| `POST` | `/api/v1/games/match` | Synchronous IGDB candidate search — no DB write. Body: `{"query": "<string>"}`. Returns `list[IGDBCandidateOut]` (`igdb_id`, `name`, `year\|null`, `cover_url\|null`, `score`). Use when suggest has no usable match; pass the chosen `igdb_id` to `POST /games`. Rate limited to 20/hour per credential (`429`). `503` rate-limited; `502` other IGDB error. |
+| `POST` | `/api/v1/games/match` | Synchronous IGDB candidate search — no DB write. Body: `{"query": "<string>"}`. Returns `list[IGDBCandidateOut]` (`igdb_id`, `name`, `year\|null`, `cover_url\|null`, `score`). Use when suggest has no usable match; pass the chosen `igdb_id` to `POST /games`. Rate limited to 20/hour per user (`429` + `Retry-After`). `503` rate-limited; `502` other IGDB error. |
 | `GET` | `/api/v1/games/{id}` | Single game by id, same `GameResponse` shape as `GET /games` list items (`is_ignored`, `is_accepted`, `total_seconds`, `last_played`). Access is session-derived: `404` unless the caller has at least one visible session for the game (also covers a non-existent `id`). `is_ignored` / library-visibility filters do not apply — the caller navigated by id, so an ignored or `NEEDS_REVIEW` game still resolves. `total_seconds`/`last_played` match the library card (COMPLETED + ONGOING counted live). For deep links to `/library/:id` (refresh, bookmark, post-merge redirect) without needing to page the list. |
 | `GET` | `/api/v1/games/{id}/sessions` | Paginated session list for a game. `is_ignored` does not apply — same visibility rules as other session reads (soft-deleted and flicker rows excluded). |
 | `GET` | `/api/v1/games/{id}/stats` | Lifetime playtime stats for a single game — `total_seconds` (ONGOING counted live via `now() - start_time`), `session_count`, `first_played`, `last_played`. `404` when the caller has no visible sessions for the game (also covers a non-existent `game_id`). |
@@ -215,10 +215,10 @@ Fields: `id`, `primary_name`, `cover_image_url`, `cover_source`, `enrichment_sta
 | `201` | New game row created (either mode) |
 | `404` | IGDB has no record for the provided `igdb_id` |
 | `422` | Both modes active, neither mode active, or `name` is blank with `unrecognized: true` |
-| `429` | Caller exceeded 60 requests/hour (per credential) |
+| `429` | Caller exceeded 60 requests/hour (per user); `Retry-After` header in seconds |
 | `503` | IGDB rate-limited or auth expired (igdb_id mode only) |
 
-Rate limited to **60/hour per credential**. Looser than `POST /games/match` because igdb_id mode deduplicates before calling IGDB and unrecognized mode never calls it — the cap bounds a looping client without blocking a genuine library backfill.
+Rate limited to **60/hour per user**. Looser than `POST /games/match` because igdb_id mode deduplicates before calling IGDB and unrecognized mode never calls it — the cap bounds a looping client without blocking a genuine library backfill.
 
 ### `GET /games/suggest` — global catalog fuzzy search
 
@@ -291,7 +291,7 @@ Returns **up to 10** candidates, relevance-ranked by IGDB. (The enrichment worke
 
 Returns `401` without a valid bearer token. Returns `503` when IGDB is rate-limited or the Twitch auth token has expired. Returns `502` on any other IGDB failure (logged server-side).
 
-Rate limited to **20/hour per credential** — `429` past that. Every call spends one request from the IGDB budget, which Twitch throttles per Client ID and which the Celery enrichment worker draws from too, so one looping client would otherwise starve the whole deployment.
+Rate limited to **20/hour per user** — `429` + `Retry-After` past that. Every call spends one request from the IGDB budget, which Twitch throttles per Client ID and which the Celery enrichment worker draws from too, so one looping client would otherwise starve the whole deployment.
 
 ## Admin
 
@@ -437,6 +437,10 @@ at once, grants no additional transcriptions. Over quota returns `429` with
 `detail: "Voice quota exceeded"` and a `Retry-After` header in seconds.
 
 The two windows are enforced differently, on purpose:
+
+All per-user hourly quotas share one implementation (`app/core/rate_limit.py`,
+Redis key `quota:{bucket}:{user_id}:h`), so re-logging in or holding several valid tokens
+never grants extra budget on any of them. Voice adds a DB-backed daily cap on top:
 
 | Window | Source | Counts | Notes |
 |---|---|---|---|
