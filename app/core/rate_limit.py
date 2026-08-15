@@ -1,10 +1,15 @@
-"""Rate limiting for paid endpoints (voice STT).
+"""Rate limiting for the IGDB-backed game endpoints (POST /games, /games/match).
 
-Keyed on the caller's bearer credential (SHA-256 of the token), not user_id:
-the threat is a leaked token in a loop = one credential = caught directly, and
-this needs no changes to get_current_user (whose resolved User is not visible to
-slowapi's request-only key function). Redis storage → shared across api workers
+Keyed on the caller's bearer credential (SHA-256 of the token), not user_id,
+because slowapi's key function sees only the Request — the User resolved by
+get_current_user is not visible to it. Redis storage → shared across api workers
 and durable across restarts.
+
+Caveat: a token-keyed counter does NOT bind per user. Every login path issues a
+new token and none are revoked on re-login, so a user can reset a bucket by
+logging in again, or run several tokens in parallel. These endpoints spend IGDB
+quota rather than money, so the weaker guarantee is accepted here; the paid voice
+endpoint enforces a real per-user quota instead — see app/services/voice_quota.py.
 """
 from fastapi import Request
 from slowapi import Limiter
