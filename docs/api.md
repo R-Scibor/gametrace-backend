@@ -22,7 +22,7 @@ Grouped by code — see endpoint sections below for path-specific detail. Authed
 | `422` | Semantic validation — `end_time` not after `start_time` (`PATCH /sessions/{id}`), `DELETE /sessions/{id}?hard=true` on a non-trashed row, invalid IANA timezone or unsupported `language` (not `"pl"`/`"en"`) on `PUT /profile/settings` (Pydantic). Link `code` not exactly 6 digits (`POST /auth/link`, Pydantic). Blank/whitespace-only or over-4000-char `message`, or a missing `context` field, on `POST /reports` (Pydantic). Unsupported/invalid `extension` or malformed `image_base64` on `PUT /admin/games/{id}/cover`. Invalid `status` query value on `GET /admin/reports`, `GET /admin/reports/facets`, or `GET /admin/games`, or a body `status` other than `"open"`/`"triaged"`/`"closed"` on `PATCH /admin/reports/{id}` (Pydantic). `q` over 200 chars on `GET /admin/reports` (Pydantic). An empty body with neither `status` nor `admin_note` present, an explicit `"status": null`, or an `admin_note` over 4000 chars, on `PATCH /admin/reports/{id}`. Blank/whitespace-only `discord_process_name` on `POST /admin/games/{id}/aliases`. |
 | `500` | Unhandled server error (global handler in `app/main.py`). |
 | `502` | Upstream voice failure — OpenAI Whisper or Vertex Gemini error (`POST /voice/transcribe`). Discord OAuth upstream failure (`POST /auth/discord`). IGDB upstream error — non-rate-limit failure (`POST /games/match`, `POST /admin/games/match`). |
-| `429` | Too many failed link-code attempts (`POST /auth/link`) — per-IP or global lockout; response includes `Retry-After` (seconds). Per-credential rate limit exceeded on `POST /voice/transcribe` (10/hour), `POST /games/match` (20/hour), or `POST /games` (60/hour). |
+| `429` | Too many failed link-code attempts (`POST /auth/link`) — per-IP or global lockout; response includes `Retry-After` (seconds). Voice quota exceeded (`POST /voice/transcribe`) — per-user, 8/hour or 40/day; response includes `Retry-After` (seconds). Per-credential rate limit exceeded on `POST /games/match` (20/hour) or `POST /games` (60/hour). |
 | `503` | Voice pipeline not configured — `OPENAI_API_KEY` or `GCP_PROJECT` unset (`POST /voice/transcribe`). Link codes not configured (`LINK_CODE_SECRET` unset) or Redis unreachable (`POST /auth/link`). IGDB rate-limited or auth expired (`POST /games/match`, `POST /games` with `igdb_id`, `POST /admin/games/match`, `POST /admin/games/{id}/igdb-link`). |
 
 `GET /health` and `GET /api/v1/health` always return `200`; bot offline or Redis loss is reflected in the JSON payload (`bot.status`: `offline` / `unknown`), not the HTTP status.
@@ -413,7 +413,7 @@ All stats endpoints exclude soft-deleted sessions, `ERROR` sessions, `is_flicker
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/voice/transcribe` | Multipart audio upload (m4a/wav/mp3/ogg/webm). See pipeline below. Unknown fields come back as `null`. The user always confirms before saving — this endpoint only suggests values. After transcription, the frontend typically calls `GET /games/resolve?name=` to map the spoken game name to a library entry. `503` if `OPENAI_API_KEY` or `GCP_PROJECT` is unset. |
+| `POST` | `/api/v1/voice/transcribe` | Multipart audio upload (m4a/wav/mp3/ogg/webm). See pipeline below. Unknown fields come back as `null`. The user always confirms before saving — this endpoint only suggests values. After transcription, the frontend typically calls `GET /games/resolve?name=` to map the spoken game name to a library entry. `503` if `OPENAI_API_KEY` or `GCP_PROJECT` is unset. `429` when the per-user quota is exhausted — see below. |
 
 ### Transcribe pipeline
 
@@ -427,6 +427,28 @@ audio upload
   → Gemini Flash via Vertex AI (structured output, response_schema)
   → {game, date, start_time, end_time, duration_minutes, raw_transcript}
 ```
+
+### Quota
+
+This is the only endpoint that spends money per call (Whisper + Gemini), so it carries a
+per-user quota — **8 per hour and 40 per day**. Both windows are keyed on the user, not on
+the bearer token: issuing a new token by logging in again, or holding several valid tokens
+at once, grants no additional transcriptions. Over quota returns `429` with
+`detail: "Voice quota exceeded"` and a `Retry-After` header in seconds.
+
+The two windows are enforced differently, on purpose:
+
+| Window | Source | Counts | Notes |
+|---|---|---|---|
+| 40/day | `voice_usage` rows (indexed on `user_id`, `created_at`) | Successful calls | Survives a Redis restart. `Retry-After` = when the oldest counted call leaves the 24h window. |
+| 8/hour | Redis counter `voice:quota:{user_id}:h` | Attempts | Bounds a loop of *failing* calls, which write no `voice_usage` row. `Retry-After` = key TTL. |
+
+The daily cap is checked first and does not consume hourly budget, since a request it
+blocks spends nothing. Requests rejected before the paid work (`400` empty upload, `422`
+non-audio, `503` unconfigured) also cost no quota. If Redis is unavailable the hourly check
+fails open so voice stays usable; the DB-backed daily cap still binds. Because the
+`voice_usage` insert is best-effort (it must never fail a request the user already paid
+for), the daily count is a floor rather than an exact ledger.
 
 Gemini uses `response_mime_type="application/json"` + `response_schema` — no markdown-fence stripping. Invalid `users.timezone` values fall back to `DEFAULT_TIMEZONE` (env, default `Europe/Warsaw`) with a warning log; users still at the DB default `UTC` also use `DEFAULT_TIMEZONE` for the voice datetime anchor.
 
