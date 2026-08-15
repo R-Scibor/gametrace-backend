@@ -9,6 +9,7 @@ hit the real IGDB API.
 from datetime import date
 from unittest.mock import patch
 
+import fakeredis.aioredis
 import pytest
 from sqlalchemy import func, select
 
@@ -170,18 +171,16 @@ async def test_requires_auth(client):
 
 # ── rate limiting ─────────────────────────────────────────────────────────────
 
-@pytest.fixture
-def rate_limit_enabled():
-    """Enable the limiter for one test. authed_client mints a fresh random token
-    per test, so each test gets its own limiter bucket — no reset needed."""
-    from app.main import app
-    limiter = app.state.limiter
-    limiter.enabled = True
-    yield
-    limiter.enabled = False
+@pytest.fixture(autouse=True)
+def patch_quota_redis(monkeypatch):
+    """Fresh in-memory Redis per test: the hourly quota counter must not leak
+    between tests (make_user reuses a fixed discord_id, and Redis is not rolled
+    back the way the DB is)."""
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    monkeypatch.setattr("app.core.rate_limit.get_redis", lambda: fake)
 
 
-async def test_rate_limited_after_60(authed_client, rate_limit_enabled):
+async def test_rate_limited_after_60(authed_client):
     """Looser than /match: igdb_id mode dedupes before calling IGDB and
     unrecognized mode never calls it, so a genuine library backfill must fit.
     The cap exists to bound a looping client, not to pace honest use."""
@@ -195,6 +194,25 @@ async def test_rate_limited_after_60(authed_client, rate_limit_enabled):
 
     assert statuses[:60] == [201] * 60
     assert statuses[60] == 429
+
+
+async def test_rate_limit_survives_relogin(db, client, user):
+    """Regression: the cap used to be keyed on the bearer token, so logging in
+    again minted a fresh bucket. A second token for the SAME user must find the
+    budget already spent."""
+    from tests.factories import make_token
+
+    first_token = await make_token(db, user.discord_id)
+    with patch(PATCH_TARGET, return_value=("The Witcher 3", _META)):
+        client.headers["Authorization"] = f"Bearer {first_token}"
+        for i in range(60):
+            await client.post(URL, json={"unrecognized": True, "name": f"Stub {i}"})
+
+        client.headers["Authorization"] = f"Bearer {await make_token(db, user.discord_id)}"
+        resp = await client.post(URL, json={"unrecognized": True, "name": "Stub last"})
+
+    assert resp.status_code == 429
+    assert int(resp.headers["Retry-After"]) > 0
 
 
 # ── demo account alias suppression ──────────────────────────────────────────

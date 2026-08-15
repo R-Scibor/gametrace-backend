@@ -14,6 +14,7 @@ import fakeredis.aioredis
 import pytest
 import redis.exceptions
 
+from app.core import rate_limit
 from app.services import voice_quota
 from tests.factories import dt, make_user, make_voice_usage
 
@@ -27,7 +28,7 @@ async def redis_client():
 
 @pytest.fixture(autouse=True)
 def patch_get_redis(monkeypatch, redis_client):
-    monkeypatch.setattr("app.services.voice_quota.get_redis", lambda: redis_client)
+    monkeypatch.setattr("app.core.rate_limit.get_redis", lambda: redis_client)
 
 
 async def test_under_both_limits_returns_none(db):
@@ -44,7 +45,7 @@ async def test_hourly_limit_blocks_after_limit_attempts(db):
 
     retry_after = await voice_quota.check_voice_quota(db, user.discord_id)
     assert retry_after is not None
-    assert 0 < retry_after <= voice_quota.HOURLY_WINDOW_SECONDS
+    assert 0 < retry_after <= rate_limit.HOURLY_WINDOW_SECONDS
 
 
 async def test_daily_limit_blocks_without_spending_hourly(db, redis_client):
@@ -59,7 +60,7 @@ async def test_daily_limit_blocks_without_spending_hourly(db, redis_client):
     # Oldest counted row is 2h old, so ~22h remain on the 24h window.
     assert 21 * 3600 < retry_after <= 22 * 3600 + 5
 
-    assert await redis_client.get(voice_quota.hourly_key(user.discord_id)) is None
+    assert await redis_client.get(voice_quota.voice_hourly_key(user.discord_id)) is None
 
 
 async def test_usage_older_than_daily_window_is_not_counted(db):
@@ -86,7 +87,7 @@ async def test_redis_failure_fails_open(db):
     'no limit'. The daily DB cap still binds, so spend stays bounded."""
     user = await make_user(db, discord_id="900000000000000007", username="quota-redisdown")
 
-    with patch("app.services.voice_quota.get_redis",
+    with patch("app.core.rate_limit.get_redis",
                side_effect=redis.exceptions.ConnectionError("redis down")):
         assert await voice_quota.check_voice_quota(db, user.discord_id) is None
 
@@ -96,7 +97,7 @@ async def test_daily_cap_still_binds_when_redis_is_down(db):
     for _ in range(voice_quota.DAILY_LIMIT):
         await make_voice_usage(db, user.discord_id, created_at=dt(hours_ago=1))
 
-    with patch("app.services.voice_quota.get_redis",
+    with patch("app.core.rate_limit.get_redis",
                side_effect=redis.exceptions.ConnectionError("redis down")):
         assert await voice_quota.check_voice_quota(db, user.discord_id) is not None
 

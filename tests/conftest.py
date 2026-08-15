@@ -25,11 +25,6 @@ from app.core.database import Base, get_db
 from app.main import app
 from tests.factories import make_token, make_user
 
-# Rate limiting is off by default in tests; the dedicated rate-limit test opts in
-# via the rate_limit_enabled fixture. Keeps every other test free of the limiter
-# (and of a hard Redis dependency).
-app.state.limiter.enabled = False
-
 TEST_DB_URL = settings.database_url.replace("/gametrace_db", "/gametrace_test")
 
 

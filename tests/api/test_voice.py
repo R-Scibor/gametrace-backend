@@ -271,7 +271,7 @@ def patch_quota_redis(monkeypatch):
     between tests (make_user reuses a fixed discord_id, and Redis is not rolled
     back the way the DB is)."""
     fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
-    monkeypatch.setattr("app.services.voice_quota.get_redis", lambda: fake)
+    monkeypatch.setattr("app.core.rate_limit.get_redis", lambda: fake)
 
 
 async def _post_audio(client):

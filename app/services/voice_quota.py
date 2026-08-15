@@ -14,8 +14,9 @@ Two windows, two jobs:
   indexed — so it is a cheap indexed count that survives a Redis flush. The
   usage insert is deliberately best-effort in the endpoint, so this count is a
   floor, not an exact ledger; the hourly counter covers the gap.
-* **Hourly** bounds burst. A Redis counter incremented on every ATTEMPT, so a
-  loop of failing calls (which writes no ``voice_usage`` row) is still capped.
+* **Hourly** bounds burst, via the shared per-user counter in
+  ``app.core.rate_limit``. It counts every ATTEMPT, so a loop of failing calls
+  (which writes no ``voice_usage`` row) is still capped.
 
 Daily is checked first and is read-only: a daily-blocked request spends no money
 and so must not consume hourly budget.
@@ -23,23 +24,23 @@ and so must not consume hourly budget.
 import logging
 from datetime import datetime, timedelta, timezone
 
-import redis.exceptions
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.redis import get_redis
+from app.core.rate_limit import check_hourly_quota, hourly_key
 from app.models.voice_usage import VoiceUsage
 
 logger = logging.getLogger(__name__)
 
 HOURLY_LIMIT = 8
 DAILY_LIMIT = 40
-HOURLY_WINDOW_SECONDS = 3600
 DAILY_WINDOW = timedelta(days=1)
+BUCKET = "voice"
 
 
-def hourly_key(user_id: str) -> str:
-    return f"voice:quota:{user_id}:h"
+def voice_hourly_key(user_id: str) -> str:
+    """The Redis key this quota's hourly window uses — exposed for tests."""
+    return hourly_key(BUCKET, user_id)
 
 
 async def check_voice_quota(db: AsyncSession, user_id: str) -> int | None:
@@ -64,17 +65,6 @@ async def check_voice_quota(db: AsyncSession, user_id: str) -> int | None:
         remaining = (oldest + DAILY_WINDOW) - now
         return max(1, int(remaining.total_seconds()) + 1)
 
-    # Fails open: a Redis outage must not take voice down. The daily cap above
-    # is DB-backed and still binds, so spend stays bounded either way.
-    try:
-        r = get_redis()
-        key = hourly_key(user_id)
-        hourly_used = await r.incr(key)
-        if hourly_used == 1:
-            await r.expire(key, HOURLY_WINDOW_SECONDS)
-        if hourly_used > HOURLY_LIMIT:
-            return max(1, await r.ttl(key))
-    except (redis.exceptions.RedisError, ConnectionError, OSError):
-        logger.warning("voice.quota.redis_unavailable_failing_open", exc_info=True)
-
-    return None
+    # Fails open on a Redis outage (see check_hourly_quota) — voice stays usable
+    # and the DB-backed daily cap above still binds, so spend stays bounded.
+    return await check_hourly_quota(user_id, BUCKET, HOURLY_LIMIT)

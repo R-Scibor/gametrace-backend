@@ -3,14 +3,14 @@ import logging
 from datetime import date
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import Integer, and_, case, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
 from app.api.v1.endpoints.auth import get_current_or_bot_user, get_current_user
 from app.core.database import get_db
-from app.core.rate_limit import limiter
+from app.core.rate_limit import check_hourly_quota
 from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
@@ -45,6 +45,14 @@ from app.services.stats import game_stats_for_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Per-user hourly quotas (app/core/rate_limit.py). Both endpoints spend the
+# shared IGDB budget, which Twitch throttles per Client ID across every user and
+# the enrichment worker.
+GAMES_CREATE_BUCKET = "games_create"
+GAMES_CREATE_HOURLY_LIMIT = 60
+GAMES_MATCH_BUCKET = "games_match"
+GAMES_MATCH_HOURLY_LIMIT = 20
 
 
 def _playtime_expr():
@@ -233,9 +241,7 @@ async def list_games(
 # ---------------------------------------------------------------------------
 
 @router.post("", response_model=GameResponse, status_code=201)
-@limiter.limit("60/hour")
 async def create_or_link_game(
-    request: Request,
     body: GameCreateRequest,
     response: Response,
     db: AsyncSession = Depends(get_db),
@@ -253,11 +259,21 @@ async def create_or_link_game(
     voice/resolve calls can map the typed string to the game; unrecognized
     mode never writes an alias. Skipped entirely for the shared demo account.
 
-    Rate limited to 60/hour per credential (429 past that). Looser than
-    /games/match: igdb_id mode dedupes before calling IGDB and unrecognized
+    Rate limited to 60/hour per user (429 past that, with Retry-After). Looser
+    than /games/match: igdb_id mode dedupes before calling IGDB and unrecognized
     mode never calls it, so this bounds a looping client without blocking a
-    genuine library backfill. The limiter needs the *request* parameter.
+    genuine library backfill.
     """
+    retry_after = await check_hourly_quota(
+        user.discord_id, GAMES_CREATE_BUCKET, GAMES_CREATE_HOURLY_LIMIT
+    )
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     if body.igdb_id is not None:
         # ── igdb_id mode ────────────────────────────────────────────────────
         # 1. Dedupe BEFORE any IGDB call
@@ -571,9 +587,7 @@ async def suggest_games(
 # ---------------------------------------------------------------------------
 
 @router.post("/match", response_model=list[IGDBCandidateOut])
-@limiter.limit("20/hour")
 async def match_game(
-    request: Request,
     body: GameMatchRequest,
     user: User = Depends(get_current_user),
 ):
@@ -586,15 +600,24 @@ async def match_game(
 
     Every call spends one request from the IGDB budget, which Twitch throttles
     per Client ID (4 req/s) — shared by every user *and* the Celery enrichment
-    worker. Hence the 20/hour per-credential cap: generous for honest wizard
-    use, and it stops one looping client from starving the rest.
-    The limiter requires the *request* parameter.
+    worker. Hence the 20/hour per-user cap: generous for honest wizard use, and
+    it stops one looping client from starving the rest.
 
     Errors:
       503 — IGDB rate-limited or auth expired (_RateLimited)
       502 — any other IGDB failure
-      429 — caller exceeded 20/hour
+      429 — caller exceeded 20/hour (Retry-After header)
     """
+    retry_after = await check_hourly_quota(
+        user.discord_id, GAMES_MATCH_BUCKET, GAMES_MATCH_HOURLY_LIMIT
+    )
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     try:
         candidates = await asyncio.to_thread(_igdb_search_candidates, body.query)
     except _RateLimited:

@@ -7,6 +7,7 @@ Patches app.api.v1.endpoints.games._igdb_search_candidates so tests never
 hit the real IGDB API.  Mirrors the pattern in test_voice.py which patches
 app.api.v1.endpoints.voice._gemini_parse.
 """
+import fakeredis.aioredis
 import pytest
 from unittest.mock import patch
 
@@ -120,18 +121,16 @@ async def test_empty_query_is_422(authed_client):
 
 # ── rate limiting ─────────────────────────────────────────────────────────────
 
-@pytest.fixture
-def rate_limit_enabled():
-    """Enable the limiter for one test. authed_client mints a fresh random token
-    per test, so each test gets its own limiter bucket — no reset needed."""
-    from app.main import app
-    limiter = app.state.limiter
-    limiter.enabled = True
-    yield
-    limiter.enabled = False
+@pytest.fixture(autouse=True)
+def patch_quota_redis(monkeypatch):
+    """Fresh in-memory Redis per test: the hourly quota counter must not leak
+    between tests (make_user reuses a fixed discord_id, and Redis is not rolled
+    back the way the DB is)."""
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    monkeypatch.setattr("app.core.rate_limit.get_redis", lambda: fake)
 
 
-async def test_rate_limited_after_20(authed_client, rate_limit_enabled):
+async def test_rate_limited_after_20(authed_client):
     """IGDB throttles per Client ID, shared by every user and the enrichment
     worker — cap a runaway client before it drains the bucket."""
     with patch(PATCH_TARGET, return_value=[_CANDIDATE_A]):
@@ -146,8 +145,8 @@ async def test_rate_limited_after_20(authed_client, rate_limit_enabled):
     assert statuses[20] == 429
 
 
-async def test_rate_limit_is_per_credential(db, client, user, admin_user, rate_limit_enabled):
-    """Exhausting one token's budget does not block a different token."""
+async def test_rate_limit_is_per_user(db, client, user, admin_user):
+    """Exhausting one user's budget does not block a different user."""
     from tests.factories import make_token
 
     user_token = await make_token(db, user.discord_id)
@@ -162,3 +161,20 @@ async def test_rate_limit_is_per_credential(db, client, user, admin_user, rate_l
         resp = await client.post("/api/v1/games/match", json={"query": "hades"})
 
     assert resp.status_code == 200
+
+
+async def test_rate_limit_survives_relogin(db, client, user):
+    """Regression: a fresh token for the same user must not reset the budget."""
+    from tests.factories import make_token
+
+    first_token = await make_token(db, user.discord_id)
+    with patch(PATCH_TARGET, return_value=[_CANDIDATE_A]):
+        client.headers["Authorization"] = f"Bearer {first_token}"
+        for _ in range(20):
+            await client.post("/api/v1/games/match", json={"query": "hades"})
+
+        client.headers["Authorization"] = f"Bearer {await make_token(db, user.discord_id)}"
+        resp = await client.post("/api/v1/games/match", json={"query": "hades"})
+
+    assert resp.status_code == 429
+    assert int(resp.headers["Retry-After"]) > 0
