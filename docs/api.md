@@ -445,7 +445,7 @@ never grants extra budget on any of them. Voice adds a DB-backed daily cap on to
 | Window | Source | Counts | Notes |
 |---|---|---|---|
 | 40/day | `voice_usage` rows (indexed on `user_id`, `created_at`) | Successful calls | Survives a Redis restart. `Retry-After` = when the oldest counted call leaves the 24h window. |
-| 8/hour | Redis counter `voice:quota:{user_id}:h` | Attempts | Bounds a loop of *failing* calls, which write no `voice_usage` row. `Retry-After` = key TTL. |
+| 8/hour | Redis counter `quota:voice:{user_id}:h` | Attempts | Bounds a loop of *failing* calls, which write no `voice_usage` row. `Retry-After` = key TTL. |
 
 The daily cap is checked first and does not consume hourly budget, since a request it
 blocks spends nothing. Requests rejected before the paid work (`400` empty upload, `422`

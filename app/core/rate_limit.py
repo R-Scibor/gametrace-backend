@@ -41,9 +41,16 @@ async def check_hourly_quota(user_id: str, bucket: str, limit: int) -> int | Non
     try:
         r = get_redis()
         key = hourly_key(bucket, user_id)
-        used = await r.incr(key)
-        if used == 1:
-            await r.expire(key, HOURLY_WINDOW_SECONDS)
+        # INCR + EXPIRE NX in one round trip. NX arms the TTL only when the key
+        # has none, which both starts the window on the first call and repairs a
+        # key left TTL-less by a crash or connection blip between the two
+        # commands. Without that repair the counter never expires, so past the
+        # limit the user is 429'd forever with Retry-After: 1 — a well-behaved
+        # client retries into a loop that only a manual DEL breaks.
+        pipe = r.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, HOURLY_WINDOW_SECONDS, nx=True)
+        used, _ = await pipe.execute()
         if used > limit:
             return max(1, await r.ttl(key))
     except (redis.exceptions.RedisError, ConnectionError, OSError):
