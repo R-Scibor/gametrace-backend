@@ -228,10 +228,13 @@ async def test_no_usage_row_on_422(authed_client, db):
     assert await _voice_usage_count(db) == 0
 
 
-async def test_no_usage_row_on_gemini_failure(authed_client, db):
+async def test_usage_row_written_when_gemini_fails(authed_client, db, user):
+    """Whisper already charged us by the time Gemini runs, so the row is written
+    right after transcription — otherwise a Gemini outage would let a caller
+    spend Whisper money that the daily cap never counts."""
     with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
          patch("app.api.v1.endpoints.voice.AsyncOpenAI",
-               return_value=_mock_openai("some transcript")), \
+               return_value=_mock_openai("some transcript", duration=12.5, language="en")), \
          patch("app.api.v1.endpoints.voice._gemini_parse",
                side_effect=json.JSONDecodeError("msg", "doc", 0)):
         resp = await authed_client.post(
@@ -240,7 +243,51 @@ async def test_no_usage_row_on_gemini_failure(authed_client, db):
         )
 
     assert resp.status_code == 502
+    row = (await db.execute(select(VoiceUsage))).scalars().one()
+    assert row.user_id == user.discord_id
+    assert float(row.audio_seconds) == 12.5
+    assert row.detected_language == "en"
+    # Parse never completed — no fields were extracted.
+    assert row.game_resolved is False
+    assert row.fields_extracted == 0
+
+
+async def test_no_usage_row_on_whisper_failure(authed_client, db):
+    """Whisper itself failing costs nothing, so it records nothing."""
+    failing = MagicMock()
+    failing.audio.transcriptions.create = AsyncMock(side_effect=Exception("boom"))
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
+         patch("app.api.v1.endpoints.voice.AsyncOpenAI", return_value=failing):
+        resp = await authed_client.post(
+            "/api/v1/voice/transcribe",
+            files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
+        )
+
+    assert resp.status_code == 502
     assert await _voice_usage_count(db) == 0
+
+
+async def test_gemini_failures_count_toward_the_daily_cap(authed_client, db, user):
+    """The gap this placement closes: a caller who reliably fails the parse step
+    must not get more paid Whisper calls than the daily cap allows."""
+    from app.services.voice_quota import DAILY_LIMIT
+
+    for _ in range(DAILY_LIMIT - 1):
+        await make_voice_usage(db, user.discord_id, created_at=dt(hours_ago=2))
+
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
+         patch("app.api.v1.endpoints.voice.AsyncOpenAI",
+               return_value=_mock_openai("some transcript")), \
+         patch("app.api.v1.endpoints.voice._gemini_parse",
+               side_effect=json.JSONDecodeError("msg", "doc", 0)):
+        # 502, but it spent Whisper money and so must fill the last daily slot.
+        assert (await _post_audio(authed_client)).status_code == 502
+
+    settings_p, openai_p, gemini_p = _patched_pipeline()
+    with settings_p, openai_p, gemini_p:
+        resp = await _post_audio(authed_client)
+
+    assert resp.status_code == 429
 
 
 async def test_usage_write_failure_is_non_fatal(authed_client, db):

@@ -9,11 +9,11 @@ than in a slowapi key function (those see only the Request).
 
 Two windows, two jobs:
 
-* **Daily** bounds the bill. Counted from ``voice_usage``, which already stores
-  one row per SUCCESSFUL transcription with ``user_id`` and ``created_at``
-  indexed — so it is a cheap indexed count that survives a Redis flush. The
-  usage insert is deliberately best-effort in the endpoint, so this count is a
-  floor, not an exact ledger; the hourly counter covers the gap.
+* **Daily** bounds the bill. Counted from ``voice_usage``, which stores one row
+  per PAID call (written as soon as Whisper returns, so a failed Gemini parse
+  still counts) with ``user_id`` and ``created_at`` indexed — a cheap indexed
+  count that survives a Redis flush. The insert is best-effort, so this count is
+  a floor rather than an exact ledger; the hourly counter covers that gap.
 * **Hourly** bounds burst, via the shared per-user counter in
   ``app.core.rate_limit``. It counts every ATTEMPT, so a loop of failing calls
   (which writes no ``voice_usage`` row) is still capped.

@@ -196,6 +196,26 @@ async def transcribe_audio(
         except OSError:
             pass
 
+    # Whisper has now billed us, so the usage row goes in HERE rather than after
+    # the parse: it is what the daily quota counts, and a Gemini outage must not
+    # hand out paid transcriptions the cap never sees. Best-effort — it must
+    # never fail a request the user already paid for. Extraction counts are
+    # filled in below if the parse succeeds.
+    try:
+        usage = VoiceUsage(
+            user_id=user.discord_id,
+            audio_seconds=getattr(transcription, "duration", None),
+            detected_language=detected_language,
+            game_resolved=False,
+            fields_extracted=0,
+        )
+        db.add(usage)
+        await db.commit()
+    except Exception:
+        logger.warning("voice.transcribe.usage_record_failed", exc_info=True)
+        await db.rollback()
+        usage = None
+
     # Transcript content is user speech — DEBUG only, keep it out of default logs.
     logger.debug(
         "voice/transcribe: whisper transcript=%r language=%r",
@@ -220,21 +240,16 @@ async def transcribe_audio(
         logger.exception("Gemini/Vertex AI parsing failed")
         raise HTTPException(status_code=502, detail="Parsing failed.") from exc
 
-    # Best-effort usage capture — metadata only, must never fail the request.
-    try:
-        db.add(
-            VoiceUsage(
-                user_id=user.discord_id,
-                audio_seconds=getattr(transcription, "duration", None),
-                detected_language=detected_language,
-                game_resolved=parsed.get("game") is not None,
-                fields_extracted=sum(1 for v in parsed.values() if v is not None),
-            )
-        )
-        await db.commit()
-    except Exception:
-        logger.warning("voice.transcribe.usage_record_failed", exc_info=True)
-        await db.rollback()
+    # Fill in what the parse produced. Best-effort, same as the insert above:
+    # the row already counts against quota, so a failure here costs only detail.
+    if usage is not None:
+        try:
+            usage.game_resolved = parsed.get("game") is not None
+            usage.fields_extracted = sum(1 for v in parsed.values() if v is not None)
+            await db.commit()
+        except Exception:
+            logger.warning("voice.transcribe.usage_update_failed", exc_info=True)
+            await db.rollback()
 
     return TranscribeResponse(
         game=parsed.get("game"),
