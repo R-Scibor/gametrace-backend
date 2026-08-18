@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 REQUEST_TIMEOUT_SECONDS = 5.0
 
 # Overridable transport for tests (httpx.MockTransport). None = real network.
-_transport: httpx.BaseTransport | None = None
+_transport: httpx.AsyncBaseTransport | None = None
 
 
 class BotApiError(Exception):

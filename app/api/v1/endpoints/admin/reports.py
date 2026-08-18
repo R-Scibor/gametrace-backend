@@ -184,8 +184,11 @@ async def triage_report(
     before_marker = None
     after_marker = None
 
-    status_changed = "status" in fields_set and body.status != report.status
+    # The guard above 422s on an explicit null, so a non-None status is exactly
+    # equivalent to "status" in fields_set here — and narrows for the assignment.
+    status_changed = body.status is not None and body.status != report.status
     if status_changed:
+        assert body.status is not None  # implied by status_changed
         before_status = report.status
         report.status = body.status
 

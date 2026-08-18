@@ -2,12 +2,13 @@
 
 import asyncio
 import logging
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.api.v1.endpoints.auth import require_admin
 from app.core.database import get_db
@@ -91,7 +92,7 @@ async def list_games(
 
     total = await db.scalar(select(func.count()).select_from(Game).where(*filters))
 
-    sort_map = {
+    sort_map: dict[str, tuple[ColumnElement[Any], ...]] = {
         "sessions_desc": (session_count_expr.desc(), Game.id.asc()),
         "id_asc": (Game.id.asc(),),
         "name_asc": (Game.primary_name.asc(),),

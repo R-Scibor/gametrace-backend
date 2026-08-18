@@ -49,6 +49,8 @@ def _panel_container(title: str, body: str, row: ActionRow) -> Container:
     """
     rendered = layout.reply_view(title, body, layout.accent_for(body))
     container = rendered.children[0]
+    # layout.reply_view() always builds exactly one Container as the root child.
+    assert isinstance(container, Container)
     rendered.remove_item(container)
     container.add_item(row)
     return container

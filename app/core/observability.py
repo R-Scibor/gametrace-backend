@@ -3,13 +3,14 @@ from typing import Any
 
 import sentry_sdk
 from sentry_sdk.integrations.celery import CeleryIntegration
+from sentry_sdk.types import Event, Hint
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-def _before_send(event: dict, hint: dict) -> dict:
+def _before_send(event: Event, hint: Hint) -> Event | None:
     request = event.get("request")
     if not isinstance(request, dict):
         return event

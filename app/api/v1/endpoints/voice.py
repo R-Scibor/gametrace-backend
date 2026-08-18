@@ -180,7 +180,9 @@ async def transcribe_audio(
             transcription = await openai_client.audio.transcriptions.create(
                 model="whisper-1",
                 file=audio_file,
-                language=None,  # auto-detect — handles Polish + English mixed
+                # The SDK types `language` as `str | Omit`, but None is what the API
+                # wants for auto-detect (handles Polish + English mixed).
+                language=None,  # type: ignore[call-overload]
                 response_format="verbose_json",
             )
         transcript: str = transcription.text

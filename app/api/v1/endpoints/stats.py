@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Query
@@ -171,6 +171,7 @@ async def get_dashboard(
     # "Today" is wall-clock midnight in the user's timezone — unlike the rolling
     # 7d/30d windows, local-vs-UTC drift matters here. Fall back to UTC if the
     # stored tz string is unrecognized (zoneinfo raises on invalid IANA names).
+    user_tz: tzinfo
     try:
         user_tz = ZoneInfo(user.timezone)
     except (ZoneInfoNotFoundError, ValueError):

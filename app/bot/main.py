@@ -203,10 +203,11 @@ async def panel_command(interaction: discord.Interaction) -> None:
     # Discord's own manage_guild permission gates who can post the panel —
     # this is a "who may post in this channel" question, not GameTrace RBAC,
     # so there is deliberately no is_admin/database lookup here.
-    if interaction.channel is None:
+    if not isinstance(interaction.channel, discord.abc.Messageable):
         # guild_only() makes this unlikely in practice, but interaction.channel
-        # can still be None (e.g. an uncached channel) — send() on None would
-        # raise AttributeError, which the Forbidden handler below can't catch.
+        # can still be None (e.g. an uncached channel) or a non-messageable channel
+        # (forum/category) — send() on those would raise AttributeError, which the
+        # Forbidden handler below can't catch.
         # Not a permissions problem — say so, or an admin goes hunting for a
         # Send Messages grant that is already in place.
         await _panel_ack(interaction, replies.PANEL_CHANNEL_UNAVAILABLE)
