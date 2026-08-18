@@ -8,6 +8,7 @@ on:
       - 'tests/**'
       - 'alembic/**'
       - 'requirements.txt'
+      - 'pyproject.toml'
       - 'Dockerfile'
       - 'docker-compose.yml'
       - '.github/workflows/ci-cd.yml'
@@ -17,6 +18,7 @@ on:
       - 'tests/**'
       - 'alembic/**'
       - 'requirements.txt'
+      - 'pyproject.toml'
       - 'Dockerfile'
       - 'docker-compose.yml'
       - '.github/workflows/ci-cd.yml'
@@ -74,6 +76,9 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+      - name: Lint (ruff)
+        run: ruff check app tests
 
   build:
     needs: test
