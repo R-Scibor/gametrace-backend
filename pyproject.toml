@@ -25,3 +25,12 @@ ignore_missing_imports = true
 plugins = ["pydantic.mypy"]
 # Suppressions rot silently once the upstream types improve; fail on stale ones.
 warn_unused_ignores = true
+# Check the bodies of unannotated functions too — without this, a green run
+# says nothing about any def lacking annotations.
+check_untyped_defs = true
+
+# Test functions are unannotated by convention; checking their bodies is 92
+# errors of factory-call noise for no real bug yield.
+[[tool.mypy.overrides]]
+module = "tests.*"
+check_untyped_defs = false

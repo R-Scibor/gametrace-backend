@@ -8,6 +8,7 @@ Logic per session:
   - Member is not playing / not found → ERROR.
 """
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 import discord
@@ -37,7 +38,7 @@ def _get_game_name(member: discord.Member) -> str | None:
     return None
 
 
-def _find_member(guilds: list[discord.Guild], discord_id: str) -> discord.Member | None:
+def _find_member(guilds: Sequence[discord.Guild], discord_id: str) -> discord.Member | None:
     uid = int(discord_id)
     for guild in guilds:
         member = guild.get_member(uid)
@@ -46,7 +47,7 @@ def _find_member(guilds: list[discord.Guild], discord_id: str) -> discord.Member
     return None
 
 
-async def run_self_healing(db: AsyncSession, guilds: list[discord.Guild]) -> None:
+async def run_self_healing(db: AsyncSession, guilds: Sequence[discord.Guild]) -> None:
     logger.info("Self-Healing: starting reconciliation...")
 
     result = await db.execute(
