@@ -68,6 +68,9 @@ async def delete_account(
         )
 
     user = await schedule_deletion(db, user)
+    # schedule_deletion() always populates both timestamps.
+    assert user.deletion_requested_at is not None
+    assert user.purge_at is not None
 
     logger.info(
         "account_deletion_requested",

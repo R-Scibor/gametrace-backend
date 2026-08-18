@@ -333,6 +333,10 @@ def _pending_deletion_error(user: User) -> HTTPException:
     days_left is a CEILING of the remaining time so it never reads 0 while
     the account still exists (e.g. 25h left -> 2, not 1).
     """
+    # Both callers guard on `purge_at is not None`, and schedule_deletion() always
+    # sets the two timestamps together, so neither is None here.
+    assert user.deletion_requested_at is not None
+    assert user.purge_at is not None
     return HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail={
@@ -375,6 +379,8 @@ async def get_current_user_allow_pending(
         await db.commit()
 
     user = await db.get(User, token.user_id)
+    # The token row's FK guarantees its user exists.
+    assert user is not None
     return user
 
 

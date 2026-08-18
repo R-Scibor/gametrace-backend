@@ -43,6 +43,8 @@ async def get_or_create_game(db: AsyncSession, process_name: str) -> tuple[Game,
 
     if alias:
         game = await db.get(Game, alias.game_id)
+        # The alias row's FK guarantees its game exists.
+        assert game is not None
         return game, False
 
     # Create stub game + alias

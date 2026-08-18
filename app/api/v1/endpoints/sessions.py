@@ -124,9 +124,15 @@ async def list_trashed_sessions(
     )
     rows = result.scalars().all()
     retention = timedelta(days=settings.trash_retention_days)
+
+    def _purges_at(session: GameSession) -> datetime:
+        # The query above filters `deleted_at IS NOT NULL`; mypy can't read the WHERE clause.
+        assert session.deleted_at is not None
+        return session.deleted_at + retention
+
     return [
         TrashedSessionResponse.model_validate(
-            {**SessionResponse.model_validate(s).model_dump(), "purges_at": s.deleted_at + retention}
+            {**SessionResponse.model_validate(s).model_dump(), "purges_at": _purges_at(s)}
         )
         for s in rows
     ]
