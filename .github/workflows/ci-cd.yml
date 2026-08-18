@@ -80,6 +80,9 @@ jobs:
       - name: Lint (ruff)
         run: ruff check app tests
 
+      - name: Type check (mypy)
+        run: mypy app tests
+
   build:
     needs: test
     runs-on: self-hosted

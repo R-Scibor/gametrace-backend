@@ -381,3 +381,27 @@ Aliases feed `GET /games/resolve` (exact hit today; fuzzy after P1 resolve fix).
 - [game-matching.md](game-matching.md) — current deterministic pipeline
 - [manual-game-tracking.md](manual-game-tracking.md) — user-facing IGDB pick (complementary, not replaced)
 - Voice adjudication pattern — `app/api/v1/endpoints/voice.py`, `app/services/voice_context.py`
+---
+
+## mypy strictness — running at defaults (2026-08-18)
+
+`ruff` and `mypy` run as blocking CI steps over `app/` and `tests/`, configured in
+`pyproject.toml`. mypy currently runs at **default** strictness, which type-checks
+annotated code but silently skips the bodies of unannotated functions — roughly 37%
+of `app/` function definitions carry no return annotation, so a meaningful share of
+the tree is checked far more loosely than the green build suggests.
+
+Tightening is deliberately deferred and best done one flag at a time, each with the
+annotations it forces:
+
+- `disallow_untyped_defs` — the big one; surfaces every unannotated def.
+- `warn_return_any` — catches values laundered through `Any` from untyped libraries.
+- `no_implicit_optional` — already the modern default, worth pinning explicitly.
+
+Two suppressions are in place and should be revisited when the upstream types improve:
+
+- `app/api/v1/endpoints/voice.py` — `# type: ignore[call-overload]` on `language=None`.
+  The OpenAI SDK types the parameter as `str | Omit`, but `None` is what drives
+  Whisper's auto-detect. Revisit if the SDK types the sentinel properly.
+- `ignore_missing_imports = true` globally, for celery, discord.py and firebase-admin,
+  none of which ship usable stubs. Narrow to per-module overrides if stubs appear.
