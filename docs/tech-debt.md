@@ -383,25 +383,33 @@ Aliases feed `GET /games/resolve` (exact hit today; fuzzy after P1 resolve fix).
 - Voice adjudication pattern — `app/api/v1/endpoints/voice.py`, `app/services/voice_context.py`
 ---
 
-## mypy strictness — running at defaults (2026-08-18)
+## mypy strictness — remaining gap is unannotated defs (2026-08-18)
 
-`ruff` and `mypy` run as blocking CI steps over `app/` and `tests/`, configured in
-`pyproject.toml`. mypy currently runs at **default** strictness, which type-checks
-annotated code but silently skips the bodies of unannotated functions — roughly 37%
-of `app/` function definitions carry no return annotation, so a meaningful share of
-the tree is checked far more loosely than the green build suggests.
+`ruff` and `mypy` run as blocking CI steps over `app/`, `tests/`, `alembic/` and
+`scripts/`, configured in `pyproject.toml`.
 
-Tightening is deliberately deferred and best done one flag at a time, each with the
-annotations it forces:
+Enabled beyond mypy's defaults: `check_untyped_defs` (bodies of unannotated
+functions are checked, not skipped), `warn_return_any` (catches values laundered
+through `Any` by the untyped libraries below), and `warn_unused_ignores` (a
+suppression that stops being necessary fails the build instead of rotting).
+`tests/` opts out of the first two — test functions are unannotated by convention,
+which produced 92 errors of factory-call noise for no real bug yield.
 
-- `disallow_untyped_defs` — the big one; surfaces every unannotated def.
-- `warn_return_any` — catches values laundered through `Any` from untyped libraries.
-- `no_implicit_optional` — already the modern default, worth pinning explicitly.
+The one deferred flag is **`disallow_untyped_defs`**: 93 errors in `app/` and 1145
+in `tests/`. That is an annotation campaign with a low bug yield, unlike the flags
+above, each of which found real defects. Revisit for `app/` alone if annotation
+coverage rises on its own.
 
-Two suppressions are in place and should be revisited when the upstream types improve:
+Two suppressions remain, both upstream's fault rather than ours:
 
 - `app/api/v1/endpoints/voice.py` — `# type: ignore[call-overload]` on `language=None`.
   The OpenAI SDK types the parameter as `str | Omit`, but `None` is what drives
-  Whisper's auto-detect. Revisit if the SDK types the sentinel properly.
+  Whisper's auto-detect. `warn_unused_ignores` will flag this the day the SDK fixes it.
 - `ignore_missing_imports = true` globally, for celery, discord.py and firebase-admin,
   none of which ship usable stubs. Narrow to per-module overrides if stubs appear.
+
+Deliberate `noqa`s worth knowing about, none of which should be "cleaned up":
+`weekly_report.py`'s `E712` pair is SQLAlchemy's `== True`, which is required for SQL
+generation (`is True` does not compile); `conftest.py`'s `E402`s encode a real
+import-order constraint around `init_sentry()`; `config.py`'s `B018` is a property
+access that IS the boot-time validation.
