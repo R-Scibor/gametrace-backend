@@ -7,7 +7,7 @@ task) purges the row once `purge_at` passes.
 """
 import logging
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import redis.exceptions
 from sqlalchemy import delete, select
@@ -42,7 +42,7 @@ def days_left(purge_at: datetime) -> int:
     the shared home for schedule/cancel deletion logic that both the API and
     the bot import from.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     delta = purge_at - now
     return max(1, math.ceil(delta.total_seconds() / 86400))
 
@@ -61,7 +61,7 @@ async def schedule_deletion(db: AsyncSession, user: User) -> User:
     if user.purge_at is not None:
         return user
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     user.deletion_requested_at = now
     user.purge_at = now + timedelta(days=settings.account_deletion_grace_days)
 

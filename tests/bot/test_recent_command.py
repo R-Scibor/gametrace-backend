@@ -140,8 +140,8 @@ async def test_recent_pending_deletion_is_not_reported_as_generic_failure(mock_r
     # Mechanism check: PendingDeletionError is a BotApiError subclass, so this
     # verifies recent_command routes it to the dedicated branch instead of
     # falling into the generic `except BotApiError` -> RECENT_FAILURE path.
-    from app.bot.api_client import PendingDeletionError
     from app.bot import replies
+    from app.bot.api_client import PendingDeletionError
 
     await make_user(db, discord_id=_DISCORD_ID, username=_USERNAME)
     mock_recent.side_effect = PendingDeletionError(

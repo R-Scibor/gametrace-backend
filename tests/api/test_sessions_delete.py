@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
@@ -50,7 +50,7 @@ async def test_delete_already_trashed_returns_404(authed_client, db, user):
     session = await make_session(
         db, user.discord_id, game.id,
         dt(hours_ago=3), dt(hours_ago=1),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.delete(f"/api/v1/sessions/{session.id}")
@@ -87,7 +87,7 @@ async def test_hard_delete_trashed_session(authed_client, db, user):
     session = await make_session(
         db, user.discord_id, game.id,
         dt(hours_ago=3), dt(hours_ago=1),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
     session_id = session.id
 
@@ -129,7 +129,7 @@ async def test_hard_delete_other_users_session_returns_404(authed_client, db):
     session = await make_session(
         db, other.discord_id, game.id,
         dt(hours_ago=3), dt(hours_ago=1),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.delete(f"/api/v1/sessions/{session.id}?hard=true")

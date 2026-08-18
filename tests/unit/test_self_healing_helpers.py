@@ -10,7 +10,6 @@ import discord
 
 from app.bot.self_healing import _find_member, _get_game_name
 
-
 # ── _get_game_name ────────────────────────────────────────────────────────────
 
 def _member_with(*activities) -> MagicMock:

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.models.session import SessionSource, SessionStatus
 from tests.factories import (
@@ -7,7 +7,6 @@ from tests.factories import (
     make_pref,
     make_session,
 )
-
 
 # ── Param validation ──────────────────────────────────────────────────────────
 
@@ -220,7 +219,7 @@ async def test_companies_excludes_deleted(authed_client, db, user):
     await make_session(
         db, user.discord_id, game.id,
         dt(hours_ago=5), dt(hours_ago=4),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.get("/api/v1/stats/companies?role=developer")
@@ -252,7 +251,7 @@ async def test_companies_includes_ongoing(authed_client, db, user):
     game.developers = ["LiveDev"]
     db.add(game)
     await db.flush()
-    start = datetime.now(timezone.utc) - timedelta(minutes=30)
+    start = datetime.now(UTC) - timedelta(minutes=30)
     await make_session(
         db, user.discord_id, game.id, start,
         end_time=None,

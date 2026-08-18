@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.models.session import SessionSource, SessionStatus
@@ -15,7 +15,7 @@ def _local_midnight_utc(tz_name: str = "UTC") -> datetime:
     midnight_local = datetime.combine(
         datetime.now(tz).date(), datetime.min.time(), tzinfo=tz
     )
-    return midnight_local.astimezone(timezone.utc)
+    return midnight_local.astimezone(UTC)
 
 
 # ── Granularity mapping ───────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ async def test_trend_buckets_contiguous_and_chronological(authed_client):
 
 async def test_trend_daily_session_today(authed_client, db, user):
     game = await make_game(db)
-    start = datetime.now(timezone.utc) - timedelta(hours=1)
+    start = datetime.now(UTC) - timedelta(hours=1)
     await make_session(
         db, user.discord_id, game.id, start, start + timedelta(seconds=3600)
     )
@@ -116,7 +116,7 @@ async def test_trend_weekly_bucket_start_is_monday(authed_client):
 
 async def test_trend_monthly_bucket_start_is_first(authed_client, db, user):
     game = await make_game(db)
-    start = datetime.now(timezone.utc) - timedelta(hours=1)
+    start = datetime.now(UTC) - timedelta(hours=1)
     await make_session(
         db, user.discord_id, game.id, start, start + timedelta(seconds=1800)
     )
@@ -134,7 +134,7 @@ async def test_trend_monthly_bucket_start_is_first(authed_client, db, user):
 
 async def test_trend_excludes_ongoing(authed_client, db, user):
     game = await make_game(db)
-    start = datetime.now(timezone.utc) - timedelta(minutes=30)
+    start = datetime.now(UTC) - timedelta(minutes=30)
     await make_session(
         db, user.discord_id, game.id, start,
         end_time=None, status=SessionStatus.ONGOING, source=SessionSource.BOT,
@@ -146,7 +146,7 @@ async def test_trend_excludes_ongoing(authed_client, db, user):
 
 async def test_trend_excludes_error(authed_client, db, user):
     game = await make_game(db)
-    start = datetime.now(timezone.utc) - timedelta(hours=1)
+    start = datetime.now(UTC) - timedelta(hours=1)
     await make_session(
         db, user.discord_id, game.id, start, start + timedelta(seconds=600),
         status=SessionStatus.ERROR,
@@ -158,10 +158,10 @@ async def test_trend_excludes_error(authed_client, db, user):
 
 async def test_trend_excludes_deleted(authed_client, db, user):
     game = await make_game(db)
-    start = datetime.now(timezone.utc) - timedelta(hours=1)
+    start = datetime.now(UTC) - timedelta(hours=1)
     await make_session(
         db, user.discord_id, game.id, start, start + timedelta(seconds=600),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
     resp = await authed_client.get("/api/v1/stats/trend?days=30")
     assert resp.status_code == 200
@@ -171,7 +171,7 @@ async def test_trend_excludes_deleted(authed_client, db, user):
 async def test_trend_excludes_ignored_game(authed_client, db, user):
     game = await make_game(db)
     await make_pref(db, user.discord_id, game.id, is_ignored=True)
-    start = datetime.now(timezone.utc) - timedelta(hours=1)
+    start = datetime.now(UTC) - timedelta(hours=1)
     await make_session(
         db, user.discord_id, game.id, start, start + timedelta(seconds=600)
     )
@@ -184,7 +184,7 @@ async def test_trend_excludes_ignored_game(authed_client, db, user):
 
 async def test_trend_old_session_excluded(authed_client, db, user):
     game = await make_game(db)
-    old = datetime.now(timezone.utc) - timedelta(days=60)
+    old = datetime.now(UTC) - timedelta(days=60)
     await make_session(
         db, user.discord_id, game.id, old, old + timedelta(seconds=3600)
     )
@@ -208,7 +208,7 @@ async def test_trend_respects_user_timezone(authed_client, db, user):
     local_1am = datetime.combine(
         today_tokyo, datetime.min.time(), tzinfo=tokyo
     ).replace(hour=1)
-    start_utc = local_1am.astimezone(timezone.utc)
+    start_utc = local_1am.astimezone(UTC)
 
     game = await make_game(db)
     await make_session(

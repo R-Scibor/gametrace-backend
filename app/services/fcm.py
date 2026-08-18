@@ -9,9 +9,8 @@ sweeper) so the weekly fan-out doesn't keep retrying uninstalled devices.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from threading import Lock
-from typing import Optional
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,7 +69,7 @@ async def send_to_user(
     user_id: str,
     title: str,
     body: str,
-    data: Optional[dict[str, str]] = None,
+    data: dict[str, str] | None = None,
 ) -> int:
     """
     Send a notification to every registered device for one user.
@@ -116,7 +115,7 @@ async def send_to_user(
         )
 
     if live_tokens:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for device in rows:
             if device.fcm_token in live_tokens:
                 device.last_active = now

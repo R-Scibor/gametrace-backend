@@ -3,7 +3,7 @@ Test factories — all use db.flush() so IDs are populated without committing.
 The same session is shared between the factory and the endpoint under test,
 so flushed-but-not-committed data is visible to all DB queries within a test.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.models.demo_seed import DemoSeedPreference, DemoSeedSession
 from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
@@ -106,7 +106,7 @@ async def make_token(db, user_id: str) -> str:
     token = UserAuthToken(
         user_id=user_id,
         token=UserAuthToken.hash_token(token_value),
-        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        expires_at=datetime.now(UTC) + timedelta(days=30),
     )
     db.add(token)
     await db.flush()
@@ -234,5 +234,5 @@ async def make_voice_usage(
 
 def dt(hours_ago: float = 0, hours_from_now: float = 0) -> datetime:
     """Convenience: timezone-aware UTC datetime offset from now."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return now - timedelta(hours=hours_ago) + timedelta(hours=hours_from_now)

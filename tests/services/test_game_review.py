@@ -7,7 +7,6 @@ from app.services.game_review import (
     mark_needs_review_inbox,
     sync_review_preferences,
 )
-
 from tests.factories import dt, make_game, make_pref, make_session
 
 

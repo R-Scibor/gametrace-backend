@@ -1,6 +1,4 @@
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC, datetime
 
 from app.models.session import SessionSource, SessionStatus
 from tests.factories import dt, make_game, make_session
@@ -130,7 +128,7 @@ async def test_create_session_adjacent_does_not_conflict(authed_client, db, user
 
 async def test_create_session_soft_deleted_not_counted_as_overlap(authed_client, db, user):
     game = await make_game(db)
-    deleted_at = datetime.now(timezone.utc)
+    deleted_at = datetime.now(UTC)
     await make_session(
         db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=1),
         deleted_at=deleted_at

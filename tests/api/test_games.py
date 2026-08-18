@@ -1,8 +1,7 @@
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from app.models.game import EnrichmentStatus
-from app.models.session import GameSession, SessionStatus
-
+from app.models.session import SessionStatus
 from tests.factories import (
     dt,
     make_game,
@@ -10,7 +9,6 @@ from tests.factories import (
     make_session,
     make_user,
 )
-
 
 # ── GET /games — playtime + last_played aggregation ──────────────────────────
 
@@ -519,7 +517,7 @@ async def test_excludes_soft_deleted_sessions(authed_client, db, user):
     visible = await make_session(db, user.discord_id, game.id, dt(hours_ago=5), dt(hours_ago=4))
     deleted = await make_session(
         db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.get(f"/api/v1/games/{game.id}/sessions")

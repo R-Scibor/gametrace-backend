@@ -6,7 +6,7 @@ GET /stats/summary, GET /sessions, and GET /games must accept EITHER credential:
 Same route, resolved by either credential — not a parallel bot-only endpoint.
 Neither credential supplied must still 401.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -57,7 +57,7 @@ async def test_stats_summary_bearer_token_wins_over_spoofed_discord_id_header(
     user_b = await make_user(db, discord_id="222222222222222222", username="userb")
 
     game = await make_game(db, primary_name="Game A")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # Distinguishable data: only A has a completed session, so total_seconds
     # is nonzero for A and would be 0 for B if the header won instead.
     await make_session(

@@ -37,3 +37,7 @@ pytest-asyncio==0.23.7
 httpx==0.28.1
 aiosqlite==0.20.0
 fakeredis==2.36.2
+
+# Quality gates
+ruff==0.16.3
+mypy==2.3.1

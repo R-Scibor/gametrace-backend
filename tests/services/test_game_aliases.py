@@ -2,7 +2,6 @@ from sqlalchemy import func, select
 
 from app.models.game import GameAlias
 from app.services.game_aliases import AliasResult, add_alias
-
 from tests.factories import make_alias, make_game
 
 

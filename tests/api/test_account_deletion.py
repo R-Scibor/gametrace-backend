@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import fakeredis.aioredis
 import pytest
@@ -25,7 +25,7 @@ def patch_get_redis(monkeypatch, redis_client):
 
 
 async def test_deletion_columns_round_trip(db):
-    purge_at = datetime.now(timezone.utc) + timedelta(days=7)
+    purge_at = datetime.now(UTC) + timedelta(days=7)
     requested_at = purge_at - timedelta(days=7)
     user = await make_user(
         db,
@@ -100,7 +100,7 @@ async def test_schedule_deletion_errors_ongoing_session(authed_client, db, user)
         db,
         user_id=user.discord_id,
         game_id=game.id,
-        start_time=datetime.now(timezone.utc) - timedelta(hours=1),
+        start_time=datetime.now(UTC) - timedelta(hours=1),
         status=SessionStatus.ONGOING,
         source=SessionSource.BOT,
     )
@@ -116,7 +116,7 @@ async def test_schedule_deletion_errors_ongoing_session(authed_client, db, user)
 async def test_schedule_deletion_leaves_completed_session_untouched(authed_client, db, user):
     game = await make_game(db)
     await make_alias(db, game.id, "test2.exe")
-    start = datetime.now(timezone.utc) - timedelta(hours=2)
+    start = datetime.now(UTC) - timedelta(hours=2)
     end = start + timedelta(hours=1)
     session = await make_session(
         db,
@@ -169,8 +169,8 @@ async def test_cancel_deletion_clears_columns_and_returns_200(client, db):
         db,
         discord_id="666666666666666666",
         username="cancel_user",
-        deletion_requested_at=datetime.now(timezone.utc) - timedelta(days=1),
-        purge_at=datetime.now(timezone.utc) + timedelta(days=6),
+        deletion_requested_at=datetime.now(UTC) - timedelta(days=1),
+        purge_at=datetime.now(UTC) + timedelta(days=6),
     )
     token = await make_token(db, user.discord_id)
     client.headers.update({"Authorization": f"Bearer {token}"})
@@ -188,8 +188,8 @@ async def test_cancel_deletion_restores_normal_route_access(client, db):
         db,
         discord_id="777777777777777777",
         username="cancel_user2",
-        deletion_requested_at=datetime.now(timezone.utc) - timedelta(days=1),
-        purge_at=datetime.now(timezone.utc) + timedelta(days=6),
+        deletion_requested_at=datetime.now(UTC) - timedelta(days=1),
+        purge_at=datetime.now(UTC) + timedelta(days=6),
     )
     token = await make_token(db, user.discord_id)
     client.headers.update({"Authorization": f"Bearer {token}"})

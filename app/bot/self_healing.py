@@ -8,7 +8,7 @@ Logic per session:
   - Member is not playing / not found → ERROR.
 """
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import discord
 from sqlalchemy import select
@@ -68,7 +68,7 @@ async def run_self_healing(db: AsyncSession, guilds: list[discord.Guild]) -> Non
         return
 
     logger.info("Self-Healing: found %d ONGOING session(s)", len(ongoing_sessions))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     for session in ongoing_sessions:
         async with user_session_lock(db, session.user_id):
@@ -90,7 +90,7 @@ async def run_self_healing(db: AsyncSession, guilds: list[discord.Guild]) -> Non
             session_game_name = game.primary_name if game else None
 
             # Check for stale session (>12h regardless of game)
-            age = now - session.start_time.replace(tzinfo=timezone.utc)
+            age = now - session.start_time.replace(tzinfo=UTC)
             if age > timedelta(hours=STALE_SESSION_HOURS):
                 await error_session(
                     db,

@@ -4,7 +4,6 @@ import logging
 from sqlalchemy import select
 
 from app.models.game import CoverSource, Game, UserGamePreference
-
 from tests.factories import (
     dt,
     make_alias,

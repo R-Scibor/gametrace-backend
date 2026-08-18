@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, or_, select
@@ -297,7 +297,7 @@ async def delete_session(
             detail="Cannot delete an ONGOING session — managed by bot",
         )
 
-    session.deleted_at = datetime.now(timezone.utc)
+    session.deleted_at = datetime.now(UTC)
     await db.commit()
 
 

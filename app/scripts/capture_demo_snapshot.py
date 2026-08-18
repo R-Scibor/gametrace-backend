@@ -38,7 +38,7 @@ import argparse
 import asyncio
 import logging
 import sys
-from typing import Callable
+from collections.abc import Callable
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine

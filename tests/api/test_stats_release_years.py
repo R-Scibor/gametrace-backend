@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 from app.models.session import SessionSource, SessionStatus
 from tests.factories import (
@@ -7,7 +7,6 @@ from tests.factories import (
     make_pref,
     make_session,
 )
-
 
 # ── Empty ─────────────────────────────────────────────────────────────────────
 
@@ -120,7 +119,7 @@ async def test_release_years_excludes_deleted(authed_client, db, user):
     await make_session(
         db, user.discord_id, game.id,
         dt(hours_ago=5), dt(hours_ago=4),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.get("/api/v1/stats/release-years")
@@ -152,7 +151,7 @@ async def test_release_years_includes_ongoing(authed_client, db, user):
     game.first_release_date = date(2015, 1, 1)
     db.add(game)
     await db.flush()
-    start = datetime.now(timezone.utc) - timedelta(minutes=30)
+    start = datetime.now(UTC) - timedelta(minutes=30)
     await make_session(
         db, user.discord_id, game.id, start,
         end_time=None,

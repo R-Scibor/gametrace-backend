@@ -4,7 +4,7 @@ Async tests call _run_cleanup(db) directly so the rollback fixture keeps the
 test DB clean. The sync Celery entry (.run()) isn't exercised — it just wraps
 _run_with_engine in asyncio.run.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -12,12 +12,12 @@ from app.core.celery_app import celery_app
 from app.models.session import GameSession
 from app.models.user import UserDevice
 from app.tasks.cleanup import _run_cleanup
-from tests.factories import make_device, make_game, make_session, make_user
+from tests.factories import make_device, make_game, make_session
 
 
 async def test_removes_old_soft_deleted_sessions(db, user):
     game = await make_game(db, primary_name="OldGame")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     old = await make_session(
         db, user.discord_id, game.id,
@@ -49,7 +49,7 @@ async def test_removes_old_soft_deleted_sessions(db, user):
 async def test_removes_stale_devices(db, user):
     fresh = await make_device(db, user.discord_id, "fresh-tok")
     stale = await make_device(db, user.discord_id, "stale-tok")
-    stale.last_active = datetime.now(timezone.utc) - timedelta(days=200)
+    stale.last_active = datetime.now(UTC) - timedelta(days=200)
     await db.flush()
 
     _, devices_deleted = await _run_cleanup(db)
@@ -66,7 +66,7 @@ async def test_removes_stale_devices(db, user):
 
 async def test_no_op_when_nothing_stale(db, user):
     game = await make_game(db)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await make_session(
         db, user.discord_id, game.id,
         now - timedelta(hours=3), now - timedelta(hours=2),
@@ -95,7 +95,7 @@ from app.tasks.cleanup import _run_flicker_purge  # noqa: E402
 
 async def test_flicker_purge_deletes_old_completed_flicker(db, user):
     game = await make_game(db, primary_name="FlickerGame")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     old_flicker = await make_session(
         db, user.discord_id, game.id,
@@ -116,7 +116,7 @@ async def test_flicker_purge_deletes_old_completed_flicker(db, user):
 
 async def test_flicker_purge_leaves_recent_flicker(db, user):
     game = await make_game(db, primary_name="RecentFlicker")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     recent_flicker = await make_session(
         db, user.discord_id, game.id,
@@ -137,7 +137,7 @@ async def test_flicker_purge_leaves_recent_flicker(db, user):
 
 async def test_flicker_purge_leaves_non_flicker_old_session(db, user):
     game = await make_game(db, primary_name="OldNormal")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     normal = await make_session(
         db, user.discord_id, game.id,
@@ -158,7 +158,7 @@ async def test_flicker_purge_leaves_non_flicker_old_session(db, user):
 
 async def test_flicker_purge_leaves_ongoing_session(db, user):
     game = await make_game(db, primary_name="OngoingGame")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     ongoing = await make_session(
         db, user.discord_id, game.id,

@@ -22,7 +22,7 @@ Daily is checked first and is read-only: a daily-blocked request spends no money
 and so must not consume hourly budget.
 """
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,7 +50,7 @@ async def check_voice_quota(db: AsyncSession, user_id: str) -> int | None:
     still has room — call this once per request, immediately before the paid
     work.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     daily_used, oldest = (
         await db.execute(

@@ -14,7 +14,6 @@ from app.services.stats import (
 )
 from tests.factories import dt, make_game, make_pref, make_session
 
-
 # ── _split_session_across_cells (pure) ────────────────────────────────────────
 
 def test_split_within_single_hour():

@@ -1,8 +1,7 @@
-from datetime import timedelta, timezone
+from datetime import UTC, timedelta
 
 from app.models.session import SessionSource, SessionStatus
-from tests.factories import dt, make_game, make_session, make_token, make_user
-
+from tests.factories import dt, make_game, make_session, make_user
 
 # ── Basic aggregation ─────────────────────────────────────────────────────────
 
@@ -51,8 +50,8 @@ async def test_session_at_window_start_is_included(authed_client, db, user):
     game = await make_game(db)
     # Place session 10 seconds inside the 7-day window to avoid sub-second timing races
     # between test setup and the endpoint's own `now` computation.
-    from datetime import datetime, timezone as tz
-    window_start = datetime.now(tz.utc) - timedelta(days=7) + timedelta(seconds=10)
+    from datetime import datetime
+    window_start = datetime.now(UTC) - timedelta(days=7) + timedelta(seconds=10)
     await make_session(
         db, user.discord_id, game.id,
         window_start,

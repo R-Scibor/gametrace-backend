@@ -13,7 +13,6 @@ from app.services.voice_context import (
 )
 from tests.factories import dt, make_alias, make_game, make_session
 
-
 # ── resolve_timezone ──────────────────────────────────────────────────────────
 
 def test_resolve_timezone_valid():

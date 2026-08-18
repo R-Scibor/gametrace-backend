@@ -1,6 +1,6 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from app.models.session import SessionSource, SessionStatus
+from app.models.session import SessionStatus
 from tests.factories import dt, make_game, make_session, make_user
 
 
@@ -9,7 +9,7 @@ async def test_restore_completed_session(authed_client, db, user):
     session = await make_session(
         db, user.discord_id, game.id,
         dt(hours_ago=3), dt(hours_ago=1),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.post(f"/api/v1/sessions/{session.id}/restore")
@@ -25,7 +25,7 @@ async def test_restore_error_session_preserves_status(authed_client, db, user):
         db, user.discord_id, game.id,
         dt(hours_ago=3), dt(hours_ago=1),
         status=SessionStatus.ERROR,
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.post(f"/api/v1/sessions/{session.id}/restore")
@@ -41,7 +41,7 @@ async def test_restore_completed_with_overlap_returns_409(authed_client, db, use
     trashed = await make_session(
         db, user.discord_id, game.id,
         dt(hours_ago=4), dt(hours_ago=3),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.post(f"/api/v1/sessions/{trashed.id}/restore")
@@ -58,7 +58,7 @@ async def test_restore_error_session_with_overlapping_live_succeeds(authed_clien
         db, user.discord_id, game.id,
         dt(hours_ago=4),
         status=SessionStatus.ERROR,
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.post(f"/api/v1/sessions/{trashed.id}/restore")
@@ -82,7 +82,7 @@ async def test_restore_other_users_session_returns_404(authed_client, db):
     session = await make_session(
         db, other.discord_id, game.id,
         dt(hours_ago=3), dt(hours_ago=1),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.post(f"/api/v1/sessions/{session.id}/restore")
@@ -105,7 +105,7 @@ async def test_edit_then_restore_resolves_overlap(authed_client, db, user):
     trashed = await make_session(
         db, user.discord_id, game.id,
         dt(hours_ago=4), dt(hours_ago=3),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     # PATCH while trashed — moves end_time (no overlap check on trashed rows)

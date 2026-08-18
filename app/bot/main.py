@@ -15,10 +15,10 @@ from discord.ext import tasks
 from app.bot import layout, replies
 from app.bot.panel import PERSISTENT_VIEWS, PanelView
 from app.core.config import settings
-from app.core.redis import get_redis
 from app.core.database import AsyncSessionLocal
 from app.core.logging import configure_logging, new_trace_id
 from app.core.observability import init_sentry
+from app.core.redis import get_redis
 
 logger = logging.getLogger(__name__)
 

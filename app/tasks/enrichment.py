@@ -114,13 +114,18 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.celery_app import celery_app
-from app.services.game_matching import (
-    _RateLimited, _confidence, _sanitize, _igdb_search,
-    IGDBResult, _empty_igdb_result, CONFIDENCE_THRESHOLD,
-)
-from app.services.game_review import sync_review_preferences
 from app.core.config import settings
 from app.models.game import CoverSource, EnrichmentStatus, Game
+from app.services.game_matching import (
+    CONFIDENCE_THRESHOLD,
+    IGDBResult,
+    _confidence,
+    _empty_igdb_result,
+    _igdb_search,
+    _RateLimited,
+    _sanitize,
+)
+from app.services.game_review import sync_review_preferences
 
 logger = logging.getLogger(__name__)
 

@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import tempfile
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from openai import AsyncOpenAI
@@ -82,11 +82,11 @@ GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
 
 
 class TranscribeResponse(BaseModel):
-    game: Optional[str] = None
-    date: Optional[str] = None
-    start_time: Optional[str] = None
-    end_time: Optional[str] = None
-    duration_minutes: Optional[int] = None
+    game: str | None = None
+    date: str | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+    duration_minutes: int | None = None
     raw_transcript: str
 
 
@@ -184,7 +184,7 @@ async def transcribe_audio(
                 response_format="verbose_json",
             )
         transcript: str = transcription.text
-        detected_language: Optional[str] = getattr(transcription, "language", None)
+        detected_language: str | None = getattr(transcription, "language", None)
     except Exception as exc:
         logger.exception("Whisper transcription failed")
         # Upstream exception text can carry internals (project ids, paths) — keep

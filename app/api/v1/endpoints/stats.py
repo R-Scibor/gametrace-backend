@@ -1,8 +1,8 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.auth import get_current_or_bot_user, get_current_user
@@ -164,7 +164,7 @@ async def get_dashboard(
     totals, the active ONGOING session if any, error banner). Sibling to
     /stats/summary, which returns the user-selectable per-game breakdown.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     window_30d = now - timedelta(days=30)
     window_7d = now - timedelta(days=7)
 
@@ -174,11 +174,11 @@ async def get_dashboard(
     try:
         user_tz = ZoneInfo(user.timezone)
     except (ZoneInfoNotFoundError, ValueError):
-        user_tz = timezone.utc
+        user_tz = UTC
     local_midnight = datetime.now(user_tz).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
-    window_today = local_midnight.astimezone(timezone.utc)
+    window_today = local_midnight.astimezone(UTC)
 
     # Compute totals for 30-day window (superset), then filter for 7-day in Python.
     # LEFT JOIN on user_game_preferences so games without a pref row are kept;

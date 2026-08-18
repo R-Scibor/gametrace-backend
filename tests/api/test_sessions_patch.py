@@ -1,8 +1,7 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.models.session import SessionSource, SessionStatus
 from tests.factories import dt, make_game, make_session, make_user
-
 
 # ── ERROR → COMPLETED (Fix) ───────────────────────────────────────────────────
 
@@ -163,7 +162,7 @@ async def test_patch_trashed_session_allows_edit(authed_client, db, user):
     session = await make_session(
         db, user.discord_id, game.id,
         dt(hours_ago=3), dt(hours_ago=1),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.patch(
@@ -186,7 +185,7 @@ async def test_patch_trashed_session_skips_overlap_check(authed_client, db, user
     trashed = await make_session(
         db, user.discord_id, game.id,
         dt(hours_ago=4), dt(hours_ago=3.5),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.patch(

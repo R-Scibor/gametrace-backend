@@ -1,8 +1,6 @@
-from typing import Optional
 from zoneinfo import available_timezones
 
 from pydantic import BaseModel, field_validator
-
 
 _VALID_TZS = available_timezones()
 _VALID_LANGUAGES = {"pl", "en"}
@@ -19,14 +17,14 @@ class ProfileResponse(BaseModel):
 
 
 class ProfileSettingsUpdate(BaseModel):
-    timezone: Optional[str] = None
-    language: Optional[str] = None
-    weekly_report_enabled: Optional[bool] = None
-    push_enabled: Optional[bool] = None
+    timezone: str | None = None
+    language: str | None = None
+    weekly_report_enabled: bool | None = None
+    push_enabled: bool | None = None
 
     @field_validator("timezone")
     @classmethod
-    def _tz_must_be_iana(cls, v: Optional[str]) -> Optional[str]:
+    def _tz_must_be_iana(cls, v: str | None) -> str | None:
         if v is None:
             return v
         if v not in _VALID_TZS:
@@ -35,7 +33,7 @@ class ProfileSettingsUpdate(BaseModel):
 
     @field_validator("language")
     @classmethod
-    def _language_must_be_supported(cls, v: Optional[str]) -> Optional[str]:
+    def _language_must_be_supported(cls, v: str | None) -> str | None:
         if v is None:
             return v
         if v not in _VALID_LANGUAGES:

@@ -1,6 +1,6 @@
 """Bot slash command logic — register, login code, logout."""
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import fakeredis.aioredis
 import pytest
@@ -84,12 +84,12 @@ async def test_register_scheduled_for_deletion_does_not_claim_already_registered
     # Mechanism, not wording: an account with purge_at set must not take the
     # created=False "already registered" branch — that reply would be
     # actively misleading for an account queued for erasure.
-    purge_at = datetime.now(timezone.utc) + timedelta(days=3)
+    purge_at = datetime.now(UTC) + timedelta(days=3)
     await make_user(
         db,
         discord_id=_DISCORD_ID,
         username="oldname",
-        deletion_requested_at=datetime.now(timezone.utc),
+        deletion_requested_at=datetime.now(UTC),
         purge_at=purge_at,
     )
 
@@ -100,12 +100,12 @@ async def test_register_scheduled_for_deletion_does_not_claim_already_registered
 
 
 async def test_register_scheduled_for_deletion_still_syncs_username(db):
-    purge_at = datetime.now(timezone.utc) + timedelta(days=3)
+    purge_at = datetime.now(UTC) + timedelta(days=3)
     await make_user(
         db,
         discord_id=_DISCORD_ID,
         username="oldname",
-        deletion_requested_at=datetime.now(timezone.utc),
+        deletion_requested_at=datetime.now(UTC),
         purge_at=purge_at,
     )
 

@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -9,13 +8,13 @@ from app.models.game import CoverSource, EnrichmentStatus
 class GameResponse(BaseModel):
     id: int
     primary_name: str
-    cover_image_url: Optional[str] = None
+    cover_image_url: str | None = None
     cover_source: CoverSource
     enrichment_status: EnrichmentStatus
     is_ignored: bool = False
-    is_accepted: Optional[bool] = None
+    is_accepted: bool | None = None
     total_seconds: int = 0
-    last_played: Optional[datetime] = None
+    last_played: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -38,7 +37,7 @@ class GameResolveOut(BaseModel):
 class GameSuggestItem(BaseModel):
     game_id: int
     primary_name: str
-    cover_image_url: Optional[str] = None
+    cover_image_url: str | None = None
     enrichment_status: EnrichmentStatus
     score: float
 
@@ -55,8 +54,8 @@ class GameMatchRequest(BaseModel):
 class IGDBCandidateOut(BaseModel):
     igdb_id: int
     name: str
-    year: Optional[int] = None
-    cover_url: Optional[str] = None
+    year: int | None = None
+    cover_url: str | None = None
     score: float
 
 
@@ -66,10 +65,10 @@ class GameCreateRequest(BaseModel):
     - unrecognized mode: unrecognized=True AND name is non-empty/non-blank.
     Optional query — only honoured (stored as a GameAlias) in igdb_id mode.
     """
-    igdb_id: Optional[int] = None
-    name: Optional[str] = None
+    igdb_id: int | None = None
+    name: str | None = None
     unrecognized: bool = False
-    query: Optional[str] = None
+    query: str | None = None
 
     @model_validator(mode="after")
     def _require_exactly_one_mode(self) -> "GameCreateRequest":

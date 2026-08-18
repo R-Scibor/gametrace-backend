@@ -5,7 +5,7 @@ test DB clean. The sync Celery entry (.run()) isn't exercised — it just wraps
 _run_purge_with_engine in asyncio.run.
 """
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -29,7 +29,7 @@ from tests.factories import (
 
 
 async def test_purges_user_past_grace_period(db):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     scheduled = await make_user(
         db,
         discord_id="800000000000000001",
@@ -48,7 +48,7 @@ async def test_purges_user_past_grace_period(db):
 
 
 async def test_leaves_user_with_future_purge_at(db):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     scheduled = await make_user(
         db,
         discord_id="800000000000000002",
@@ -69,7 +69,7 @@ async def test_leaves_user_with_future_purge_at(db):
 async def test_purge_skips_demo_account(db):
     from app.services.demo import DEMO_DISCORD_ID
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     past = now - timedelta(hours=1)
 
     demo = await make_user(
@@ -111,7 +111,7 @@ async def test_leaves_unscheduled_user(db, user):
 
 
 async def test_cascade_removes_all_owned_data(db):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     scheduled = await make_user(
         db,
         discord_id="800000000000000003",
@@ -167,7 +167,7 @@ async def test_cascade_removes_all_owned_data(db):
 
 
 async def test_other_users_and_catalog_untouched(db, user):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     scheduled = await make_user(
         db,
         discord_id="800000000000000004",
@@ -203,7 +203,7 @@ async def test_other_users_and_catalog_untouched(db, user):
 
 
 async def test_running_twice_is_harmless(db):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await make_user(
         db,
         discord_id="800000000000000005",
@@ -226,7 +226,7 @@ def test_beat_schedule_has_purge_deleted_accounts():
 
 
 async def test_purge_inserts_purged_events(db):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     past_a = await make_user(
         db,
         discord_id="800000000000000021",
@@ -277,7 +277,7 @@ async def test_purge_inserts_purged_events(db):
 
 async def test_purge_events_survive_user_delete(db):
     """No FK: purged audit rows remain after the users row is gone."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await make_user(
         db,
         discord_id="800000000000000024",
@@ -305,7 +305,7 @@ async def test_purge_events_survive_user_delete(db):
 
 async def test_purge_logs_discord_ids(db, caplog):
     """Art. 17 trail: purged subjects are named, not only a count."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await make_user(
         db,
         discord_id="800000000000000011",

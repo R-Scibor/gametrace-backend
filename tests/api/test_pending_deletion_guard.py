@@ -4,7 +4,6 @@ Tests for the pending-deletion guard: an account scheduled for deletion
 logout — which must keep working so a user can sign out during the grace
 period.
 """
-from datetime import timedelta, timezone
 
 import pytest
 

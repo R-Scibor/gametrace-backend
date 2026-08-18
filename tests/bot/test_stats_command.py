@@ -154,8 +154,8 @@ async def test_stats_pending_deletion_is_not_reported_as_generic_failure(
     # Mechanism check: PendingDeletionError is a BotApiError subclass, so this
     # verifies stats_command routes it to the dedicated branch instead of
     # falling into the generic `except BotApiError` -> STATS_FAILURE path.
-    from app.bot.api_client import PendingDeletionError
     from app.bot import replies
+    from app.bot.api_client import PendingDeletionError
 
     await make_user(db, discord_id=_DISCORD_ID, username=_USERNAME)
     mock_summary.side_effect = PendingDeletionError(

@@ -1,7 +1,6 @@
 from app.models.game import EnrichmentStatus
 from app.models.report import Report
 from app.models.session import SessionStatus
-
 from tests.factories import dt, make_game, make_session, make_user
 
 URL = "/api/v1/admin/stats/overview"

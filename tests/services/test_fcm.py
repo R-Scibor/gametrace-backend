@@ -3,7 +3,7 @@
 These never hit real Firebase — _send_multicast is patched to return fake
 BatchResponse objects so we can assert the cleanup + bookkeeping behaviour.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -39,7 +39,7 @@ async def test_returns_zero_when_user_has_no_devices(db, user):
 async def test_successful_send_bumps_last_active(db, user, monkeypatch, skip_fcm_init):
     device = await make_device(db, user.discord_id, "token-live")
     # Set last_active in the past so bump is detectable
-    past = datetime.now(timezone.utc) - timedelta(days=10)
+    past = datetime.now(UTC) - timedelta(days=10)
     device.last_active = past
     await db.flush()
 

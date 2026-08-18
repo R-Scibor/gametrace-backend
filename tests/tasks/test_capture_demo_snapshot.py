@@ -3,7 +3,7 @@
 Async tests call capture(db, source_discord_id) directly so the rollback
 fixture keeps the test DB clean.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -17,7 +17,7 @@ async def _build_source_user(db):
     """A user with a mix of session states plus preferences."""
     source_user = await make_user(db, discord_id="333333333333333333", username="source")
     game = await make_game(db, primary_name="Captured Game")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     completed = await make_session(
         db, source_user.discord_id, game.id,
@@ -98,7 +98,7 @@ async def test_other_users_rows_are_never_captured(db):
 
     other_user = await make_user(db, discord_id="444444444444444444", username="other")
     other_game = await make_game(db, primary_name="Other Game")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await make_session(
         db, other_user.discord_id, other_game.id,
         now - timedelta(days=2), now - timedelta(days=2) + timedelta(hours=1),

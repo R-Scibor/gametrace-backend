@@ -4,7 +4,7 @@ Async tests call _run_weekly_report(db) directly with a mocked Redis + mocked
 send_to_user so nothing actually talks to FCM or Redis. The sync .run() entry
 point isn't exercised here — it only wraps _run_with_engine in asyncio.run.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -74,7 +74,7 @@ async def test_skips_user_with_push_disabled(db, patch_redis, mock_send):
 
 
 async def test_skips_user_scheduled_for_deletion(db, patch_redis, mock_send):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     user = await make_user(
         db,
         discord_id="900000000000000006",
@@ -97,7 +97,7 @@ async def test_sends_to_enabled_user(db, patch_redis, mock_send):
         db, discord_id="900000000000000003", username="enabled"
     )
     game = await make_game(db, primary_name="Hades")
-    start = datetime.now(timezone.utc) - timedelta(days=2)
+    start = datetime.now(UTC) - timedelta(days=2)
     await make_session(
         db, user.discord_id, game.id, start, start + timedelta(hours=3)
     )
@@ -117,7 +117,7 @@ async def test_dedup_key_prevents_resend(db, mock_send, monkeypatch):
     user = await make_user(
         db, discord_id="900000000000000004", username="dedup"
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     preset = {wr._dedup_key(user.discord_id, now)}
     fake = FakeRedis(preset=preset)
     monkeypatch.setattr(wr.redis_sync, "from_url", lambda *a, **k: fake)
@@ -133,7 +133,7 @@ async def test_payload_formats_top_game(db):
         db, discord_id="900000000000000005", username="fmt"
     )
     game_a = await make_game(db, primary_name="Hollow Knight")
-    start = datetime.now(timezone.utc) - timedelta(days=1)
+    start = datetime.now(UTC) - timedelta(days=1)
     await make_session(
         db, user.discord_id, game_a.id, start, start + timedelta(hours=5)
     )

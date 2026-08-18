@@ -1,13 +1,12 @@
 from app.models.game import EnrichmentStatus
 from tests.factories import (
+    dt,
     make_alias,
     make_game,
     make_pref,
     make_session,
     make_user,
-    dt,
 )
-
 
 # ── happy paths ───────────────────────────────────────────────────────────────
 

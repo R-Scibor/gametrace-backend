@@ -8,7 +8,6 @@ Two independent write paths must stop writing for a `purge_at`-scheduled user:
   2. Self-healing's switched-game branch (self_healing.py) — never calls
      `get_user_if_tracked`, so it needs its own gate.
 """
-from datetime import timedelta, timezone
 from unittest.mock import MagicMock
 
 import discord
@@ -16,7 +15,7 @@ from sqlalchemy import select
 
 from app.bot.self_healing import run_self_healing
 from app.bot.session_manager import get_user_if_tracked
-from app.models.session import GameSession, SessionStatus, SessionSource
+from app.models.session import GameSession, SessionSource, SessionStatus
 from tests.factories import dt, make_game, make_session, make_user
 
 

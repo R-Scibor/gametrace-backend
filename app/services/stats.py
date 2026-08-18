@@ -1,15 +1,13 @@
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import Date, Integer, and_, func, or_, select
+from sqlalchemy import Date, Integer, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.game import Game, EnrichmentStatus, UserGamePreference
+from app.models.game import EnrichmentStatus, Game, UserGamePreference
 from app.models.report import Report
-from app.services.library_visibility import library_visible_filter
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
-from app.services.session_visibility import visible_session
 from app.schemas.admin import AdminOverviewResponse
 from app.schemas.stats import (
     CompaniesResponse,
@@ -31,6 +29,8 @@ from app.schemas.stats import (
     TrendBucket,
     TrendResponse,
 )
+from app.services.library_visibility import library_visible_filter
+from app.services.session_visibility import visible_session
 
 
 async def summary_for_user(
@@ -43,7 +43,7 @@ async def summary_for_user(
     push notification content never drifts from what the Dashboard shows.
     Excludes: soft-deleted sessions, ERROR sessions, ignored/unaccepted games.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # days == 0 → all-time (no lower bound). Otherwise a rolling window.
     all_time = days == 0
     window_start = None if all_time else now - timedelta(days=days)
@@ -511,7 +511,7 @@ async def trend_for_user(db: AsyncSession, user: User, days: int) -> TrendRespon
     window_filters: list = []
     if not all_time:
         window_start_local = (
-            datetime.now(timezone.utc) - timedelta(days=days)
+            datetime.now(UTC) - timedelta(days=days)
         ).astimezone(tz).date()
         first_bucket = _trend_bucket_start(window_start_local, granularity)
         # Aware local-midnight lower bound — comparable to start_time and
@@ -571,7 +571,7 @@ def _window_filters(days: int | None) -> list:
     """
     if not days:
         return []
-    window_start = datetime.now(timezone.utc) - timedelta(days=days)
+    window_start = datetime.now(UTC) - timedelta(days=days)
     return [GameSession.start_time >= window_start]
 
 

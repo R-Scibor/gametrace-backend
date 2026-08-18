@@ -3,7 +3,7 @@ Database operations used by the Discord bot.
 All functions accept an AsyncSession and perform a single logical operation.
 """
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -11,9 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.flicker_policy import find_stitch_candidate, is_short_flicker
 from app.models.game import EnrichmentStatus, Game, GameAlias
-from app.services.game_review import ensure_inbox_for_user
 from app.models.session import GameSession, SessionSource, SessionStatus
 from app.models.user import User
+from app.services.game_review import ensure_inbox_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ async def start_session(db: AsyncSession, user_id: str, game_id: int) -> GameSes
     session = GameSession(
         user_id=user_id,
         game_id=game_id,
-        start_time=datetime.now(timezone.utc),
+        start_time=datetime.now(UTC),
         status=SessionStatus.ONGOING,
         source=SessionSource.BOT,
     )
@@ -113,7 +113,7 @@ async def start_session(db: AsyncSession, user_id: str, game_id: int) -> GameSes
 
 async def complete_session(db: AsyncSession, session: GameSession) -> GameSession:
     """Transition ONGOING → COMPLETED, fill end_time and duration."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     session.status = SessionStatus.COMPLETED
     session.end_time = now
     session.duration_seconds = int((now - session.start_time).total_seconds())

@@ -16,7 +16,6 @@ from app.services.company_resolution import (
     resolve_companies,
 )
 
-
 # ── PUBLISHER_ALIASES sanity ─────────────────────────────────────────────────
 
 def test_publisher_aliases_align_to_igdb_root():

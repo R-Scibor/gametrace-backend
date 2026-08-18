@@ -1,10 +1,9 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.models.session import SessionSource, SessionStatus
 from app.services.stats import _compute_streaks
 from tests.factories import make_game, make_pref, make_session
-
 
 # ── Pure unit tests for _compute_streaks ──────────────────────────────────────
 
@@ -60,7 +59,7 @@ async def test_streak_empty_user(authed_client):
 
 async def test_streak_only_today(authed_client, db, user):
     game = await make_game(db)
-    start = datetime.now(timezone.utc)
+    start = datetime.now(UTC)
     await make_session(
         db, user.discord_id, game.id, start, start + timedelta(seconds=600)
     )
@@ -73,7 +72,7 @@ async def test_streak_only_today(authed_client, db, user):
 
 async def test_streak_only_yesterday_grace(authed_client, db, user):
     game = await make_game(db)
-    start = datetime.now(timezone.utc) - timedelta(days=1)
+    start = datetime.now(UTC) - timedelta(days=1)
     await make_session(
         db, user.discord_id, game.id, start, start + timedelta(seconds=600)
     )
@@ -86,7 +85,7 @@ async def test_streak_only_yesterday_grace(authed_client, db, user):
 
 async def test_streak_today_and_yesterday(authed_client, db, user):
     game = await make_game(db)
-    today_start = datetime.now(timezone.utc)
+    today_start = datetime.now(UTC)
     yest_start = today_start - timedelta(days=1)
     await make_session(
         db, user.discord_id, game.id, today_start,
@@ -105,7 +104,7 @@ async def test_streak_today_and_yesterday(authed_client, db, user):
 
 async def test_streak_gap_kills_current(authed_client, db, user):
     game = await make_game(db)
-    today_start = datetime.now(timezone.utc)
+    today_start = datetime.now(UTC)
     old_start = today_start - timedelta(days=3)
     await make_session(
         db, user.discord_id, game.id, today_start,
@@ -126,7 +125,7 @@ async def test_streak_past_streak_no_current(authed_client, db, user):
     game = await make_game(db)
     # 5 consecutive days ending 2 days ago (i.e. days-ago: 2,3,4,5,6)
     for d in range(2, 7):
-        s = datetime.now(timezone.utc) - timedelta(days=d)
+        s = datetime.now(UTC) - timedelta(days=d)
         await make_session(
             db, user.discord_id, game.id, s, s + timedelta(seconds=600)
         )
@@ -139,7 +138,7 @@ async def test_streak_past_streak_no_current(authed_client, db, user):
 
 async def test_streak_excludes_error_sessions(authed_client, db, user):
     game = await make_game(db)
-    start = datetime.now(timezone.utc)
+    start = datetime.now(UTC)
     await make_session(
         db, user.discord_id, game.id, start, start + timedelta(seconds=600),
         status=SessionStatus.ERROR,
@@ -153,10 +152,10 @@ async def test_streak_excludes_error_sessions(authed_client, db, user):
 
 async def test_streak_excludes_deleted(authed_client, db, user):
     game = await make_game(db)
-    start = datetime.now(timezone.utc)
+    start = datetime.now(UTC)
     await make_session(
         db, user.discord_id, game.id, start, start + timedelta(seconds=600),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.get("/api/v1/stats/streak")
@@ -168,7 +167,7 @@ async def test_streak_excludes_deleted(authed_client, db, user):
 async def test_streak_excludes_ignored_game(authed_client, db, user):
     game = await make_game(db)
     await make_pref(db, user.discord_id, game.id, is_ignored=True)
-    start = datetime.now(timezone.utc)
+    start = datetime.now(UTC)
     await make_session(
         db, user.discord_id, game.id, start, start + timedelta(seconds=600)
     )
@@ -197,7 +196,7 @@ async def test_streak_respects_user_timezone(authed_client, db, user):
     yesterday_ny = (now_ny - timedelta(days=1)).replace(
         hour=22, minute=30, second=0, microsecond=0
     )
-    start = yesterday_ny.astimezone(timezone.utc)
+    start = yesterday_ny.astimezone(UTC)
 
     game = await make_game(db)
     await make_session(
@@ -215,7 +214,7 @@ async def test_streak_respects_user_timezone(authed_client, db, user):
 
 async def test_streak_includes_ongoing_session(authed_client, db, user):
     game = await make_game(db)
-    start = datetime.now(timezone.utc) - timedelta(hours=1)
+    start = datetime.now(UTC) - timedelta(hours=1)
     await make_session(
         db, user.discord_id, game.id, start,
         end_time=None,

@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from enum import Enum
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -13,7 +13,7 @@ class CompanyRole(str, Enum):
 class GameStatEntry(BaseModel):
     game_id: int
     game_name: str
-    cover_image_url: Optional[str] = None
+    cover_image_url: str | None = None
     total_seconds: int
 
 
@@ -22,18 +22,18 @@ class PendingErrorEntry(BaseModel):
     game_id: int
     game_name: str
     start_time: datetime
-    notes: Optional[str] = None
+    notes: str | None = None
 
 
 class StatsSummaryResponse(BaseModel):
     days: int                                      # 0 = all-time
-    window_start: Optional[datetime] = None        # null in all-time mode (no lower bound)
+    window_start: datetime | None = None        # null in all-time mode (no lower bound)
     window_end: datetime
     total_seconds: int
     avg_session_seconds: int                       # mean COMPLETED session length in window
     longest_session_seconds: int                   # 0 when no COMPLETED sessions
-    longest_session_game_id: Optional[int] = None
-    longest_session_game_name: Optional[str] = None
+    longest_session_game_id: int | None = None
+    longest_session_game_name: str | None = None
     previous_total_seconds: int                    # COMPLETED total over the prior equal-length window
     new_games_count: int                           # games first-played within the window
     per_game: list[GameStatEntry]
@@ -44,7 +44,7 @@ class ActiveSessionBrief(BaseModel):
     id: int
     game_id: int
     game_name: str
-    cover_image_url: Optional[str] = None
+    cover_image_url: str | None = None
     start_time: datetime
 
 
@@ -52,7 +52,7 @@ class DashboardResponse(BaseModel):
     total_seconds_today: int
     total_seconds_7d: int
     total_seconds_30d: int
-    active_session: Optional[ActiveSessionBrief] = None
+    active_session: ActiveSessionBrief | None = None
     pending_errors: list[PendingErrorEntry]
 
 

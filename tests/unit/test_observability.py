@@ -5,7 +5,7 @@ Two contracts that must hold so the rest of the suite stays cheap to run:
   1. With no DSN, init_sentry() is a strict no-op (does not call sentry_sdk.init).
   2. The before_send scrub redacts Authorization headers and ?token= query strings.
 """
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.core import observability
 

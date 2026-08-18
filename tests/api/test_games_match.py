@@ -7,12 +7,12 @@ Patches app.api.v1.endpoints.games._igdb_search_candidates so tests never
 hit the real IGDB API.  Mirrors the pattern in test_voice.py which patches
 app.api.v1.endpoints.voice._gemini_parse.
 """
-import fakeredis.aioredis
-import pytest
 from unittest.mock import patch
 
-from app.services.game_matching import IGDBCandidate
+import fakeredis.aioredis
+import pytest
 
+from app.services.game_matching import IGDBCandidate
 
 _CANDIDATE_A = IGDBCandidate(
     igdb_id=1234,

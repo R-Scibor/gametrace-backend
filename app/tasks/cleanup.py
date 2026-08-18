@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, select
@@ -36,7 +36,7 @@ DEVICE_STALE_DAYS = 30 * 6
 
 
 async def _run_cleanup(db: AsyncSession) -> tuple[int, int]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     session_cutoff = now - timedelta(days=settings.trash_retention_days)
     device_cutoff = now - timedelta(days=DEVICE_STALE_DAYS)
 
@@ -82,7 +82,7 @@ def hard_delete_sweep() -> tuple[int, int]:
 
 
 async def _run_flicker_purge(db: AsyncSession) -> int:
-    cutoff = datetime.now(timezone.utc) - timedelta(
+    cutoff = datetime.now(UTC) - timedelta(
         seconds=settings.session_flicker_gc_margin_seconds
     )
     deleted = (
@@ -122,7 +122,7 @@ async def _run_purge(db: AsyncSession) -> int:
     DELETE … RETURNING, then one account_deletion_events row per id
     (event=purged) in the same transaction. Catalog games are untouched.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     result = await db.execute(
         delete(User)
         # purge_at is set 7 days out, so this can't save the demo account from
@@ -222,7 +222,7 @@ async def _run_demo_reset(db: AsyncSession) -> int:
             # happened yet". Clamp by reducing the single shared delta a
             # whole day at a time — never rebase rows individually, since
             # preserving relative spacing is the entire point of one delta.
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             latest_moment = max(
                 (s.end_time if s.end_time is not None else s.start_time)
                 for s in seed_sessions

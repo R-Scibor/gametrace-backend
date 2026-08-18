@@ -14,8 +14,6 @@ from app.core.rate_limit import check_hourly_quota
 from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
-from app.services.demo import DEMO_DISCORD_ID
-from app.services.game_aliases import add_alias
 from app.schemas.game import (
     GameCreateRequest,
     GameListResponse,
@@ -26,14 +24,16 @@ from app.schemas.game import (
     GameSuggestResponse,
     IGDBCandidateOut,
 )
+from app.schemas.session import SessionResponse
+from app.schemas.stats import GameStatsResponse
+from app.services.demo import DEMO_DISCORD_ID
+from app.services.game_aliases import add_alias
 from app.services.game_matching import (
     _confidence,
     _igdb_fetch_by_id,
     _igdb_search_candidates,
     _RateLimited,
 )
-from app.schemas.session import SessionResponse
-from app.schemas.stats import GameStatsResponse
 from app.services.library_visibility import (
     ignored_only_filter,
     library_excluded_filter,

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import delete
@@ -30,7 +30,7 @@ async def register_token(
     brand-new token, same user re-registering, and token migration
     between users on the same physical device.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stmt = (
         pg_insert(UserDevice)
         .values(

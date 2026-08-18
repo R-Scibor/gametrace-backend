@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.models.session import SessionStatus
 from tests.factories import (
@@ -9,7 +9,6 @@ from tests.factories import (
     make_session,
     make_user,
 )
-
 
 # ── happy paths ───────────────────────────────────────────────────────────────
 
@@ -106,7 +105,7 @@ async def test_only_soft_deleted_sessions_does_not_resolve(authed_client, db, us
         game.id,
         dt(hours_ago=3),
         dt(hours_ago=2),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.get("/api/v1/games/resolve", params={"name": "Forgotten"})

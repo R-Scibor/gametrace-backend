@@ -5,13 +5,12 @@ the test DB clean. The sync Celery entry (.run()) isn't exercised — it just
 wraps _run_demo_with_engine in asyncio.run, same pattern as the other
 cleanup tasks.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
 from app.core.celery_app import celery_app
-from app.models.demo_seed import DemoSeedPreference, DemoSeedSession
 from app.models.game import UserGamePreference
 from app.models.report import Report
 from app.models.session import GameSession
@@ -41,10 +40,10 @@ async def test_restores_exact_row_counts(db):
     game = await make_game(db, primary_name="SnapshotGame")
 
     # Junk that should be wiped before restore.
-    await make_session(db, DEMO_DISCORD_ID, game.id, datetime.now(timezone.utc))
+    await make_session(db, DEMO_DISCORD_ID, game.id, datetime.now(UTC))
     await make_pref(db, DEMO_DISCORD_ID, game.id, is_ignored=True)
 
-    base = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     await make_demo_seed_session(db, game.id, start_time=base, end_time=base + timedelta(hours=1))
     await make_demo_seed_session(
         db, game.id, start_time=base + timedelta(days=1), end_time=base + timedelta(days=1, hours=2)
@@ -102,7 +101,7 @@ async def test_relative_spacing_between_sessions_preserved(db):
     await _make_demo_user(db)
     game = await make_game(db)
 
-    base = datetime(2021, 6, 1, 10, 0, tzinfo=timezone.utc)
+    base = datetime(2021, 6, 1, 10, 0, tzinfo=UTC)
     earlier = base
     later = base + timedelta(days=3, hours=5)
     await make_demo_seed_session(db, game.id, start_time=earlier, end_time=earlier + timedelta(hours=1))
@@ -124,7 +123,7 @@ async def test_relative_spacing_between_sessions_preserved(db):
     assert restored_gap == original_gap
 
     # Time-of-day is preserved too (whole-day delta only).
-    assert sessions[0].start_time.astimezone(timezone.utc).time() == earlier.time()
+    assert sessions[0].start_time.astimezone(UTC).time() == earlier.time()
 
 
 async def test_restored_session_never_lands_in_the_future(db):
@@ -150,7 +149,7 @@ async def test_restored_session_never_lands_in_the_future(db):
     ).scalars().all()
     assert len(sessions) == 1
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     assert sessions[0].start_time <= now
     assert sessions[0].end_time <= now
 
@@ -160,7 +159,7 @@ async def test_restored_session_never_lands_in_the_future(db):
 
 
 async def test_clears_pending_deletion_fields(db):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await _make_demo_user(
         db, deletion_requested_at=now - timedelta(days=1), purge_at=now + timedelta(days=6)
     )
@@ -175,7 +174,7 @@ async def test_clears_pending_deletion_fields(db):
 async def test_clearing_pending_deletion_writes_cancelled_event(db):
     from app.models.account_deletion_event import AccountDeletionEvent
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await _make_demo_user(
         db, deletion_requested_at=now - timedelta(days=1), purge_at=now + timedelta(days=6)
     )
@@ -274,7 +273,7 @@ async def test_deletes_devices_voice_usage_and_reports(db):
 async def test_other_users_data_never_touched(db, user):
     await _make_demo_user(db)
     game = await make_game(db)
-    other_session = await make_session(db, user.discord_id, game.id, datetime.now(timezone.utc))
+    other_session = await make_session(db, user.discord_id, game.id, datetime.now(UTC))
     other_pref = await make_pref(db, user.discord_id, game.id, is_ignored=True)
 
     await _run_demo_reset(db)
@@ -305,10 +304,10 @@ async def test_restore_failure_rolls_back(db, monkeypatch):
     """
     demo = await _make_demo_user(db, is_admin=True)
     game = await make_game(db, primary_name="PriorGame")
-    prior_session = await make_session(db, DEMO_DISCORD_ID, game.id, datetime.now(timezone.utc))
+    prior_session = await make_session(db, DEMO_DISCORD_ID, game.id, datetime.now(UTC))
     await db.commit()
 
-    await make_demo_seed_session(db, game_id=game.id, start_time=datetime.now(timezone.utc))
+    await make_demo_seed_session(db, game_id=game.id, start_time=datetime.now(UTC))
     await db.commit()
 
     async def _boom():
@@ -368,7 +367,7 @@ async def test_counts_stable_after_flicker_purge(db):
     await _make_demo_user(db)
     game = await make_game(db)
 
-    base = datetime.now(timezone.utc) - timedelta(days=10)
+    base = datetime.now(UTC) - timedelta(days=10)
     await make_demo_seed_session(db, game.id, start_time=base, end_time=base + timedelta(minutes=30))
 
     restored = await _run_demo_reset(db)

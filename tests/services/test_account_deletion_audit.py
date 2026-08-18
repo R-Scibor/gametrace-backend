@@ -1,5 +1,4 @@
 """Audit rows for schedule_deletion / cancel_deletion."""
-from datetime import datetime, timezone
 
 import fakeredis.aioredis
 import pytest

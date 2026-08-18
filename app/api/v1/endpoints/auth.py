@@ -1,6 +1,6 @@
 import hmac
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import redis.exceptions
@@ -36,7 +36,7 @@ _bearer_scheme_optional = HTTPBearer(auto_error=False)
 
 
 def _token_expiry() -> datetime:
-    return datetime.now(timezone.utc) + timedelta(days=settings.session_token_expire_days)
+    return datetime.now(UTC) + timedelta(days=settings.session_token_expire_days)
 
 
 def _login_response(
@@ -358,7 +358,7 @@ async def get_current_user_allow_pending(
     )
     token = result.scalar_one_or_none()
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if token is None or token.expires_at < now:
         if token is not None and token.expires_at < now:
             await db.delete(token)

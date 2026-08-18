@@ -3,9 +3,7 @@
 No DB, no interaction handling: layout.py is pure presentation.
 """
 import discord
-from discord.ui import TextDisplay
-
-from discord.ui import Container
+from discord.ui import Container, TextDisplay
 
 from app.bot import replies
 from app.bot.layout import Accent, accent_for, reply_view

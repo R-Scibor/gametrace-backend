@@ -4,7 +4,6 @@ tests/bot/test_self_healing.py
 Phase 2 — integration tests for run_self_healing(db, guilds).
 Uses real test DB + mocked Discord guilds/members.
 """
-from datetime import timedelta, timezone
 from unittest.mock import MagicMock
 
 import discord
@@ -14,7 +13,6 @@ from app.bot.self_healing import run_self_healing
 from app.models.game import Game
 from app.models.session import GameSession, SessionSource, SessionStatus
 from tests.factories import dt, make_game, make_session, make_user
-
 
 # ── Guild / member helpers ────────────────────────────────────────────────────
 

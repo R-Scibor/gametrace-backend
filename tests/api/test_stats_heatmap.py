@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.models.session import SessionSource, SessionStatus
 from tests.factories import (
@@ -6,7 +6,6 @@ from tests.factories import (
     make_game,
     make_pref,
     make_session,
-    make_user,
 )
 
 
@@ -38,7 +37,7 @@ async def test_heatmap_session_split_across_spanned_hours(authed_client, db, use
     # A 14:30→15:30 session straddles the 15:00 boundary, so its 3600s split
     # 1800s into hour 14 and 1800s into hour 15.
     game = await make_game(db)
-    start = datetime(2026, 4, 15, 14, 30, tzinfo=timezone.utc)
+    start = datetime(2026, 4, 15, 14, 30, tzinfo=UTC)
     end = start + timedelta(seconds=3600)
     await make_session(db, user.discord_id, game.id, start, end)
 
@@ -55,7 +54,7 @@ async def test_heatmap_session_split_across_spanned_hours(authed_client, db, use
 async def test_heatmap_within_single_hour_stays_in_one_cell(authed_client, db, user):
     # 14:10→14:20 — entirely inside hour 14, so one cell, no split.
     game = await make_game(db)
-    start = datetime(2026, 4, 15, 14, 10, tzinfo=timezone.utc)
+    start = datetime(2026, 4, 15, 14, 10, tzinfo=UTC)
     end = start + timedelta(seconds=600)
     await make_session(db, user.discord_id, game.id, start, end)
 
@@ -70,7 +69,7 @@ async def test_heatmap_within_single_hour_stays_in_one_cell(authed_client, db, u
 async def test_heatmap_session_crosses_midnight_splits_dow(authed_client, db, user):
     # 23:00 Wed → 02:00 Thu (3h): 1h each into Wed 23:00, Thu 00:00, Thu 01:00.
     game = await make_game(db)
-    start = datetime(2026, 4, 15, 23, 0, tzinfo=timezone.utc)  # Wed → dow=2
+    start = datetime(2026, 4, 15, 23, 0, tzinfo=UTC)  # Wed → dow=2
     end = start + timedelta(seconds=3 * 3600)
     await make_session(db, user.discord_id, game.id, start, end)
 
@@ -92,7 +91,7 @@ async def test_heatmap_respects_user_timezone(authed_client, db, user):
     await db.flush()
 
     game = await make_game(db)
-    start = datetime(2026, 4, 15, 14, 30, tzinfo=timezone.utc)  # 10:30 local
+    start = datetime(2026, 4, 15, 14, 30, tzinfo=UTC)  # 10:30 local
     end = start + timedelta(seconds=3600)
     await make_session(db, user.discord_id, game.id, start, end)
 
@@ -126,7 +125,7 @@ async def test_heatmap_excludes_deleted_sessions(authed_client, db, user):
     game = await make_game(db)
     await make_session(
         db, user.discord_id, game.id, dt(hours_ago=5), dt(hours_ago=4),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.get("/api/v1/stats/heatmap")
@@ -150,7 +149,7 @@ async def test_heatmap_excludes_ignored_games(authed_client, db, user):
 
 async def test_heatmap_includes_ongoing(authed_client, db, user):
     game = await make_game(db)
-    start = datetime.now(timezone.utc) - timedelta(minutes=30)
+    start = datetime.now(UTC) - timedelta(minutes=30)
     await make_session(
         db, user.discord_id, game.id, start,
         end_time=None,
@@ -172,12 +171,12 @@ async def test_heatmap_includes_ongoing(authed_client, db, user):
 async def test_heatmap_dow_mapping_monday_is_zero(authed_client, db, user):
     # 2026-04-13 is a Monday; days=0 so fixed anchors stay in-window forever.
     game = await make_game(db)
-    mon = datetime(2026, 4, 13, 12, 0, tzinfo=timezone.utc)
+    mon = datetime(2026, 4, 13, 12, 0, tzinfo=UTC)
     await make_session(
         db, user.discord_id, game.id, mon, mon + timedelta(seconds=600)
     )
     # 2026-04-19 is a Sunday
-    sun = datetime(2026, 4, 19, 8, 0, tzinfo=timezone.utc)
+    sun = datetime(2026, 4, 19, 8, 0, tzinfo=UTC)
     await make_session(
         db, user.discord_id, game.id, sun, sun + timedelta(seconds=900)
     )

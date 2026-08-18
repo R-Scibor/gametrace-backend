@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.models.session import SessionStatus
 from tests.factories import dt, make_game, make_session, make_user
@@ -12,7 +12,7 @@ async def test_trash_lists_only_trashed_sessions(authed_client, db, user):
     trashed = await make_session(
         db, user.discord_id, game.id,
         dt(hours_ago=10), dt(hours_ago=8),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.get("/api/v1/sessions/trash")
@@ -23,7 +23,7 @@ async def test_trash_lists_only_trashed_sessions(authed_client, db, user):
 
 async def test_trash_includes_purges_at_field(authed_client, db, user):
     game = await make_game(db)
-    deleted_at = datetime.now(timezone.utc) - timedelta(days=2)
+    deleted_at = datetime.now(UTC) - timedelta(days=2)
     await make_session(
         db, user.discord_id, game.id,
         dt(hours_ago=10), dt(hours_ago=8),
@@ -42,11 +42,11 @@ async def test_trash_ordered_by_deleted_at_desc(authed_client, db, user):
     game = await make_game(db)
     older = await make_session(
         db, user.discord_id, game.id, dt(hours_ago=20), dt(hours_ago=19),
-        deleted_at=datetime.now(timezone.utc) - timedelta(days=3),
+        deleted_at=datetime.now(UTC) - timedelta(days=3),
     )
     newer = await make_session(
         db, user.discord_id, game.id, dt(hours_ago=15), dt(hours_ago=14),
-        deleted_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        deleted_at=datetime.now(UTC) - timedelta(hours=1),
     )
 
     resp = await authed_client.get("/api/v1/sessions/trash")
@@ -61,7 +61,7 @@ async def test_trash_excludes_other_users_sessions(authed_client, db, user):
     await make_session(
         db, other.discord_id, game.id,
         dt(hours_ago=10), dt(hours_ago=8),
-        deleted_at=datetime.now(timezone.utc),
+        deleted_at=datetime.now(UTC),
     )
 
     resp = await authed_client.get("/api/v1/sessions/trash")
@@ -75,7 +75,7 @@ async def test_trash_pagination(authed_client, db, user):
         await make_session(
             db, user.discord_id, game.id,
             dt(hours_ago=20 + i), dt(hours_ago=19 + i),
-            deleted_at=datetime.now(timezone.utc) - timedelta(hours=i),
+            deleted_at=datetime.now(UTC) - timedelta(hours=i),
         )
 
     resp = await authed_client.get("/api/v1/sessions/trash?skip=2&limit=2")
@@ -93,13 +93,13 @@ async def test_trash_returns_both_error_and_completed(authed_client, db, user):
     completed = await make_session(
         db, user.discord_id, game.id,
         dt(hours_ago=10), dt(hours_ago=8),
-        deleted_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        deleted_at=datetime.now(UTC) - timedelta(hours=2),
     )
     error = await make_session(
         db, user.discord_id, game.id,
         dt(hours_ago=15),
         status=SessionStatus.ERROR,
-        deleted_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        deleted_at=datetime.now(UTC) - timedelta(hours=1),
     )
 
     resp = await authed_client.get("/api/v1/sessions/trash")

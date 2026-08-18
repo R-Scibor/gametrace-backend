@@ -4,7 +4,7 @@ app/bot/flicker_policy.py
 Pure-decision module for session flicker handling.
 No side effects — only reads config and runs DB queries.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,7 +31,7 @@ async def find_stitch_candidate(
     NOTE: Does NOT filter on is_flicker — stitch must be able to reopen
     flicker-flagged rows (that is the whole point of stitching).
     """
-    window_start = datetime.now(timezone.utc) - timedelta(
+    window_start = datetime.now(UTC) - timedelta(
         seconds=settings.session_stitch_window_seconds
     )
     stmt = (

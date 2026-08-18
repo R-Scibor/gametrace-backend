@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import redis as redis_sync
 from sqlalchemy import select
@@ -55,7 +55,7 @@ async def _run_weekly_report(db: AsyncSession) -> int:
     so a failure on one user doesn't roll back the others' bookkeeping.
     """
     r = redis_sync.from_url(settings.redis_url, decode_responses=True)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     sent = 0
 
     users = (

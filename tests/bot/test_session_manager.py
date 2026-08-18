@@ -4,7 +4,7 @@ tests/bot/test_session_manager.py
 Phase 2 — DB-layer functions used by the Discord bot.
 Called directly with the test `db` fixture — no HTTP client, no Discord connection.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy import select
@@ -20,7 +20,6 @@ from app.bot.session_manager import (
 from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import SessionSource, SessionStatus
 from tests.factories import dt, make_alias, make_game, make_session, make_user
-
 
 # ── get_user_if_tracked ───────────────────────────────────────────────────────
 
@@ -202,7 +201,7 @@ async def test_complete_session_short_bot_flagged_as_flicker(db):
     game = await make_game(db)
     session = await make_session(
         db, user.discord_id, game.id,
-        start_time=datetime.now(timezone.utc) - timedelta(seconds=60),
+        start_time=datetime.now(UTC) - timedelta(seconds=60),
         end_time=None,
         status=SessionStatus.ONGOING,
         source=SessionSource.BOT,
@@ -236,7 +235,7 @@ async def test_complete_session_short_manual_not_flagged_as_flicker(db):
     game = await make_game(db)
     session = await make_session(
         db, user.discord_id, game.id,
-        start_time=datetime.now(timezone.utc) - timedelta(seconds=60),
+        start_time=datetime.now(UTC) - timedelta(seconds=60),
         end_time=None,
         status=SessionStatus.ONGOING,
         source=SessionSource.MANUAL,
@@ -257,8 +256,8 @@ async def test_start_or_resume_session_reopens_recent_bot_session(db):
     game = await make_game(db)
     candidate = await make_session(
         db, user.discord_id, game.id,
-        start_time=datetime.now(timezone.utc) - timedelta(seconds=90),
-        end_time=datetime.now(timezone.utc) - timedelta(seconds=30),
+        start_time=datetime.now(UTC) - timedelta(seconds=90),
+        end_time=datetime.now(UTC) - timedelta(seconds=30),
         status=SessionStatus.COMPLETED,
         source=SessionSource.BOT,
         is_flicker=True,  # proves the flag is cleared on reopen
@@ -294,10 +293,10 @@ async def test_start_or_resume_session_ignores_manual_source(db):
 
     user = await make_user(db)
     game = await make_game(db)
-    manual_end = datetime.now(timezone.utc) - timedelta(seconds=30)
+    manual_end = datetime.now(UTC) - timedelta(seconds=30)
     manual = await make_session(
         db, user.discord_id, game.id,
-        start_time=datetime.now(timezone.utc) - timedelta(seconds=90),
+        start_time=datetime.now(UTC) - timedelta(seconds=90),
         end_time=manual_end,
         status=SessionStatus.COMPLETED,
         source=SessionSource.MANUAL,
@@ -325,8 +324,8 @@ async def test_start_or_resume_session_outside_window_creates_new(db):
     game = await make_game(db)
     await make_session(
         db, user.discord_id, game.id,
-        start_time=datetime.now(timezone.utc) - timedelta(minutes=15),
-        end_time=datetime.now(timezone.utc) - timedelta(minutes=10),
+        start_time=datetime.now(UTC) - timedelta(minutes=15),
+        end_time=datetime.now(UTC) - timedelta(minutes=10),
         status=SessionStatus.COMPLETED,
         source=SessionSource.BOT,
     )

@@ -11,7 +11,6 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import fakeredis.aioredis
-
 import pytest
 from sqlalchemy import func, select
 

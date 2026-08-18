@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -206,7 +206,7 @@ async def test_protected_endpoint_expired_token_returns_401(client, db):
     expired = UserAuthToken(
         user_id=user.discord_id,
         token=UserAuthToken.hash_token(raw),
-        expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+        expires_at=datetime.now(UTC) - timedelta(days=1),
     )
     db.add(expired)
     await db.flush()
@@ -222,12 +222,12 @@ async def test_token_expiry_extended_on_use(client, db):
     """A request outside the debounce window slides last_active + expiry forward."""
     user = await make_user(db)
     raw = UserAuthToken.generate_token()
-    stale = datetime.now(timezone.utc) - timedelta(hours=1)  # past the debounce window
+    stale = datetime.now(UTC) - timedelta(hours=1)  # past the debounce window
     token = UserAuthToken(
         user_id=user.discord_id,
         token=UserAuthToken.hash_token(raw),
         last_active=stale,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db.add(token)
     await db.flush()
@@ -239,7 +239,7 @@ async def test_token_expiry_extended_on_use(client, db):
 
     await db.refresh(token)
     assert token.last_active > stale
-    assert token.expires_at > datetime.now(timezone.utc) + timedelta(days=29)
+    assert token.expires_at > datetime.now(UTC) + timedelta(days=29)
 
 
 async def test_token_activity_debounced_within_window(client, db, monkeypatch):
@@ -247,8 +247,8 @@ async def test_token_activity_debounced_within_window(client, db, monkeypatch):
     monkeypatch.setattr(settings, "token_activity_debounce_minutes", 10)
     user = await make_user(db)
     raw = UserAuthToken.generate_token()
-    recent = datetime.now(timezone.utc) - timedelta(minutes=2)  # inside the window
-    expiry = datetime.now(timezone.utc) + timedelta(days=1)
+    recent = datetime.now(UTC) - timedelta(minutes=2)  # inside the window
+    expiry = datetime.now(UTC) + timedelta(days=1)
     token = UserAuthToken(
         user_id=user.discord_id,
         token=UserAuthToken.hash_token(raw),
