@@ -17,3 +17,9 @@ extend-immutable-calls = [
     "fastapi.Header",
     "fastapi.Security",
 ]
+
+[tool.mypy]
+python_version = "3.11"
+# celery, discord.py and firebase-admin ship no usable stubs.
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]

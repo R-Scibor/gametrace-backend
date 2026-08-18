@@ -38,7 +38,7 @@ def accent_for(body: str) -> Accent:
 
 def reply_view(title: str, body: str, accent: Accent = Accent.BRAND) -> discord.ui.LayoutView:
     view = LayoutView()
-    container = Container(accent_colour=accent.value)
+    container: Container[LayoutView] = Container(accent_colour=accent.value)
     container.add_item(TextDisplay(f"### {title}"))
     container.add_item(Separator())
     container.add_item(TextDisplay(body))

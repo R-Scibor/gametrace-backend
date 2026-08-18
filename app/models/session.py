@@ -1,10 +1,15 @@
 import enum
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+
+if TYPE_CHECKING:
+    from app.models.game import Game
+    from app.models.user import User
 
 
 class SessionStatus(enum.StrEnum):
@@ -44,5 +49,5 @@ class GameSession(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    user: Mapped["User"] = relationship()  # noqa: F821
-    game: Mapped["Game"] = relationship()  # noqa: F821
+    user: Mapped["User"] = relationship()
+    game: Mapped["Game"] = relationship()
