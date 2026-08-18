@@ -7,15 +7,16 @@ Create Date: 2026-07-28
 Lets an admin leave a triage note on a report. Nullable, no default,
 no backfill — existing rows simply have no note.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0017"
-down_revision: Union[str, None] = "0016"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0016"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

@@ -9,6 +9,7 @@ on:
       - 'alembic/**'
       - 'requirements.txt'
       - 'pyproject.toml'
+      - 'scripts/**'
       - 'Dockerfile'
       - 'docker-compose.yml'
       - '.github/workflows/ci-cd.yml'
@@ -19,6 +20,7 @@ on:
       - 'alembic/**'
       - 'requirements.txt'
       - 'pyproject.toml'
+      - 'scripts/**'
       - 'Dockerfile'
       - 'docker-compose.yml'
       - '.github/workflows/ci-cd.yml'
@@ -78,10 +80,10 @@ jobs:
         run: pytest
 
       - name: Lint (ruff)
-        run: ruff check app tests
+        run: ruff check app tests alembic scripts
 
       - name: Type check (mypy)
-        run: mypy app tests
+        run: mypy app tests alembic scripts
 
   build:
     needs: test

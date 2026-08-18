@@ -7,15 +7,16 @@ Create Date: 2026-07-11
 Deduplicates any existing ONGOING rows (keeps the newest per user), then adds a
 partial unique index so the invariant survives concurrent bot handlers.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0015"
-down_revision: Union[str, None] = "0014"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0014"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 _DEDUP_NOTES = (
     "Duplicate ONGOING reconciled before unique-index migration (0015)."
