@@ -1,11 +1,11 @@
 from datetime import date, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel
 
 
-class CompanyRole(str, Enum):
+class CompanyRole(StrEnum):
     developer = "developer"
     publisher = "publisher"
 

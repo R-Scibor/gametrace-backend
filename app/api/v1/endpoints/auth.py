@@ -213,25 +213,25 @@ async def link_login(
                 headers={"Retry-After": str(retry_after)},
             )
         discord_id = await link_codes.redeem_code(r, payload.code)
-    except link_codes.LinkCodesNotConfigured:
+    except link_codes.LinkCodesNotConfigured as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Login link codes are not configured",
-        )
-    except (redis.exceptions.RedisError, ConnectionError, OSError):
+        ) from exc
+    except (redis.exceptions.RedisError, ConnectionError, OSError) as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Service temporarily unavailable",
-        )
+        ) from exc
 
     if discord_id is None:
         try:
             await link_codes.record_failure(r, ip)
-        except (redis.exceptions.RedisError, ConnectionError, OSError):
+        except (redis.exceptions.RedisError, ConnectionError, OSError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Service temporarily unavailable",
-            )
+            ) from exc
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired code",
@@ -270,12 +270,12 @@ async def discord_login(payload: DiscordCallbackRequest, db: AsyncSession = Depe
         logger.warning("discord_login: authorization failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Discord authorization failed"
-        )
+        ) from exc
     except discord_oauth.DiscordUpstreamError as exc:
         logger.warning("discord_login: upstream error: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail="Discord unavailable"
-        )
+        ) from exc
 
     discord_id = identity["id"]
     username = identity["username"]
@@ -299,12 +299,12 @@ async def discord_login(payload: DiscordCallbackRequest, db: AsyncSession = Depe
     db.add(token)
     try:
         await db.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Discord username conflicts with an existing account",
-        )
+        ) from exc
     await db.refresh(user)
 
     return _login_response(user, token_value, needs_server_join=needs_server_join)

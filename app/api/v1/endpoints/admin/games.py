@@ -151,8 +151,8 @@ async def upload_cover(
 
     try:
         image_bytes = base64.b64decode(body.image_base64, validate=True)
-    except Exception:
-        raise HTTPException(status_code=422, detail="Malformed base64 image data.")
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Malformed base64 image data.") from exc
 
     # Second layer over the extension allowlist: the bytes must actually be an
     # image, so a mislabeled/polyglot file can't be stored and served same-origin.

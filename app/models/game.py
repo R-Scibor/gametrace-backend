@@ -8,12 +8,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 
-class CoverSource(str, enum.Enum):
+class CoverSource(enum.StrEnum):
     EXTERNAL = "EXTERNAL"
     CUSTOM = "CUSTOM"
 
 
-class EnrichmentStatus(str, enum.Enum):
+class EnrichmentStatus(enum.StrEnum):
     PENDING = "PENDING"
     ENRICHED = "ENRICHED"
     NEEDS_REVIEW = "NEEDS_REVIEW"

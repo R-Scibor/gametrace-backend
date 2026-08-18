@@ -1,9 +1,11 @@
+from datetime import date
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import func, select
 
-from app.models.game import EnrichmentStatus
-from app.services.game_matching import IGDBCandidate
+from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias
+from app.services.game_matching import IGDBCandidate, IGDBResult
 from tests.factories import dt, make_alias, make_game, make_session, make_user
 
 URL = "/api/v1/admin/games"
@@ -269,7 +271,7 @@ async def test_sort_id_asc(admin_client, db, admin_user):
 
 async def test_sort_name_asc(admin_client, db, admin_user):
     zebra = await make_game(db, "Zebra", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
-    alpha = await make_game(db, "Alpha", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    await make_game(db, "Alpha", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
 
     resp = await admin_client.get(URL, params={"sort": "name_asc"})
     assert resp.status_code == 200
@@ -373,13 +375,6 @@ async def test_match_non_admin_returns_403(authed_client, db, user):
 
 
 # ── POST /games/{id}/igdb-link ───────────────────────────────────────────────
-
-from datetime import date
-
-from sqlalchemy import func, select
-
-from app.models.game import CoverSource, Game
-from app.services.game_matching import IGDBResult
 
 IGDB_LINK_URL = "/api/v1/admin/games/{game_id}/igdb-link"
 IGDB_LINK_PATCH_TARGET = "app.api.v1.endpoints.admin.catalog._igdb_fetch_by_id"
@@ -521,8 +516,6 @@ async def test_igdb_link_non_admin_returns_403(authed_client, db, user):
 
 
 # ── POST /games/{id}/aliases ─────────────────────────────────────────────────
-
-from app.models.game import GameAlias
 
 ALIAS_URL = "/api/v1/admin/games/{game_id}/aliases"
 

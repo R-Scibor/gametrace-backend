@@ -38,7 +38,8 @@ class Settings(BaseSettings):
     demo_link_code: str = ""  # permanent 6-digit /login code for the Play reviewer demo account; empty disables it
     api_base_url: str = "http://api:8010"  # bot → API base URL for read commands (/stats, /recent)
     gametrace_web_url: str = ""  # public web app URL, for links in bot embeds
-    gametrace_privacy_url: str = ""  # privacy policy URL, for the onboarding panel disclosure; empty until the doc exists
+    # Privacy policy URL, for the onboarding panel disclosure; empty until the doc exists.
+    gametrace_privacy_url: str = ""
     # Comma-separated IPs or CIDR blocks allowed to set X-Forwarded-For. Docker
     # bridge addresses are dynamic, so a range (e.g. 172.16.0.0/12) survives
     # re-ups where an exact container IP would silently stop matching.
@@ -99,7 +100,7 @@ class Settings(BaseSettings):
     def _trusted_proxy_ips_must_parse(self) -> "Settings":
         # Malformed entries must fail at boot, not silently untrust the proxy
         # at request time (which would collapse per-IP lockouts into one bucket).
-        self.trusted_proxy_networks
+        self.trusted_proxy_networks  # noqa: B018  # property access IS the validation
         return self
 
     @model_validator(mode="after")

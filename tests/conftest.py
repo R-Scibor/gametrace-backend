@@ -21,9 +21,9 @@ from app.core.config import settings
 # `app.main` is imported, since that import calls init_sentry() at module load.
 settings.sentry_dsn = ""
 
-from app.core.database import Base, get_db
-from app.main import app
-from tests.factories import make_token, make_user
+from app.core.database import Base, get_db  # noqa: E402  # must follow the sentry_dsn reset above
+from app.main import app  # noqa: E402  # imports init_sentry() at module load
+from tests.factories import make_token, make_user  # noqa: E402
 
 TEST_DB_URL = settings.database_url.replace("/gametrace_db", "/gametrace_test")
 

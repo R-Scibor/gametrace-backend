@@ -289,11 +289,11 @@ async def create_or_link_game(
         # 2. Fetch from IGDB
         try:
             fetched = await asyncio.to_thread(_igdb_fetch_by_id, body.igdb_id)
-        except _RateLimited:
+        except _RateLimited as exc:
             raise HTTPException(
                 status_code=503,
                 detail="Game database temporarily unavailable",
-            )
+            ) from exc
 
         if fetched is None:
             raise HTTPException(status_code=404, detail="IGDB game not found")
@@ -620,17 +620,17 @@ async def match_game(
 
     try:
         candidates = await asyncio.to_thread(_igdb_search_candidates, body.query)
-    except _RateLimited:
+    except _RateLimited as exc:
         raise HTTPException(
             status_code=503,
             detail="Game database temporarily unavailable",
-        )
-    except Exception:
+        ) from exc
+    except Exception as exc:
         logger.exception("match_game: IGDB error for query=%r", body.query)
         raise HTTPException(
             status_code=502,
             detail="Upstream game database error",
-        )
+        ) from exc
 
     return [
         IGDBCandidateOut(

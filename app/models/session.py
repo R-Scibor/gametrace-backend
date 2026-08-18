@@ -7,13 +7,13 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 
-class SessionStatus(str, enum.Enum):
+class SessionStatus(enum.StrEnum):
     ONGOING = "ONGOING"
     COMPLETED = "COMPLETED"
     ERROR = "ERROR"
 
 
-class SessionSource(str, enum.Enum):
+class SessionSource(enum.StrEnum):
     BOT = "BOT"
     MANUAL = "MANUAL"
 

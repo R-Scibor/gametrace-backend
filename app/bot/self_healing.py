@@ -95,7 +95,8 @@ async def run_self_healing(db: AsyncSession, guilds: list[discord.Guild]) -> Non
                 await error_session(
                     db,
                     session,
-                    f"Self-Healing: session exceeded {STALE_SESSION_HOURS}h threshold after bot restart — possible stale session.",
+                    f"Self-Healing: session exceeded {STALE_SESSION_HOURS}h threshold "
+                    "after bot restart — possible stale session.",
                 )
                 logger.warning(
                     "Self-Healing: session_id=%d marked ERROR (>12h stale)", session.id

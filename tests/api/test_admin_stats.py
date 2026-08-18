@@ -27,7 +27,7 @@ async def test_overview_aggregates(admin_client, db, admin_user):
     # Games across enrichment statuses.
     enriched = await make_game(db, "Enriched", enrichment_status=EnrichmentStatus.ENRICHED)
     review = await make_game(db, "Review", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
-    pending = await make_game(db, "Pending", enrichment_status=EnrichmentStatus.PENDING)
+    await make_game(db, "Pending", enrichment_status=EnrichmentStatus.PENDING)
 
     # COMPLETED visible session — 3600s, counts toward total_seconds + session_count.
     await make_session(

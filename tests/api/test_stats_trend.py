@@ -67,7 +67,7 @@ async def test_trend_buckets_contiguous_and_chronological(authed_client):
     starts = [date.fromisoformat(b["bucket_start"]) for b in resp.json()["buckets"]]
     assert starts == sorted(starts)
     # Daily granularity → every adjacent pair is exactly one day apart (no gaps).
-    assert all(b - a == timedelta(days=1) for a, b in zip(starts, starts[1:]))
+    assert all(b - a == timedelta(days=1) for a, b in zip(starts, starts[1:], strict=False))
 
 
 # ── Daily bucketing ───────────────────────────────────────────────────────────
@@ -109,7 +109,7 @@ async def test_trend_weekly_bucket_start_is_monday(authed_client):
     assert resp.status_code == 200
     starts = [date.fromisoformat(b["bucket_start"]) for b in resp.json()["buckets"]]
     assert all(d.weekday() == 0 for d in starts)  # all Mondays
-    assert all(b - a == timedelta(days=7) for a, b in zip(starts, starts[1:]))
+    assert all(b - a == timedelta(days=7) for a, b in zip(starts, starts[1:], strict=False))
 
 
 # ── Monthly bucketing (all-time) ──────────────────────────────────────────────

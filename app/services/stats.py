@@ -381,7 +381,8 @@ def _compute_streaks(play_dates: set[date], today: date) -> tuple[int, int]:
     sorted_dates = sorted(play_dates)
     longest = 1
     run = 1
-    for prev, curr in zip(sorted_dates, sorted_dates[1:]):
+    # Deliberately offset by one, so the operands differ in length by design.
+    for prev, curr in zip(sorted_dates, sorted_dates[1:], strict=False):
         if (curr - prev).days == 1:
             run += 1
         else:

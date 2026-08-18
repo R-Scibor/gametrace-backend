@@ -97,7 +97,8 @@ async def send_to_user(
     dead_tokens: list[str] = []
     live_tokens: list[str] = []
 
-    for token, response in zip(tokens, batch.responses):
+    # One response per token is guaranteed by the multicast API contract.
+    for token, response in zip(tokens, batch.responses, strict=True):
         if response.success:
             live_tokens.append(token)
             continue

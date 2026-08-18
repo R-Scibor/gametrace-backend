@@ -72,7 +72,8 @@ Step 2 — _confidence(a, b) → float [0.0, 1.0]
         patterns appear in Discord activity names, the enrichment falls
         through to Steam or NEEDS_REVIEW.
 
-Step 3 — _igdb_search(name) → IGDBResult(cover_url, confidence, genres, themes, developers, publishers, first_release_date)
+Step 3 — _igdb_search(name) → IGDBResult(cover_url, confidence, genres, themes,
+  developers, publishers, first_release_date)
   - Sends _sanitize(name) as the IGDB search query to strip process-name
     noise before the API call.
   - Requests alternative_names.name alongside the primary name field.
@@ -297,7 +298,7 @@ def enrich_game(self, game_id: int) -> None:
             "enrich_game.rate_limited_retry",
             extra={"game_id": game_id, "countdown": countdown},
         )
-        raise self.retry(exc=exc, countdown=countdown)
+        raise self.retry(exc=exc, countdown=countdown) from exc
 
     except MaxRetriesExceededError:
         logger.error("enrich_game.max_retries_exceeded", extra={"game_id": game_id})
