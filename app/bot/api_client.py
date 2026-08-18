@@ -8,6 +8,7 @@ Auth: X-Bot-Service-Secret + X-Discord-Id headers, resolved server-side by
 `get_bot_user` (app/api/v1/endpoints/auth.py). Never log the secret.
 """
 import logging
+from typing import cast
 
 import httpx
 
@@ -109,7 +110,7 @@ async def _get(path: str, discord_id: str, params=None):
 
 async def get_summary(discord_id: str) -> dict:
     """GET /stats/summary?days=7 for the given Discord user."""
-    return await _get("/api/v1/stats/summary", discord_id, params={"days": 7})
+    return cast(dict, await _get("/api/v1/stats/summary", discord_id, params={"days": 7}))
 
 
 async def get_recent_sessions(discord_id: str) -> list[dict]:
@@ -120,7 +121,7 @@ async def get_recent_sessions(discord_id: str) -> list[dict]:
         ("library_only", "true"),
         ("limit", "5"),
     ]
-    return await _get("/api/v1/sessions", discord_id, params=params)
+    return cast(list[dict], await _get("/api/v1/sessions", discord_id, params=params))
 
 
 async def get_review_count(discord_id: str) -> int:
@@ -129,6 +130,6 @@ async def get_review_count(discord_id: str) -> int:
         "/api/v1/games", discord_id, params={"status": "NEEDS_REVIEW", "limit": 1}
     )
     try:
-        return data["total"]
+        return cast(int, data["total"])
     except (KeyError, TypeError) as exc:
         raise BotApiError("/api/v1/games response missing 'total' field") from exc

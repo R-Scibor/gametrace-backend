@@ -96,7 +96,7 @@ async def redeem_code(r, code: str) -> str | None:
     if discord_id is None:
         return None
     await r.delete(user_key(discord_id))
-    return discord_id
+    return str(discord_id)
 
 
 async def check_lockout(r, ip: str) -> int | None:
@@ -104,12 +104,12 @@ async def check_lockout(r, ip: str) -> int | None:
     ip_key = ip_fail_key(ip)
     ip_count = await r.get(ip_key)
     if ip_count is not None and int(ip_count) >= IP_FAIL_LIMIT:
-        return max(1, await r.ttl(ip_key))
+        return max(1, int(await r.ttl(ip_key)))
 
     global_key = global_fail_key()
     global_count = await r.get(global_key)
     if global_count is not None and int(global_count) >= GLOBAL_FAIL_LIMIT:
-        return max(1, await r.ttl(global_key))
+        return max(1, int(await r.ttl(global_key)))
 
     return None
 
@@ -143,7 +143,7 @@ async def check_demo_rate_limit(r, ip: str) -> int | None:
     if count == 1:
         await r.expire(key, DEMO_RATE_WINDOW_SECONDS)
     if count > DEMO_RATE_LIMIT:
-        return max(1, await r.ttl(key))
+        return max(1, int(await r.ttl(key)))
     return None
 
 

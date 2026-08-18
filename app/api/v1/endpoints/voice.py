@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import tempfile
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from openai import AsyncOpenAI
@@ -120,7 +120,7 @@ def _gemini_parse(
     )
     raw_json = response.text
     logger.debug("voice/transcribe: gemini raw response=%r", raw_json)
-    return json.loads(raw_json)
+    return cast(dict, json.loads(raw_json))
 
 
 @router.post("/transcribe", response_model=TranscribeResponse)

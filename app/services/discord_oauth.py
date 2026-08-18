@@ -43,7 +43,7 @@ async def exchange_code(
     access_token = resp.json().get("access_token")
     if not access_token:
         raise DiscordAuthError("no access_token in token response")
-    return access_token
+    return str(access_token)
 
 
 async def _get(client: httpx.AsyncClient, url: str, access_token: str) -> httpx.Response:

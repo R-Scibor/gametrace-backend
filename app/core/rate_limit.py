@@ -52,7 +52,7 @@ async def check_hourly_quota(user_id: str, bucket: str, limit: int) -> int | Non
         pipe.expire(key, HOURLY_WINDOW_SECONDS, nx=True)
         used, _ = await pipe.execute()
         if used > limit:
-            return max(1, await r.ttl(key))
+            return max(1, int(await r.ttl(key)))
     except (redis.exceptions.RedisError, ConnectionError, OSError):
         logger.warning(
             "rate_limit.redis_unavailable_failing_open bucket=%s", bucket, exc_info=True

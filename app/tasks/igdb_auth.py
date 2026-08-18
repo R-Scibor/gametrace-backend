@@ -21,7 +21,7 @@ def get_igdb_token() -> str:
     r = redis_sync.from_url(settings.redis_url, decode_responses=True)
     token = r.get(IGDB_TOKEN_KEY)
     if token:
-        return token
+        return str(token)
     return _refresh(r)
 
 
@@ -46,4 +46,4 @@ def _refresh(r: redis_sync.Redis) -> str:
     token = data["access_token"]
     # Store with a 5-minute buffer before actual expiry
     r.setex(IGDB_TOKEN_KEY, data["expires_in"] - 300, token)
-    return token
+    return str(token)
