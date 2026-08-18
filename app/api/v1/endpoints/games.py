@@ -325,7 +325,7 @@ async def create_or_link_game(
         # ── unrecognized mode ────────────────────────────────────────────────
         # 1. Insert NEEDS_REVIEW stub
         game = Game(
-            primary_name=body.name,  # type: ignore[arg-type]
+            primary_name=body.name,
             enrichment_status=EnrichmentStatus.NEEDS_REVIEW,
         )
         db.add(game)
