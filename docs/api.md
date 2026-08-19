@@ -488,7 +488,7 @@ Gemini uses `response_mime_type="application/json"` + `response_schema` — no m
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Plain liveness probe (no auth, no Redis hit). Returns `{"status": "ok"}`. Use this for container/orchestrator health checks. |
-| `GET` | `/api/v1/health` | Rich status payload — version metadata + bot liveness. No auth. Safe to poll. Fails-soft on Redis loss (returns `bot.status: "unknown"` instead of erroring). |
+| `GET` | `/api/v1/health` | Rich status payload — version metadata, bot liveness, and the public `grace_days` product config. No auth. Safe to poll. Fails-soft on Redis loss (returns `bot.status: "unknown"` instead of erroring). |
 
 `GET /api/v1/health` response shape:
 
@@ -503,9 +503,12 @@ Gemini uses `response_mime_type="application/json"` + `response_schema` — no m
     "status": "online",
     "uptime_seconds": 84213,
     "last_heartbeat_seconds_ago": 12
-  }
+  },
+  "grace_days": 7
 }
 ```
+
+`grace_days` is the account-deletion grace period (`ACCOUNT_DELETION_GRACE_DAYS`) — public product config rather than liveness, carried here because a logged-out client needs the number before any deletion exists and with no token to authenticate. An account already scheduled for deletion should use the `grace_days` on its own deletion payloads instead, which reports the window that account was actually scheduled under — see [Profile](#profile).
 
 `bot.status` is `"online"` when Redis has a heartbeat key written within the last 90s, `"offline"` if the key is absent or stale, `"unknown"` if Redis is unreachable. The bot writes `bot:started_at` on `on_ready` and refreshes `bot:heartbeat` every 30s with a 90s TTL. Version fields come from Docker build args (`GIT_SHA`, `BUILD_TIME`, `APP_VERSION`) — `"dev"` / `"unknown"` for local builds without those set.
 

@@ -55,4 +55,10 @@ async def health() -> dict[str, Any]:
         "build_time": settings.build_time,
         "api": {"uptime_seconds": now - API_STARTED_AT},
         "bot": bot,
+        # Public product config, not liveness: the web app's logged-out
+        # /delete-account and /privacy pages state the retention period with no
+        # token and before any deletion exists, so they need an unauthenticated
+        # source for it. Authenticated deletion payloads carry the window
+        # actually applied to that account instead — see app/schemas/deletion.py.
+        "grace_days": settings.account_deletion_grace_days,
     }
