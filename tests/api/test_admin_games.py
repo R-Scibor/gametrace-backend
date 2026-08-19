@@ -38,7 +38,7 @@ async def test_non_admin_on_admin_merge_url_returns_403(authed_client, db, user)
     assert resp.status_code == 403
 
 
-async def test_unauthenticated_on_admin_merge_url_returns_401(client, db):
+async def test_invalid_token_on_admin_merge_url_returns_401(client, db):
     source = await make_game(db, "Source Game")
     target = await make_game(db, "Target Game")
 
@@ -48,6 +48,16 @@ async def test_unauthenticated_on_admin_merge_url_returns_401(client, db):
     )
 
     assert resp.status_code == 401
+
+
+async def test_missing_auth_header_on_admin_merge_url_returns_403(client, db):
+    """No header at all is `HTTPBearer`'s 403, not `get_current_user`'s 401."""
+    source = await make_game(db, "Source Game")
+    target = await make_game(db, "Target Game")
+
+    resp = await client.post(f"/api/v1/admin/games/{source.id}/merge/{target.id}")
+
+    assert resp.status_code == 403
 
 
 async def test_old_public_cover_url_gone(authed_client, db, user):

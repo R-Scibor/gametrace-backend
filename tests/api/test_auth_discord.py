@@ -100,7 +100,9 @@ async def test_not_in_guild_sets_needs_server_join(client, db, monkeypatch):
     resp = await client.post("/api/v1/auth/discord", json=_body())
 
     assert resp.status_code == 200
-    assert resp.json()["needs_server_join"] is True
+    body = resp.json()
+    assert body["needs_server_join"] is True
+    assert body["is_admin"] is False
 
 
 async def test_redirect_uri_not_allowlisted_returns_400(client, monkeypatch):

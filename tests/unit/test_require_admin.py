@@ -13,6 +13,7 @@ async def test_require_admin_rejects_non_admin():
     with pytest.raises(HTTPException) as exc_info:
         await require_admin(user=_user(is_admin=False))
     assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Admin privileges required"
 
 
 async def test_require_admin_returns_admin_user():
