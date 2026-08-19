@@ -318,7 +318,8 @@ async def create_or_link_game(
 
         # 4. Optional query alias — skipped for the shared demo account, which
         # must never claim an unclaimed process name in the global alias table.
-        if body.query and body.query.strip() and user.discord_id != DEMO_DISCORD_ID:
+        # query is trimmed to None when blank by GameCreateRequest.
+        if body.query and user.discord_id != DEMO_DISCORD_ID:
             await _add_alias_if_absent(db, game.id, body.query)
 
     else:

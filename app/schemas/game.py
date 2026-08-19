@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.game import CoverSource, EnrichmentStatus
 
@@ -69,6 +69,17 @@ class GameCreateRequest(BaseModel):
     name: str | None = None
     unrecognized: bool = False
     query: str | None = None
+
+    @field_validator("name", "query", mode="before")
+    @classmethod
+    def _trim(cls, v: object) -> object:
+        """Trim at the boundary so "  Foo  " and "Foo" are one catalog row and
+        one alias, not two. A value that is only whitespace becomes None, which
+        _require_exactly_one_mode then rejects for `name` (422) and the handler
+        reads as "no query" for `query`."""
+        if isinstance(v, str):
+            return v.strip() or None
+        return v
 
     @model_validator(mode="after")
     def _require_exactly_one_mode(self) -> "GameCreateRequest":

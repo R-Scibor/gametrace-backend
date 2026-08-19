@@ -8,7 +8,6 @@ Detailed accounts of known gaps, incidents, and deferred fixes. For scheduled fe
 
 Minor items left open when the manual-tracking endpoints (`GET /games/suggest`, `POST /games/match`, `POST /games`) landed. None block use at homelab scale; see [manual-game-tracking.md](manual-game-tracking.md) and [api.md](api.md).
 
-- **Un-stripped name/alias storage** — `POST /games` stores `primary_name` and the alias from `body.query` without trimming surrounding whitespace, so `"  Foo  "` and `"Foo"` become distinct catalog rows/aliases. Low-impact data hygiene; strip at the boundary when next touched.
 - **Legacy cover-normalization duplication** — `_igdb_search` in `app/services/game_matching.py` keeps an inline cover-URL normalization that duplicates `_normalize_cover_url` (used by the newer `_igdb_search_candidates`/`_igdb_fetch_by_id`). Retire the inline copy when [Enrichment v2](#enrichment-v2--token-subset--llm-adjudicator-design-sketch) touches that path.
 
 ## Global catalog conflates shared cache and personal entries (2026-08-14)

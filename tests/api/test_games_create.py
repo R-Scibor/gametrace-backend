@@ -298,3 +298,57 @@ async def test_normal_user_alias_only_in_igdb_mode(authed_client, db):
         )
     ).scalar_one()
     assert alias2 is not None
+
+
+# ── whitespace trimming ───────────────────────────────────────────────────────
+
+async def test_unrecognized_name_is_trimmed(authed_client, db):
+    """Surrounding whitespace must not create a distinct catalog row."""
+    resp = await authed_client.post(
+        URL, json={"unrecognized": True, "name": "  Obscure Indie  "}
+    )
+    assert resp.status_code == 201
+    assert resp.json()["primary_name"] == "Obscure Indie"
+
+    game = (
+        await db.execute(select(Game).where(Game.primary_name == "Obscure Indie"))
+    ).scalar_one()
+    assert game.primary_name == "Obscure Indie"
+
+
+async def test_padded_and_unpadded_names_store_identically(authed_client, db):
+    """Padding must not change the stored string, so a padded entry is not a
+    *distinct* name from an unpadded one.
+
+    Unrecognized mode does not dedupe against the catalog — it always inserts
+    (that is the separate global-catalog debt, see docs/tech-debt.md). What
+    trimming guarantees is that the two rows are no longer differently named,
+    which is what merge and every name lookup depend on.
+    """
+    await authed_client.post(URL, json={"unrecognized": True, "name": "Obscure Indie"})
+    await authed_client.post(URL, json={"unrecognized": True, "name": "  Obscure Indie  "})
+
+    names = (await db.execute(select(Game.primary_name))).scalars().all()
+    assert names == ["Obscure Indie", "Obscure Indie"]
+
+
+async def test_query_alias_is_trimmed(authed_client, db):
+    """The alias written from query must not carry surrounding whitespace."""
+    with patch(PATCH_TARGET, return_value=("The Witcher 3", _META)):
+        resp = await authed_client.post(URL, json={"igdb_id": 1942, "query": "  kh 1.5  "})
+    assert resp.status_code == 201
+
+    alias = (
+        await db.execute(select(GameAlias).where(GameAlias.discord_process_name == "kh 1.5"))
+    ).scalar_one()
+    assert alias.discord_process_name == "kh 1.5"
+
+
+async def test_whitespace_only_query_writes_no_alias(authed_client, db):
+    """A blank query is no query — it must not become an empty alias."""
+    with patch(PATCH_TARGET, return_value=("The Witcher 3", _META)):
+        resp = await authed_client.post(URL, json={"igdb_id": 1942, "query": "   "})
+    assert resp.status_code == 201
+
+    count = (await db.execute(select(func.count()).select_from(GameAlias))).scalar_one()
+    assert count == 0
