@@ -22,6 +22,7 @@ from app.schemas.auth import (
 )
 from app.schemas.deletion import PendingDeletion
 from app.services import discord_oauth, link_codes
+from app.services.account_deletion import applied_grace_days
 from app.services.account_deletion import days_left as _days_left
 from app.services.demo import DEMO_DISCORD_ID, DEMO_MAX_TOKENS, is_demo_code
 
@@ -54,6 +55,7 @@ def _login_response(
             deletion_requested_at=user.deletion_requested_at,
             purge_at=user.purge_at,
             days_left=_days_left(user.purge_at),
+            grace_days=applied_grace_days(user),
         )
     return LoginResponse(
         token=token_value,
@@ -355,6 +357,7 @@ def _pending_deletion_error(user: User) -> HTTPException:
             "deletion_requested_at": user.deletion_requested_at.isoformat(),
             "purge_at": user.purge_at.isoformat(),
             "days_left": _days_left(user.purge_at),
+            "grace_days": applied_grace_days(user),
         },
     )
 

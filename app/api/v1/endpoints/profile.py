@@ -8,7 +8,12 @@ from app.core.database import get_db
 from app.models.user import User
 from app.schemas.deletion import DeletionStatusResponse
 from app.schemas.profile import ProfileResponse, ProfileSettingsUpdate
-from app.services.account_deletion import cancel_deletion, days_left, schedule_deletion
+from app.services.account_deletion import (
+    applied_grace_days,
+    cancel_deletion,
+    days_left,
+    schedule_deletion,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +86,7 @@ async def delete_account(
         deletion_requested_at=user.deletion_requested_at,
         purge_at=user.purge_at,
         days_left=days_left(user.purge_at),
+        grace_days=applied_grace_days(user),
     )
 
 

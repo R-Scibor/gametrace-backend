@@ -7,6 +7,7 @@ class DeletionStatusResponse(BaseModel):
     deletion_requested_at: datetime
     purge_at: datetime
     days_left: int
+    grace_days: int
 
 
 class PendingDeletion(BaseModel):
@@ -17,3 +18,4 @@ class PendingDeletion(BaseModel):
     deletion_requested_at: datetime
     purge_at: datetime
     days_left: int
+    grace_days: int

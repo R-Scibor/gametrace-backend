@@ -47,6 +47,19 @@ def days_left(purge_at: datetime) -> int:
     return max(1, math.ceil(delta.total_seconds() / 86400))
 
 
+def applied_grace_days(user: User) -> int:
+    """The grace window this account was actually scheduled under, in whole days.
+
+    Derived from the row's own two stamps rather than read from
+    ``settings.account_deletion_grace_days``: the setting is env-overridable, so
+    changing it must not retroactively misreport the window an already-scheduled
+    account is living under. Callers must check ``purge_at is not None`` first.
+    """
+    assert user.deletion_requested_at is not None
+    assert user.purge_at is not None
+    return round((user.purge_at - user.deletion_requested_at).total_seconds() / 86400)
+
+
 async def schedule_deletion(db: AsyncSession, user: User) -> User:
     """Idempotent — a second call for an already-scheduled account returns the
     existing `deletion_requested_at`/`purge_at` untouched, no re-work.

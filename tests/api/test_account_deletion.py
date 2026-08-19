@@ -68,6 +68,41 @@ async def test_schedule_deletion_returns_202_with_grace_period(authed_client, db
     assert user.purge_at == purge_at
 
 
+async def test_schedule_deletion_202_reports_the_grace_days_it_applied(
+    authed_client, db, user, monkeypatch
+):
+    monkeypatch.setattr(settings, "account_deletion_grace_days", 3)
+
+    resp = await authed_client.post("/api/v1/profile/me/deletion")
+
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["grace_days"] == 3
+    requested_at = datetime.fromisoformat(body["deletion_requested_at"])
+    purge_at = datetime.fromisoformat(body["purge_at"])
+    assert purge_at - requested_at == timedelta(days=3)
+
+
+async def test_grace_days_comes_from_the_row_not_the_current_setting(db, client, monkeypatch):
+    """An account keeps the window it was scheduled under, even if the env changes."""
+    user = await make_user(
+        db,
+        discord_id="777777777777777777",
+        username="long-grace",
+        deletion_requested_at=datetime.now(UTC) - timedelta(days=30),
+        purge_at=datetime.now(UTC) + timedelta(days=5),
+    )
+    token = await make_token(db, user.discord_id)
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    monkeypatch.setattr(settings, "account_deletion_grace_days", 7)
+
+    resp = await client.get("/api/v1/profile/me")
+
+    assert resp.status_code == 403
+    # 35 days between the two stamps — not the 7 currently configured.
+    assert resp.json()["detail"]["grace_days"] == 35
+
+
 async def test_schedule_deletion_revokes_all_auth_tokens(authed_client, db, user):
     # A second token for the same user, so we can prove ALL of them get wiped,
     # not just the one used to make this call.

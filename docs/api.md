@@ -31,7 +31,7 @@ Grouped by code — see endpoint sections below for path-specific detail. Authed
 
 Three login paths exist: link code (`/auth/link` — primary mobile flow), legacy username (`/auth/login`), and Discord OAuth2 (`/auth/discord`). OAuth requires the user to be a member of a configured bot server for presence tracking to produce data; non-members can still log in but receive `needs_server_join: true`.
 
-All three issue `LoginResponse.pending_deletion` — `null` for a normal account, or `{deletion_requested_at, purge_at, days_left}` when the account is scheduled for deletion (`days_left` is a ceiling, never `0` while the account still exists). Logging in on a scheduled account does **not** cancel the deletion — only `DELETE /profile/me/deletion` does. The client is expected to show a cancel-deletion dialog when this field is non-null.
+All three issue `LoginResponse.pending_deletion` — `null` for a normal account, or `{deletion_requested_at, purge_at, days_left, grace_days}` when the account is scheduled for deletion (`days_left` is a ceiling, never `0` while the account still exists; `grace_days` is the window this account was scheduled under — see [Profile](#profile)). Logging in on a scheduled account does **not** cancel the deletion — only `DELETE /profile/me/deletion` does. The client is expected to show a cancel-deletion dialog when this field is non-null.
 
 ### Discord OAuth2 setup
 
@@ -82,7 +82,7 @@ If both an `Authorization` bearer token and the bot headers are present, the bea
 |---|---|---|
 | `GET` | `/api/v1/profile/me` | Current user's profile (`discord_id`, `username`, `timezone`, `language`, notification toggles, `is_admin`). `language` is the mobile UI language (`"pl"`/`"en"`, default `"pl"`). |
 | `PUT` | `/api/v1/profile/settings` | Update `timezone`, `language`, and/or notification toggles (`weekly_report_enabled`, `push_enabled`). Partial update — unset fields are left alone. `language` must be one of `"pl"`/`"en"` (else `422`). |
-| `POST` | `/api/v1/profile/me/deletion` | Schedule the current account for deletion. No request body. Stamps `deletion_requested_at = now`, `purge_at = now + ACCOUNT_DELETION_GRACE_DAYS` — a 7-day grace period — revokes every `UserAuthToken` and `UserDevice` for the user, transitions any `ONGOING` session to `ERROR`, and best-effort flushes any pending login-link code. `COMPLETED`/`ERROR` sessions are untouched. Idempotent — calling again while already scheduled returns the existing `deletion_requested_at`/`purge_at` unchanged, no re-work. `403` if the caller is an admin (see below). Returns `202` `DeletionStatusResponse`: `{deletion_requested_at, purge_at, days_left}`. The account remains readable/usable during the grace period only via this endpoint and `POST /auth/logout`; every other authed route 403s once `purge_at` is set (see below). A nightly scheduled task permanently purges the row once `purge_at` passes — see [schema.md](schema.md#scheduled-tasks-celery-beat). |
+| `POST` | `/api/v1/profile/me/deletion` | Schedule the current account for deletion. No request body. Stamps `deletion_requested_at = now`, `purge_at = now + ACCOUNT_DELETION_GRACE_DAYS` — a 7-day grace period — revokes every `UserAuthToken` and `UserDevice` for the user, transitions any `ONGOING` session to `ERROR`, and best-effort flushes any pending login-link code. `COMPLETED`/`ERROR` sessions are untouched. Idempotent — calling again while already scheduled returns the existing `deletion_requested_at`/`purge_at` unchanged, no re-work. `403` if the caller is an admin (see below). Returns `202` `DeletionStatusResponse`: `{deletion_requested_at, purge_at, days_left, grace_days}`. The account remains readable/usable during the grace period only via this endpoint and `POST /auth/logout`; every other authed route 403s once `purge_at` is set (see below). A nightly scheduled task permanently purges the row once `purge_at` passes — see [schema.md](schema.md#scheduled-tasks-celery-beat). |
 | `DELETE` | `/api/v1/profile/me/deletion` | Cancel a scheduled deletion — the only thing that reverses one; logging in never cancels it implicitly. No request body. Clears `deletion_requested_at` and `purge_at` back to `null`, restoring normal access to every authed route immediately. Returns `200 {detail}`. `404` if the account has no deletion scheduled — clients must not report success for cancelling nothing. Does **not** restore what `POST /me/deletion` already destroyed: auth tokens and FCM device registrations stay revoked (the app must sign back in; push re-registers itself on next app start), and any session that was transitioned to `ERROR` when deletion was requested stays `ERROR`. |
 
 Admins cannot self-delete: `is_admin` is seeded manually (no self-service toggle), so a self-deleting admin would leave the admin dashboard unreachable without direct `psql` access. `POST /profile/me/deletion` returns `403` for any caller with `is_admin: true`.
@@ -95,12 +95,13 @@ Admins cannot self-delete: `is_admin` is seeded manually (no self-service toggle
     "detail": "Account scheduled for deletion",
     "deletion_requested_at": "2026-08-04T12:00:00+00:00",
     "purge_at": "2026-08-11T12:00:00+00:00",
-    "days_left": 7
+    "days_left": 7,
+    "grace_days": 7
   }
 }
 ```
 
-`days_left` is a ceiling of the time remaining — it never reads `0` while the account still exists, and it's the same value carried in `LoginResponse.pending_deletion` (see [Auth](#auth)) and used by the Discord bot's pending-deletion replies (see [bot.md](bot.md)). `POST /auth/logout` is exempt from this guard and still works normally during the grace period.
+`days_left` is a ceiling of the time remaining — it never reads `0` while the account still exists, and it's the same value carried in `LoginResponse.pending_deletion` (see [Auth](#auth)) and used by the Discord bot's pending-deletion replies (see [bot.md](bot.md)). `grace_days` is derived from the account's own `purge_at - deletion_requested_at`, **not** from the current `ACCOUNT_DELETION_GRACE_DAYS` setting: the setting is env-overridable, so changing it must not retroactively misreport the window an already-scheduled account is living under. `POST /auth/logout` is exempt from this guard and still works normally during the grace period.
 
 The 7-day figure is the grace period, not the exact purge time: the sweeper that hard-deletes expired accounts runs once nightly, so an account can be purged up to ~24h after its `purge_at` timestamp, never before it. Purging removes the row from the live database only — any existing database backups taken before the purge expire on their own separate retention schedule, not this one.
 

@@ -127,6 +127,8 @@ async def test_login_scheduled_user_returns_pending_deletion(client, db, dev_log
     assert pending is not None
     assert pending["days_left"] == 2
     assert pending["purge_at"] is not None
+    # Window actually applied to this row (2h ago -> 25h out), not the current setting.
+    assert pending["grace_days"] == 1
 
 
 async def test_login_disabled_when_secret_unset_returns_404(client, db, monkeypatch):
