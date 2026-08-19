@@ -13,6 +13,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from app.api.v1.endpoints.auth import require_admin
 from app.core.database import get_db
 from app.core.observability import log_admin_action
+from app.core.sql_search import ilike_contains
 from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias
 from app.models.session import GameSession
 from app.models.user import User
@@ -82,8 +83,8 @@ async def list_games(
             .outerjoin(GameAlias, GameAlias.game_id == Game.id)
             .where(
                 or_(
-                    Game.primary_name.ilike(f"%{q_stripped}%"),
-                    GameAlias.discord_process_name.ilike(f"%{q_stripped}%"),
+                    ilike_contains(Game.primary_name, q_stripped),
+                    ilike_contains(GameAlias.discord_process_name, q_stripped),
                 )
             )
             .distinct()

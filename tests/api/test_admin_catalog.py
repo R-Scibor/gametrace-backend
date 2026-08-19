@@ -613,3 +613,39 @@ async def test_add_alias_non_admin_returns_403(authed_client, db, user):
     )
 
     assert resp.status_code == 403
+
+async def test_q_percent_matches_literal_percent(admin_client, db, admin_user):
+    match = await make_game(db, "Save 100% Complete", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    decoy = await make_game(db, "Save 100 Complete", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    resp = await admin_client.get(URL, params={"q": "100%"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [item["id"] for item in body["items"]] == [match.id]
+    assert body["total"] == 1
+    assert decoy.id not in [item["id"] for item in body["items"]]
+
+
+async def test_q_underscore_matches_literal_underscore(admin_client, db, admin_user):
+    game = await make_game(db, "Unrelated Name", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    await make_alias(db, game.id, "foo_bar.exe")
+    decoy = await make_game(db, "fooxbar", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    resp = await admin_client.get(URL, params={"q": "foo_bar"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [item["id"] for item in body["items"]] == [game.id]
+    assert body["total"] == 1
+    assert decoy.id not in [item["id"] for item in body["items"]]
+
+
+async def test_q_backslash_matches_literal_backslash(admin_client, db, admin_user):
+    match = await make_game(db, r"C:\Games\Doom", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    decoy = await make_game(db, "C Games Doom", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    resp = await admin_client.get(URL, params={"q": r"C:\Games"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [item["id"] for item in body["items"]] == [match.id]
+    assert body["total"] == 1
+    assert decoy.id not in [item["id"] for item in body["items"]]

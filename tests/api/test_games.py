@@ -533,3 +533,31 @@ async def test_excludes_soft_deleted_sessions(authed_client, db, user):
 # The public cover-upload route is gone; uploads now go through the admin-only
 # PUT /api/v1/admin/games/{id}/cover (test_cover_upload_* in test_admin.py).
 # test_old_public_cover_url_gone in test_admin.py asserts this old URL is 404.
+
+
+async def test_search_q_percent_matches_literal_percent(authed_client, db, user):
+    match = await make_game(db, "Save 100% Complete")
+    decoy = await make_game(db, "Save 100 Complete")
+    await make_session(db, user.discord_id, match.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_session(db, user.discord_id, decoy.id, dt(hours_ago=5), dt(hours_ago=4))
+
+    resp = await authed_client.get("/api/v1/games?q=100%25")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["primary_name"] == "Save 100% Complete"
+
+
+async def test_search_q_underscore_matches_literal_underscore(authed_client, db, user):
+    match = await make_game(db, "foo_bar")
+    decoy = await make_game(db, "fooxbar")
+    await make_session(db, user.discord_id, match.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_session(db, user.discord_id, decoy.id, dt(hours_ago=5), dt(hours_ago=4))
+
+    resp = await authed_client.get("/api/v1/games?q=foo_bar")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["primary_name"] == "foo_bar"

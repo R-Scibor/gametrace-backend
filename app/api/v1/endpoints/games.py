@@ -11,6 +11,7 @@ from sqlalchemy.orm import aliased, selectinload
 from app.api.v1.endpoints.auth import get_current_or_bot_user, get_current_user
 from app.core.database import get_db
 from app.core.rate_limit import check_hourly_quota
+from app.core.sql_search import ilike_contains
 from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
@@ -141,7 +142,7 @@ async def list_games(
         *visible_session(),
     ]
     if q:
-        base_filters.append(Game.primary_name.ilike(f"%{q}%"))
+        base_filters.append(ilike_contains(Game.primary_name, q))
     if genre:
         base_filters.append(Game.genres.contains([genre]))
     if theme:

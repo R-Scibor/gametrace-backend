@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.endpoints.auth import require_admin
 from app.core.database import get_db
 from app.core.observability import log_admin_action
+from app.core.sql_search import ilike_contains
 from app.models.report import Report
 from app.models.user import User
 from app.schemas.admin import (
@@ -18,17 +19,6 @@ from app.schemas.admin import (
 )
 
 router = APIRouter()
-
-_ESCAPE_CHAR = "\\"
-
-
-def _escape_like(value: str) -> str:
-    """Escape LIKE/ILIKE metacharacters so a typed `%`/`_` matches literally."""
-    return (
-        value.replace(_ESCAPE_CHAR, _ESCAPE_CHAR * 2)
-        .replace("%", f"{_ESCAPE_CHAR}%")
-        .replace("_", f"{_ESCAPE_CHAR}_")
-    )
 
 
 def _status_filter(status: str | None) -> list:
@@ -89,7 +79,7 @@ async def list_reports(
     q_stripped = q.strip() if q is not None else None
     if q_stripped:
         base_filter.append(
-            Report.message.ilike(f"%{_escape_like(q_stripped)}%", escape=_ESCAPE_CHAR)
+            ilike_contains(Report.message, q_stripped)
         )
 
     screen_stripped = screen.strip() if screen is not None else None
