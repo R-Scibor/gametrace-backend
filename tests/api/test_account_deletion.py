@@ -268,3 +268,91 @@ async def test_schedule_deletion_survives_redis_outage(
         select(UserAuthToken).where(UserAuthToken.user_id == user.discord_id)
     )
     assert result.scalars().all() == []
+
+
+# ── GET /profile/me/deletion ─────────────────────────────────────────────────
+
+async def test_get_deletion_unscheduled_returns_nulls_with_grace_days(authed_client):
+    resp = await authed_client.get("/api/v1/profile/me/deletion")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["deletion_requested_at"] is None
+    assert body["purge_at"] is None
+    assert body["days_left"] is None
+    assert body["grace_days"] == settings.account_deletion_grace_days
+
+
+async def test_get_deletion_pending_returns_the_schedule(db, client):
+    """Must not 403 on the pending-deletion guard — it is the endpoint for reading it."""
+    user = await make_user(
+        db,
+        discord_id="888888888888888888",
+        username="pending-read",
+        deletion_requested_at=datetime.now(UTC) - timedelta(days=2),
+        purge_at=datetime.now(UTC) + timedelta(days=5),
+    )
+    token = await make_token(db, user.discord_id)
+    client.headers.update({"Authorization": f"Bearer {token}"})
+
+    resp = await client.get("/api/v1/profile/me/deletion")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["deletion_requested_at"] is not None
+    assert body["purge_at"] is not None
+    assert body["days_left"] == 5
+    assert body["grace_days"] == 7
+
+
+async def test_get_deletion_reports_the_window_the_row_was_scheduled_under(
+    db, client, monkeypatch
+):
+    user = await make_user(
+        db,
+        discord_id="999999999999999999",
+        username="stale-grace",
+        deletion_requested_at=datetime.now(UTC) - timedelta(days=30),
+        purge_at=datetime.now(UTC) + timedelta(days=5),
+    )
+    token = await make_token(db, user.discord_id)
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    monkeypatch.setattr(settings, "account_deletion_grace_days", 7)
+
+    resp = await client.get("/api/v1/profile/me/deletion")
+
+    assert resp.status_code == 200
+    assert resp.json()["grace_days"] == 35
+
+
+async def test_get_deletion_reflects_a_cancel(db, client):
+    """The read the web app lacks today: learn a cancel happened on another device."""
+    user = await make_user(
+        db,
+        discord_id="101010101010101010",
+        username="cancel-then-read",
+        deletion_requested_at=datetime.now(UTC) - timedelta(days=1),
+        purge_at=datetime.now(UTC) + timedelta(days=6),
+    )
+    token = await make_token(db, user.discord_id)
+    client.headers.update({"Authorization": f"Bearer {token}"})
+
+    before = await client.get("/api/v1/profile/me/deletion")
+    assert before.status_code == 200
+    assert before.json()["purge_at"] is not None
+
+    cancelled = await client.delete("/api/v1/profile/me/deletion")
+    assert cancelled.status_code == 200
+
+    after = await client.get("/api/v1/profile/me/deletion")
+    assert after.status_code == 200
+    body = after.json()
+    assert body["purge_at"] is None
+    assert body["days_left"] is None
+    assert body["grace_days"] == settings.account_deletion_grace_days
+
+
+async def test_get_deletion_requires_a_token(client):
+    resp = await client.get("/api/v1/profile/me/deletion")
+
+    assert resp.status_code == 403

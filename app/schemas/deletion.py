@@ -19,3 +19,18 @@ class PendingDeletion(BaseModel):
     purge_at: datetime
     days_left: int
     grace_days: int
+
+
+class AccountDeletionState(BaseModel):
+    """`GET /profile/me/deletion`. Not-scheduled is a normal state, not an error,
+    so the three deletion fields are null rather than the response being a 404.
+
+    `grace_days` is always present: the window this account was scheduled under
+    when one is pending, otherwise the window that would apply if it scheduled
+    one now.
+    """
+
+    deletion_requested_at: datetime | None
+    purge_at: datetime | None
+    days_left: int | None
+    grace_days: int

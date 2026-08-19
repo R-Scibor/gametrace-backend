@@ -4,9 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.auth import get_current_user, get_current_user_allow_pending
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
-from app.schemas.deletion import DeletionStatusResponse
+from app.schemas.deletion import AccountDeletionState, DeletionStatusResponse
 from app.schemas.profile import ProfileResponse, ProfileSettingsUpdate
 from app.services.account_deletion import (
     applied_grace_days,
@@ -83,6 +84,30 @@ async def delete_account(
     )
 
     return DeletionStatusResponse(
+        deletion_requested_at=user.deletion_requested_at,
+        purge_at=user.purge_at,
+        days_left=days_left(user.purge_at),
+        grace_days=applied_grace_days(user),
+    )
+
+
+@router.get("/me/deletion", response_model=AccountDeletionState)
+async def get_account_deletion(
+    user: User = Depends(get_current_user_allow_pending),
+):
+    # get_current_user_allow_pending (not get_current_user) for the same reason
+    # as the cancel endpoint below: a scheduled account is precisely the caller
+    # this endpoint exists for, so the blanket pending-deletion 403 must not
+    # apply to it.
+    if user.purge_at is None:
+        return AccountDeletionState(
+            deletion_requested_at=None,
+            purge_at=None,
+            days_left=None,
+            grace_days=settings.account_deletion_grace_days,
+        )
+
+    return AccountDeletionState(
         deletion_requested_at=user.deletion_requested_at,
         purge_at=user.purge_at,
         days_left=days_left(user.purge_at),
