@@ -12,7 +12,9 @@ class User(Base):
     __tablename__ = "users"
 
     discord_id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    username: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    # Not unique: identity is discord_id. Discord usernames are user-renameable,
+    # so a rename can collide with another account; indexed for the dev-login lookup.
+    username: Mapped[str] = mapped_column(String(100), index=True)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC", server_default="UTC")
     language: Mapped[str] = mapped_column(
         String(8), default="pl", server_default="pl", nullable=False

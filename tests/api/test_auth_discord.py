@@ -136,13 +136,17 @@ async def test_discord_unreachable_returns_502(client, monkeypatch):
     assert resp.status_code == 502
 
 
-async def test_username_collision_returns_409(client, db, monkeypatch):
+async def test_username_collision_still_logs_in(client, db, monkeypatch):
+    """A Discord rename onto a name another account already holds must not block
+    login — identity is discord_id, and users.username is not unique."""
     await make_user(db, discord_id="AAA", username="taken")
     _patch_discord(monkeypatch, identity={"id": "555", "username": "taken"}, guilds={"123"})
 
     resp = await client.post("/api/v1/auth/discord", json=_body())
 
-    assert resp.status_code == 409
+    assert resp.status_code == 200
+    assert resp.json()["discord_id"] == "555"
+    assert resp.json()["username"] == "taken"
 
 
 async def test_fetch_identity_auth_error_returns_401(client, monkeypatch):

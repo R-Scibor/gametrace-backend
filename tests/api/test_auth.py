@@ -266,3 +266,24 @@ async def test_token_activity_debounced_within_window(client, db, monkeypatch):
     await db.refresh(token)
     assert token.last_active == recent
     assert token.expires_at == expiry
+
+
+async def test_duplicate_usernames_are_allowed(db):
+    """Identity is discord_id; username is display-only, so Discord renames
+    must be able to collide without the second write being rejected."""
+    await make_user(db, discord_id="111111111111111111", username="samename")
+    await make_user(db, discord_id="222222222222222222", username="samename")
+
+
+async def test_login_ambiguous_username_returns_409(client, db, dev_login_enabled):
+    """Name-only dev login cannot pick between two accounts sharing a username.
+    It must say so rather than 500 or silently pick one."""
+    await make_user(db, discord_id="111111111111111111", username="samename")
+    await make_user(db, discord_id="222222222222222222", username="samename")
+
+    resp = await client.post(
+        "/api/v1/auth/login", json={"username": "samename"}, headers=DEV_HEADERS
+    )
+
+    assert resp.status_code == 409
+    assert "ambiguous" in resp.json()["detail"].lower()

@@ -389,3 +389,15 @@ def test_beat_schedule_has_reset_demo_account():
     schedule = entry["schedule"]
     assert schedule.hour == {3}
     assert schedule.minute == {0}
+
+
+async def test_reset_survives_a_real_user_holding_the_demo_username(db):
+    """users.username is no longer unique, so a real account can hold the demo
+    name. The reset must still write it rather than fail on a constraint."""
+    await _make_demo_user(db)
+    await make_user(db, discord_id="999999999999999999", username=DEMO_USERNAME)
+
+    await _run_demo_reset(db)
+
+    demo = await db.get(User, DEMO_DISCORD_ID)
+    assert demo.username == DEMO_USERNAME

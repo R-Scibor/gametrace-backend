@@ -119,15 +119,23 @@ async def login(
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
 
-    # User must be pre-registered via Discord /login slash command
+    # User must be pre-registered via Discord /login slash command.
+    # username is not unique (identity is discord_id), so a name-only login can
+    # match several accounts — it has no way to pick between them.
     result = await db.execute(select(User).where(User.username == payload.username))
-    user = result.scalar_one_or_none()
+    users = result.scalars().all()
 
-    if user is None:
+    if not users:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found. Run /login on Discord first.",
         )
+    if len(users) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username is ambiguous. Use the Discord link code to log in.",
+        )
+    user = users[0]
 
     if payload.timezone != "UTC":
         user.timezone = payload.timezone
@@ -300,10 +308,13 @@ async def discord_login(payload: DiscordCallbackRequest, db: AsyncSession = Depe
     try:
         await db.commit()
     except IntegrityError as exc:
+        # username is no longer unique, so a Discord rename colliding with another
+        # account can no longer land here. The guard stays for the other writes in
+        # this commit (the user row and its auth token).
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Discord username conflicts with an existing account",
+            detail="Login conflicted with a concurrent request. Try again.",
         ) from exc
     await db.refresh(user)
 

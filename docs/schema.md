@@ -13,7 +13,7 @@ The root identity table. Keyed on Discord ID (a snowflake — string, not intege
 | Column | Type | Notes |
 |---|---|---|
 | `discord_id` | `VARCHAR(32)` | Primary key |
-| `username` | `VARCHAR(100)` | Unique. Synced from Discord on every `/login`. |
+| `username` | `VARCHAR(100)` | Indexed, **not** unique. Display-only — identity is `discord_id`. Synced from Discord on every `/login`, and Discord names are renameable by their owner, so two rows can legitimately hold the same name (see migration `0021`). |
 | `timezone` | `VARCHAR(64)` | IANA tz name. Default `UTC`. Updated on mobile login from device OS, or manually via `PUT /profile/settings`. |
 | `weekly_report_enabled` | `BOOLEAN` | Default `true`. Gates the weekly Celery push. |
 | `push_enabled` | `BOOLEAN` | Default `true`. Master switch for any push notification. |
@@ -259,7 +259,7 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 | File | Purpose |
 |---|---|
 | `0001_initial_schema.py` | All seven tables and their constraints |
-| `0002_unique_username.py` | Adds `UNIQUE` on `users.username` |
+| `0002_unique_username.py` | Adds `UNIQUE` on `users.username` (reversed by `0021`) |
 | `0003_user_notif_prefs_and_device_created_at.py` | Adds `weekly_report_enabled`, `push_enabled` to `users`; `created_at` to `user_devices` |
 | `0004_game_sessions_user_start_index.py` | Composite index for overlap and stats queries |
 | `0005_game_sessions_deleted_at_partial_index.py` | Partial index for the hard-delete sweeper |
@@ -271,6 +271,7 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 | `0018_user_account_deletion.py` | Adds `users.deletion_requested_at` and `users.purge_at` (`TIMESTAMPTZ`, nullable, no default) with the partial index `ix_users_purge_at_partial`. |
 | `0019_account_deletion_events.py` | Adds append-only `account_deletion_events` Art. 17 audit table (`discord_id`, `event`, `created_at`, `purge_at`) with `ck_account_deletion_events_event` and index `ix_account_deletion_events_discord_id_created_at`. No FK to `users`. |
 | `0020_demo_account.py` | Adds `demo_seed_sessions` and `demo_seed_preferences` (see above), and inserts the reserved demo `users` row (`discord_id='1'`, `ON CONFLICT DO NOTHING`). The demo identity literals are duplicated in the migration rather than imported from `app.services.demo`, since migrations must not depend on app code that can change after the migration is frozen in history. |
+| `0021_drop_username_unique.py` | Drops the unique index on `users.username` and recreates it non-unique. Identity is `discord_id`; a Discord rename onto a name another account already holds previously failed that account's login. `downgrade()` restores the unique form and fails if duplicates have accumulated. |
 
 ## Scheduled tasks (Celery Beat)
 
