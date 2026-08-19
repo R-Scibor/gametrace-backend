@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import os
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -166,6 +167,8 @@ async def upload_cover(
         raise HTTPException(status_code=404, detail=f"Game {game_id} not found.")
 
     before_url = game.cover_image_url
+    # Not a redundant re-wrap: on a row loaded from the DB this attribute comes
+    # back as a plain str, so .value alone raises AttributeError.
     before_source = CoverSource(game.cover_source).value
 
     covers_dir = os.environ.get("COVERS_DIR", "/app/covers")
@@ -173,6 +176,14 @@ async def upload_cover(
     file_path = os.path.join(covers_dir, f"{game_id}.{extension}")
     with open(file_path, "wb") as f:
         f.write(image_bytes)
+
+    # A cover uploaded under a different extension keeps its own filename, so it
+    # would survive on disk and stay served at its old /covers/{id}.{ext} URL.
+    # Unlink after the write: a crash between the two leaves a stale cover, not
+    # a game with none.
+    for stale_ext in ALLOWED_COVER_EXTENSIONS - {extension}:
+        with contextlib.suppress(OSError):
+            os.remove(os.path.join(covers_dir, f"{game_id}.{stale_ext}"))
 
     new_url = f"/covers/{game_id}.{extension}"
     game.cover_image_url = new_url

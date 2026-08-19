@@ -278,6 +278,34 @@ async def test_cover_upload_updates_existing_custom_cover(admin_client, db, admi
     assert record.after == f"cover_image_url=/covers/{game.id}.png cover_source=CUSTOM"
 
 
+async def test_cover_upload_removes_the_previous_file_when_the_extension_changes(
+    admin_client, db, admin_user, tmp_path, monkeypatch
+):
+    """A new extension must not leave the old file on disk, still served at its old URL."""
+    monkeypatch.setenv("COVERS_DIR", str(tmp_path))
+    game = await make_game(db, "Cover Game")
+    other = await make_game(db, "Other Game")
+
+    for target, ext in ((game, "jpg"), (other, "jpg")):
+        first = await admin_client.put(
+            f"/api/v1/admin/games/{target.id}/cover",
+            json={"image_base64": TINY_IMAGE_B64, "extension": ext},
+        )
+        assert first.status_code == 200
+
+    png_b64 = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()
+    resp = await admin_client.put(
+        f"/api/v1/admin/games/{game.id}/cover",
+        json={"image_base64": png_b64, "extension": "png"},
+    )
+
+    assert resp.status_code == 200
+    assert (tmp_path / f"{game.id}.png").exists()
+    assert not (tmp_path / f"{game.id}.jpg").exists()
+    # Another game's cover shares the directory, not the stem — leave it alone.
+    assert (tmp_path / f"{other.id}.jpg").exists()
+
+
 async def test_cover_upload_non_image_bytes_returns_422(admin_client, db, admin_user, tmp_path, monkeypatch):
     """Bytes that aren't a real image are rejected even with an allowed extension."""
     monkeypatch.setenv("COVERS_DIR", str(tmp_path))
