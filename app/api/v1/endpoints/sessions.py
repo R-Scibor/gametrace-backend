@@ -241,14 +241,18 @@ async def patch_session(
 
     # Update end_time → fixes ERROR or updates COMPLETED
     if payload.end_time is not None:
-        if payload.end_time <= session.start_time:
+        try:
+            start, end = validate_manual_session_bounds(
+                session.start_time, payload.end_time, is_create=False
+            )
+        except SessionBoundsError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="end_time must be after start_time",
-            )
+                detail=exc.detail,
+            ) from exc
         if session.deleted_at is None:
             conflict = await _check_overlap(
-                db, user.discord_id, session.start_time, payload.end_time, exclude_id=session_id
+                db, user.discord_id, start, end, exclude_id=session_id
             )
             if conflict is not None:
                 raise HTTPException(
@@ -258,10 +262,8 @@ async def patch_session(
                         "conflicting_session": SessionResponse.model_validate(conflict).model_dump(mode="json"),
                     },
                 )
-        session.end_time = payload.end_time
-        session.duration_seconds = int(
-            (payload.end_time - session.start_time).total_seconds()
-        )
+        session.end_time = end
+        session.duration_seconds = int((end - start).total_seconds())
         session.status = SessionStatus.COMPLETED
         session.source = SessionSource.MANUAL
 
