@@ -211,7 +211,7 @@ For each ONGOING session:
      • Not playing → ERROR ("no longer in-game")
 ```
 
-Sessions transitioned to `ERROR` are surfaced to the user via the Dashboard banner (`pending_errors` in `/stats/dashboard` and `/stats/summary`). The user resolves them by either supplying an `end_time` (`PATCH /sessions/{id}` → `COMPLETED`) or discarding them (`DELETE /api/v1/sessions/{id}` → soft-deleted).
+Sessions transitioned to `ERROR` are surfaced to the user via the Dashboard banner (`pending_errors` in `/stats/dashboard` and `/stats/summary`). The user resolves them by either supplying an `end_time` (`PATCH /sessions/{id}` → `COMPLETED`) or discarding them (`DELETE /api/v1/sessions/{id}` → soft-deleted). PATCH is also bound by the 48h duration cap and the 5-minute future grace. A client that always sends `end_time=now` will 422 when `now - start_time > 48h`; trash the row instead.
 
 The 12h ceiling is intentionally generous — it's a backstop for "user fell asleep / forgot to close the game / bot was down longer than expected", not a precision tool. Real sessions almost never reach it.
 

@@ -49,7 +49,7 @@ Roughly three screens on mobile (voice can reuse the same backend on resolve mis
 └───────────────────────────┬─────────────────────────────────┘
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 4. Enter start/end time → POST /sessions (unchanged)      │
+│ 4. Enter start/end time → POST /sessions                  │
 │     → game appears in GET /games via new session            │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -73,7 +73,7 @@ Same semantics as a bot stub that failed enrichment, but chosen knowingly. Bindi
 | Global catalog suggest | `GET /games/suggest?q=…` | Global games catalog (all users' games), except an aliasless `NEEDS_REVIEW` row the caller has never touched — that one is hidden, `PENDING` stays visible; paginated fuzzy match on `primary_name` + aliases, scored, relevance floor 0.3 |
 | IGDB match | `POST /games/match` `{ query }` | Sync IGDB search; returns ranked candidates (`igdb_id`, `name`, `year`, `cover_url`, `score`) — no DB write |
 | Confirm game | `POST /games` `{ igdb_id }` or `{ name, unrecognized: true }` | Create or link global `Game`; IGDB id mode dedupes and creates `ENRICHED`; unrecognized mode creates `NEEDS_REVIEW` stub |
-| Log time | `POST /sessions` | Unchanged — `{ game_id, start_time, end_time }` |
+| Log time | `POST /sessions` | `{ game_id, start_time, end_time }` — 48h duration cap, 30-day lookback, 5-minute future grace (422 string `detail`) |
 
 `GET /games` (library list) and `GET /games/resolve` are unchanged from their pre-existing behaviour.
 

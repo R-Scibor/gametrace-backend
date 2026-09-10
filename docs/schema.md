@@ -104,7 +104,7 @@ The core table. State machine described in the [README](../README.md#session-sta
 | `game_id` | `INTEGER` | FK → `games.id` (no cascade — sessions outlive games via merges) |
 | `start_time` | `TIMESTAMPTZ` | Always set |
 | `end_time` | `TIMESTAMPTZ` | NULL while `ONGOING`. |
-| `duration_seconds` | `INTEGER` | NULL while `ONGOING`. Set to `(end_time - start_time)` on transition out of ONGOING. |
+| `duration_seconds` | `INTEGER` | NULL while `ONGOING`. Set to `(end_time - start_time)` on transition out of ONGOING. MANUAL insert (`POST /sessions`) also sets it. User-attested writes (`POST` / `PATCH`) cap duration at 48h, lookback at 30 days on create, and reject timestamps more than 5 minutes in the future. Not a DB constraint; bot rows uncapped; existing rows grandfathered; restore does not re-check. |
 | `status` | `ENUM('ONGOING', 'COMPLETED', 'ERROR')` | |
 | `source` | `ENUM('BOT', 'MANUAL')` | `BOT` rows go through the state machine; `MANUAL` rows are inserted directly as `COMPLETED`. |
 | `notes` | `TEXT` | System-owned — written by Self-Healing as the human-readable reason an ERROR occurred. Read-only via the API. |
