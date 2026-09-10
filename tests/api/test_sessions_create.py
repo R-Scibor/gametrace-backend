@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 from app.models.session import SessionSource, SessionStatus
 from tests.factories import dt, make_game, make_session
@@ -50,6 +50,7 @@ async def test_create_session_end_before_start_rejected(authed_client, db):
     )
 
     assert resp.status_code == 422
+    assert resp.json()["detail"] == "end_time must be after start_time"
 
 
 async def test_create_session_overlap_with_completed(authed_client, db, user):
@@ -80,7 +81,7 @@ async def test_create_session_overlap_with_ongoing(authed_client, db, user):
         json={
             "game_id": game.id,
             "start_time": dt(hours_ago=1).isoformat(),
-            "end_time": dt(hours_from_now=1).isoformat(),
+            "end_time": dt(hours_ago=0.25).isoformat(),
         },
     )
 
@@ -119,7 +120,7 @@ async def test_create_session_adjacent_does_not_conflict(authed_client, db, user
         json={
             "game_id": game.id,
             "start_time": boundary.isoformat(),  # starts exactly when previous ends
-            "end_time": dt(hours_from_now=1).isoformat(),
+            "end_time": dt(hours_ago=0.25).isoformat(),
         },
     )
 
@@ -184,3 +185,132 @@ async def test_create_session_overlap_with_flicker_not_blocked(authed_client, db
     )
 
     assert resp.status_code == 201
+
+
+async def test_create_session_lookback_rejected(authed_client, db):
+    game = await make_game(db)
+    start = dt(hours_ago=31 * 24)
+    resp = await authed_client.post(
+        "/api/v1/sessions",
+        json={
+            "game_id": game.id,
+            "start_time": start.isoformat(),
+            "end_time": (start + timedelta(hours=1)).isoformat(),
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "start_time is older than 30 days"
+
+
+async def test_create_session_duration_rejected(authed_client, db):
+    game = await make_game(db)
+    resp = await authed_client.post(
+        "/api/v1/sessions",
+        json={
+            "game_id": game.id,
+            "start_time": dt(hours_ago=49).isoformat(),
+            "end_time": dt(hours_ago=0).isoformat(),
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "session duration exceeds 48 hours"
+
+
+async def test_create_session_future_start_rejected(authed_client, db):
+    game = await make_game(db)
+    resp = await authed_client.post(
+        "/api/v1/sessions",
+        json={
+            "game_id": game.id,
+            "start_time": dt(hours_from_now=10 / 60).isoformat(),
+            "end_time": dt(hours_from_now=20 / 60).isoformat(),
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "start_time cannot be in the future"
+
+
+async def test_create_session_future_end_rejected(authed_client, db):
+    game = await make_game(db)
+    resp = await authed_client.post(
+        "/api/v1/sessions",
+        json={
+            "game_id": game.id,
+            "start_time": dt(hours_ago=1).isoformat(),
+            "end_time": dt(hours_from_now=10 / 60).isoformat(),
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "end_time cannot be in the future"
+
+
+async def test_create_session_plus0200_legal_in_utc(authed_client, db):
+    game = await make_game(db)
+    plus2 = timezone(timedelta(hours=2))
+    start = dt(hours_ago=3).astimezone(plus2)
+    end = dt(hours_ago=1).astimezone(plus2)
+    resp = await authed_client.post(
+        "/api/v1/sessions",
+        json={
+            "game_id": game.id,
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json()["duration_seconds"] == 7200
+
+
+async def test_create_session_plus0200_future_after_conversion(authed_client, db):
+    game = await make_game(db)
+    plus2 = timezone(timedelta(hours=2))
+    start = dt(hours_from_now=10 / 60).astimezone(plus2)
+    end = dt(hours_from_now=20 / 60).astimezone(plus2)
+    resp = await authed_client.post(
+        "/api/v1/sessions",
+        json={
+            "game_id": game.id,
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "start_time cannot be in the future"
+
+
+async def test_create_session_mixed_naive_start_aware_end(authed_client, db):
+    game = await make_game(db)
+    start = dt(hours_ago=2).replace(tzinfo=None)
+    end = dt(hours_ago=1)
+    resp = await authed_client.post(
+        "/api/v1/sessions",
+        json={
+            "game_id": game.id,
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json()["duration_seconds"] == 3600
+
+
+async def test_create_session_missing_game_with_over_duration_is_422(authed_client):
+    resp = await authed_client.post(
+        "/api/v1/sessions",
+        json={
+            "game_id": 999999,
+            "start_time": dt(hours_ago=49).isoformat(),
+            "end_time": dt(hours_ago=0).isoformat(),
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "session duration exceeds 48 hours"
+
+
+async def test_create_session_invalid_datetime_returns_pydantic_list(authed_client):
+    resp = await authed_client.post(
+        "/api/v1/sessions",
+        json={"game_id": 1, "start_time": "invalid", "end_time": "invalid"},
+    )
+    assert resp.status_code == 422
+    assert isinstance(resp.json()["detail"], list)

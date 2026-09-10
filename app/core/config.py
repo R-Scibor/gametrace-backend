@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     # How long a flicker-flagged row survives (seconds) before the GC purges it.
     session_flicker_gc_margin_seconds: int = 86400
 
+    # Manual POST/PATCH session bounds. Bot writes are uncapped.
+    session_max_duration_hours: int = 48
+    session_max_lookback_days: int = 30
+    session_future_grace_minutes: int = 5
+
     app_version: str = "dev"
     git_sha: str = "dev"
     build_time: str = "unknown"
@@ -113,6 +118,18 @@ class Settings(BaseSettings):
                 f"(got gc_margin={self.session_flicker_gc_margin_seconds}, "
                 f"stitch_window={self.session_stitch_window_seconds})"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _manual_session_bounds_positive(self) -> "Settings":
+        for name in (
+            "session_max_duration_hours",
+            "session_max_lookback_days",
+            "session_future_grace_minutes",
+        ):
+            value = getattr(self, name)
+            if value < 1:
+                raise ValueError(f"{name} must be >= 1 (got {value})")
         return self
 
     @model_validator(mode="after")

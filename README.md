@@ -65,14 +65,14 @@ Bot-sourced sessions (`source=BOT`):
 ```
 ONGOING   ──► COMPLETED         (bot detects game closed)
 ONGOING   ──► ERROR             (Self-Healing on bot restart: different game, or >12h elapsed)
-ERROR     ──► COMPLETED         (user supplies end_time via PATCH /sessions/{id}; source → MANUAL)
+ERROR     ──► COMPLETED         (user supplies end_time via PATCH /sessions/{id}; source → MANUAL; duration ≤ 48h, end not in the future)
 ERROR     ──► soft-deleted      (user discards via DELETE /sessions/{id})
 COMPLETED ──► soft-deleted      (user deletes via DELETE /sessions/{id})
-COMPLETED ──► COMPLETED         (user edits end_time; must remain > start_time; source → MANUAL)
+COMPLETED ──► COMPLETED         (user edits end_time; must remain > start_time, duration ≤ 48h, end not in the future; source → MANUAL)
 soft-deleted ──► COMPLETED/ERROR (user restores via POST /sessions/{id}/restore; status preserved)
 ```
 
-Manual sessions (`source=MANUAL`) skip the cycle and are saved directly as `COMPLETED`. `ERROR` sessions are excluded from all aggregates until resolved. `ONGOING` sessions cannot be soft-deleted directly — only the bot owns those rows.
+Manual sessions (`source=MANUAL`) skip the cycle and are saved directly as `COMPLETED`. `POST /sessions` also rejects start older than 30 days, duration over 48h, and timestamps more than 5 minutes in the future. `ERROR` sessions are excluded from all aggregates until resolved. `ONGOING` sessions cannot be soft-deleted directly — only the bot owns those rows.
 
 Discord presence flicker (brief dropouts mid-session) is handled by the bot: short BOT sessions are suppressed at close and stitched on same-game resume within a configurable window. See [docs/bot.md](docs/bot.md#flicker-suppression-and-stitch-resume).
 

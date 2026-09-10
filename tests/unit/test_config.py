@@ -22,7 +22,14 @@ def no_env_overrides(monkeypatch):
     """Defaults tests must not see the deployment's real config: the api container
     injects .env via env_file, which otherwise overrides the tested defaults (and
     prints the actual secrets in assertion output). Pair with _env_file=None."""
-    for var in ("LINK_CODE_SECRET", "DEV_LOGIN_SECRET", "TRUSTED_PROXY_IPS"):
+    for var in (
+        "LINK_CODE_SECRET",
+        "DEV_LOGIN_SECRET",
+        "TRUSTED_PROXY_IPS",
+        "SESSION_MAX_DURATION_HOURS",
+        "SESSION_MAX_LOOKBACK_DAYS",
+        "SESSION_FUTURE_GRACE_MINUTES",
+    ):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -107,3 +114,24 @@ def test_empty_trusted_proxy_ips_yields_no_networks():
 def test_malformed_trusted_proxy_entry_raises_at_construction():
     with pytest.raises(ValidationError):
         Settings(**_REQUIRED, trusted_proxy_ips="10.0.0.1, not-an-ip")
+
+
+def test_manual_session_bounds_defaults(no_env_overrides):
+    s = Settings(_env_file=None, **_REQUIRED)
+    assert s.session_max_duration_hours == 48
+    assert s.session_max_lookback_days == 30
+    assert s.session_future_grace_minutes == 5
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "session_max_duration_hours",
+        "session_max_lookback_days",
+        "session_future_grace_minutes",
+    ],
+)
+@pytest.mark.parametrize("bad", [0, -1])
+def test_manual_session_bounds_must_be_at_least_one(field, bad):
+    with pytest.raises(ValidationError):
+        Settings(**_REQUIRED, **{field: bad})

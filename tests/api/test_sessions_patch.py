@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.models.session import SessionSource, SessionStatus
 from tests.factories import dt, make_game, make_session, make_user
@@ -38,6 +38,7 @@ async def test_fix_end_time_before_start_returns_422(authed_client, db, user):
     )
 
     assert resp.status_code == 422
+    assert resp.json()["detail"] == "end_time must be after start_time"
 
 
 async def test_fix_would_overlap_returns_409(authed_client, db, user):
@@ -227,3 +228,147 @@ async def test_patch_with_discard_field_rejected_as_unknown(authed_client, db, u
     )
 
     assert resp.status_code == 422
+
+
+async def test_patch_duration_rejected(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=49), dt(hours_ago=48),
+    )
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": dt(hours_ago=0).isoformat()},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "session duration exceeds 48 hours"
+
+
+async def test_patch_future_end_rejected(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=1),
+    )
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": dt(hours_from_now=10 / 60).isoformat()},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "end_time cannot be in the future"
+
+
+async def test_patch_error_older_than_30_days_allowed_if_duration_ok(authed_client, db, user):
+    game = await make_game(db)
+    start = dt(hours_ago=31 * 24)
+    session = await make_session(
+        db, user.discord_id, game.id, start, start + timedelta(hours=1),
+        status=SessionStatus.ERROR,
+    )
+    new_end = start + timedelta(hours=2)
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": new_end.isoformat()},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["duration_seconds"] == 7200
+    assert resp.json()["source"] == SessionSource.MANUAL
+
+
+async def test_patch_completed_older_than_30_days_allowed_if_duration_ok(authed_client, db, user):
+    game = await make_game(db)
+    start = dt(hours_ago=31 * 24)
+    session = await make_session(
+        db, user.discord_id, game.id, start, start + timedelta(hours=1),
+    )
+    new_end = start + timedelta(hours=2)
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": new_end.isoformat()},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["duration_seconds"] == 7200
+
+
+async def test_patch_error_fix_to_now_over_48h_rejected(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=49), dt(hours_ago=48),
+        status=SessionStatus.ERROR,
+    )
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": dt(hours_ago=0).isoformat()},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "session duration exceeds 48 hours"
+
+
+async def test_patch_over_duration_that_also_overlaps_is_422_not_409(authed_client, db, user):
+    game = await make_game(db)
+    await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=2), dt(hours_ago=1),
+    )
+    session = await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=49), dt(hours_ago=48),
+        status=SessionStatus.ERROR,
+    )
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": dt(hours_ago=0).isoformat()},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "session duration exceeds 48 hours"
+
+
+async def test_patch_naive_iso_end_time_never_500(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=1),
+    )
+    naive_end = dt(hours_ago=0.5).replace(tzinfo=None)
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": naive_end.isoformat()},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["duration_seconds"] == 9000  # 2.5h
+
+
+async def test_patch_trashed_over_duration_rejected(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=49), dt(hours_ago=48),
+        deleted_at=datetime.now(UTC),
+    )
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": dt(hours_ago=0).isoformat()},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "session duration exceeds 48 hours"
+
+
+async def test_patch_ongoing_over_duration_returns_403_not_422(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=50),
+        status=SessionStatus.ONGOING, source=SessionSource.BOT,
+    )
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": dt(hours_ago=0).isoformat()},
+    )
+    assert resp.status_code == 403
+
+
+async def test_patch_trashed_future_end_rejected(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=1),
+        deleted_at=datetime.now(UTC),
+    )
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": dt(hours_from_now=10 / 60).isoformat()},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "end_time cannot be in the future"
