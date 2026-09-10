@@ -19,6 +19,7 @@ from app.schemas.session import (
     TrashedSessionResponse,
 )
 from app.services.library_visibility import library_visible_filter
+from app.services.session_bounds import SessionBoundsError, validate_manual_session_bounds
 from app.services.session_visibility import visible_session
 
 router = APIRouter()
@@ -166,14 +167,21 @@ async def create_session(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    # Verify game exists
+    try:
+        start, end = validate_manual_session_bounds(
+            payload.start_time, payload.end_time, is_create=True
+        )
+    except SessionBoundsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.detail,
+        ) from exc
+
     game = await db.get(Game, payload.game_id)
     if game is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Game not found")
 
-    conflict = await _check_overlap(
-        db, user.discord_id, payload.start_time, payload.end_time
-    )
+    conflict = await _check_overlap(db, user.discord_id, start, end)
     if conflict is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -183,12 +191,12 @@ async def create_session(
             },
         )
 
-    duration = int((payload.end_time - payload.start_time).total_seconds())
+    duration = int((end - start).total_seconds())
     session = GameSession(
         user_id=user.discord_id,
         game_id=payload.game_id,
-        start_time=payload.start_time,
-        end_time=payload.end_time,
+        start_time=start,
+        end_time=end,
         duration_seconds=duration,
         status=SessionStatus.COMPLETED,
         source=SessionSource.MANUAL,

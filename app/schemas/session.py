@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 
 from app.models.session import SessionSource, SessionStatus
 
@@ -9,12 +9,6 @@ class SessionCreate(BaseModel):
     game_id: int
     start_time: datetime
     end_time: datetime
-
-    @model_validator(mode="after")
-    def check_times(self):
-        if self.end_time <= self.start_time:
-            raise ValueError("end_time must be after start_time")
-        return self
 
 
 class SessionPatch(BaseModel):
