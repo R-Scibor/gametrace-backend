@@ -85,6 +85,14 @@ jobs:
       - name: Type check (mypy)
         run: mypy app tests alembic scripts
 
+      - name: Notify failure
+        if: failure()
+        run: |
+          if [ -x /home/endmin/homelab/ntfy/notify.sh ]; then
+            /home/endmin/homelab/ntfy/notify.sh --fail --title "CI fail gametrace-backend" "Job 'test' failed on ${{ github.ref_name }}" --click "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
+            python3 /home/endmin/homelab/ntfy/hooks/watch.py --mark-seen R-Scibor/gametrace-backend "${{ github.run_id }}" || true
+          fi
+
   build:
     needs: test
     runs-on: self-hosted
@@ -94,6 +102,14 @@ jobs:
 
       - name: Build Docker image
         run: docker build -t gametrace-backend:ci .
+
+      - name: Notify failure
+        if: failure()
+        run: |
+          if [ -x /home/endmin/homelab/ntfy/notify.sh ]; then
+            /home/endmin/homelab/ntfy/notify.sh --fail --title "CI fail gametrace-backend" "Job 'build' failed on ${{ github.ref_name }}" --click "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
+            python3 /home/endmin/homelab/ntfy/hooks/watch.py --mark-seen R-Scibor/gametrace-backend "${{ github.run_id }}" || true
+          fi
 
   deploy:
     needs: build
@@ -109,3 +125,12 @@ jobs:
           export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           export APP_VERSION=$(git describe --tags --always --dirty)
           docker compose up --build -d
+
+      - name: Notify failure
+        if: failure()
+        run: |
+          if [ -x /home/endmin/homelab/ntfy/notify.sh ]; then
+            /home/endmin/homelab/ntfy/notify.sh --fail --title "CI fail gametrace-backend" "Job 'deploy' failed on ${{ github.ref_name }}" --click "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
+            python3 /home/endmin/homelab/ntfy/hooks/watch.py --mark-seen R-Scibor/gametrace-backend "${{ github.run_id }}" || true
+          fi
+
