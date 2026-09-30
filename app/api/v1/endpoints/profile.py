@@ -44,9 +44,8 @@ async def update_settings(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    updates = payload.model_dump(exclude_unset=True)
-    for field, value in updates.items():
-        setattr(user, field, value)
+    for field in payload.model_fields_set:
+        setattr(user, field, getattr(payload, field))
     await db.commit()
     await db.refresh(user)
     return _to_response(user)

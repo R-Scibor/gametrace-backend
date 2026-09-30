@@ -22,20 +22,25 @@ class ProfileSettingsUpdate(BaseModel):
     weekly_report_enabled: bool | None = None
     push_enabled: bool | None = None
 
+    @field_validator("timezone", "language", "weekly_report_enabled", "push_enabled")
+    @classmethod
+    def _null_is_not_unset(cls, v: object) -> object:
+        # None is the default for an omitted key. An explicit JSON null is
+        # also None, and the columns are NOT NULL. Omit the key to leave it.
+        if v is None:
+            raise ValueError("null is not allowed; omit the field to leave it unchanged")
+        return v
+
     @field_validator("timezone")
     @classmethod
-    def _tz_must_be_iana(cls, v: str | None) -> str | None:
-        if v is None:
-            return v
+    def _tz_must_be_iana(cls, v: str) -> str:
         if v not in _VALID_TZS:
             raise ValueError(f"Invalid IANA timezone: {v}")
         return v
 
     @field_validator("language")
     @classmethod
-    def _language_must_be_supported(cls, v: str | None) -> str | None:
-        if v is None:
-            return v
+    def _language_must_be_supported(cls, v: str) -> str:
         if v not in _VALID_LANGUAGES:
             raise ValueError(f"Unsupported language: {v}")
         return v

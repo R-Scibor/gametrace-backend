@@ -1,3 +1,5 @@
+import pytest
+
 from tests.factories import make_user
 
 
@@ -96,6 +98,38 @@ async def test_put_settings_invalid_timezone_rejected(authed_client):
     )
 
     assert resp.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("field", "stored_key", "stored"),
+    [
+        ("timezone", "timezone", "UTC"),
+        ("language", "language", "pl"),
+        ("weekly_report_enabled", "weekly_report_enabled", True),
+        ("push_enabled", "push_enabled", True),
+    ],
+)
+async def test_put_settings_null_is_rejected_and_leaves_the_row(
+    authed_client, field, stored_key, stored
+):
+    resp = await authed_client.put("/api/v1/profile/settings", json={field: None})
+
+    assert resp.status_code == 422
+    me = await authed_client.get("/api/v1/profile/me")
+    assert me.status_code == 200
+    assert me.json()[stored_key] == stored
+
+
+async def test_put_settings_null_does_not_apply_a_sibling_field(authed_client):
+    resp = await authed_client.put(
+        "/api/v1/profile/settings",
+        json={"timezone": "Europe/Warsaw", "push_enabled": None},
+    )
+
+    assert resp.status_code == 422
+    me = await authed_client.get("/api/v1/profile/me")
+    assert me.json()["timezone"] == "UTC"
+    assert me.json()["push_enabled"] is True
 
 
 async def test_put_settings_empty_body_is_noop(authed_client):
