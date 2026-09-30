@@ -1,3 +1,4 @@
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -10,6 +11,8 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging, new_trace_id
 from app.core.observability import init_sentry
+
+logger = logging.getLogger(__name__)
 
 COVERS_DIR = os.environ.get("COVERS_DIR", "/app/covers")
 
@@ -70,6 +73,9 @@ async def limit_request_body_size(request: Request, call_next):
 async def bind_request_id(request: Request, call_next):
     """Bind a request_id into log context and echo it back as a header."""
     request_id = request.headers.get("x-request-id") or new_trace_id()
+    # The catch-all runs in ServerErrorMiddleware, outside this middleware,
+    # and this finally clears the log context before that handler runs.
+    request.state.request_id = request_id
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(request_id=request_id)
     try:
@@ -85,7 +91,19 @@ async def bind_request_id(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    request_id = getattr(request.state, "request_id", None)
+    logger.exception(
+        "unhandled_exception",
+        extra={
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+        },
+    )
+    response = JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    if request_id:
+        response.headers["X-Request-ID"] = request_id
+    return response
 
 
 @app.get("/health")
