@@ -415,7 +415,7 @@ All stats endpoints exclude soft-deleted sessions, `ERROR` sessions, `is_flicker
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/voice/transcribe` | Multipart audio upload (m4a/wav/mp3/ogg/webm). See pipeline below. Unknown fields come back as `null`. The user always confirms before saving — this endpoint only suggests values. After transcription, the frontend typically calls `GET /games/resolve?name=` to map the spoken game name to a library entry. `503` if `OPENAI_API_KEY` or `GCP_PROJECT` is unset. `429` when the per-user quota is exhausted — see below. |
+| `POST` | `/api/v1/voice/transcribe` | Multipart audio upload (m4a/wav/mp3/ogg/webm). The container sent to Whisper is taken from the file bytes, not the client filename. An ISO-BMFF image (`heic`, `avif`, `mif1`, including as a compatible brand) is `422` and does not spend quota. See pipeline below. Unknown fields come back as `null`. The user always confirms before saving — this endpoint only suggests values. After transcription, the frontend typically calls `GET /games/resolve?name=` to map the spoken game name to a library entry. `503` if `OPENAI_API_KEY` or `GCP_PROJECT` is unset. `429` when the per-user quota is exhausted — see below. |
 
 ### Transcribe pipeline
 

@@ -17,20 +17,55 @@ def sniff_image_extension(data: bytes) -> str | None:
     return None
 
 
-def looks_like_audio(data: bytes) -> bool:
-    """True if `data` starts with a recognized audio-container signature.
+# ISO-BMFF image brands. A major or compatible brand of one of these is a photo,
+# not an m4a, even though the box type is still `ftyp`.
+_IMAGE_FTYP_BRANDS = {b"heic", b"avif", b"mif1"}
 
-    Covers the formats the voice endpoint accepts (m4a/wav/mp3/ogg/webm)."""
+
+# A real ftyp box is a short header. Size 0 means "extends to EOF" in ISO-BMFF,
+# and a hostile size can be larger than the upload. Either one used to walk the
+# whole buffer on the request thread.
+_FTYP_SCAN_CAP = 256
+
+
+def _ftyp_brands(data: bytes) -> list[bytes]:
+    """Major brand, then each compatible brand, lowercased.
+
+    Compatible brands start after the 4-byte minor version. The walk stops at
+    the declared box size when that size fits in the cap, and never reads past
+    `_FTYP_SCAN_CAP` bytes."""
+    if len(data) < 12 or data[4:8] != b"ftyp":
+        return []
+    brands = [data[8:12].lower()]
+    size = int.from_bytes(data[:4], "big")
+    end = min(len(data), _FTYP_SCAN_CAP)
+    if 16 <= size <= end:
+        end = size
+    offset = 16
+    while offset + 4 <= end:
+        brands.append(data[offset : offset + 4].lower())
+        offset += 4
+    return brands
+
+
+def looks_like_audio(data: bytes) -> str | None:
+    """Allowlisted extension if `data` starts with a supported audio signature.
+
+    Whisper is told this name (`audio.wav`, `audio.webm`, …). `None` is not
+    audio: plain junk, or an `ftyp` whose brand is an image (`heic`, `avif`,
+    `mif1`)."""
     if data[:4] == b"RIFF" and data[8:12] == b"WAVE":  # WAV
-        return True
+        return "wav"
     if data[:3] == b"ID3":  # MP3 with an ID3v2 tag
-        return True
+        return "mp3"
     if len(data) >= 2 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0:  # MP3 frame sync
-        return True
-    if data[4:8] == b"ftyp":  # MP4 / M4A container
-        return True
+        return "mp3"
+    if data[4:8] == b"ftyp":  # MP4 / M4A, unless the brand is an image
+        if any(brand in _IMAGE_FTYP_BRANDS for brand in _ftyp_brands(data)):
+            return None
+        return "m4a"
     if data[:4] == b"OggS":  # Ogg
-        return True
+        return "ogg"
     if data[:4] == b"\x1a\x45\xdf\xa3":  # EBML (WebM / Matroska) — Chrome MediaRecorder
-        return True
-    return False
+        return "webm"
+    return None

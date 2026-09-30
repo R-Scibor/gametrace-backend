@@ -2,7 +2,8 @@
 POST /api/v1/voice/transcribe
 
 Pipeline:
-1. Accept audio file upload (m4a / wav / mp3 / ogg).
+1. Accept audio file upload (m4a / wav / mp3 / ogg / webm). The container
+   name sent to Whisper comes from the sniffed bytes, not the client filename.
 2. Send to OpenAI Whisper API (STT) — chosen for mixed-language quality
    (Polish sentences + English game names).
 3. Send transcript to Gemini Flash via Vertex AI for structured JSON extraction:
@@ -17,8 +18,6 @@ User always confirms the result — this endpoint only suggests values.
 import asyncio
 import json
 import logging
-import os
-import tempfile
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -130,7 +129,7 @@ async def transcribe_audio(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Upload an audio file (m4a/wav/mp3/ogg).
+    Upload an audio file (m4a/wav/mp3/ogg/webm).
     Returns extracted session fields for user confirmation.
     """
     if not settings.openai_api_key:
@@ -148,8 +147,11 @@ async def transcribe_audio(
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-    # Reject obvious non-audio before paying for the Whisper request.
-    if not looks_like_audio(audio_bytes):
+    # Reject obvious non-audio before paying for the Whisper request. The
+    # extension is what Whisper uses to identify the container; the client
+    # filename is not.
+    extension = looks_like_audio(audio_bytes)
+    if extension is None:
         raise HTTPException(
             status_code=422, detail="Uploaded file is not a recognized audio format."
         )
@@ -165,26 +167,18 @@ async def transcribe_audio(
             headers={"Retry-After": str(retry_after)},
         )
 
-    filename = file.filename or "audio.m4a"
-    suffix = "." + filename.rsplit(".", 1)[-1] if "." in filename else ".m4a"
-
     # ── Step 1: Whisper STT ──────────────────────────────────────────────────
     openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
 
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(audio_bytes)
-        tmp_path = tmp.name
-
     try:
-        with open(tmp_path, "rb") as audio_file:
-            transcription = await openai_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                # The SDK types `language` as `str | Omit`, but None is what the API
-                # wants for auto-detect (handles Polish + English mixed).
-                language=None,  # type: ignore[call-overload]
-                response_format="verbose_json",
-            )
+        transcription = await openai_client.audio.transcriptions.create(
+            model="whisper-1",
+            file=(f"audio.{extension}", audio_bytes),
+            # The SDK types `language` as `str | Omit`, but None is what the API
+            # wants for auto-detect (handles Polish + English mixed).
+            language=None,  # type: ignore[call-overload]
+            response_format="verbose_json",
+        )
         transcript: str = transcription.text
         detected_language: str | None = getattr(transcription, "language", None)
     except Exception as exc:
@@ -192,11 +186,6 @@ async def transcribe_audio(
         # Upstream exception text can carry internals (project ids, paths) — keep
         # the client-facing detail generic; the log line has the real error.
         raise HTTPException(status_code=502, detail="Transcription failed.") from exc
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
 
     # Whisper has now billed us, so the usage row goes in HERE rather than after
     # the parse: it is what the daily quota counts, and a Gemini outage must not

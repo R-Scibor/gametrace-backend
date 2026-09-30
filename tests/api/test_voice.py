@@ -147,6 +147,66 @@ async def test_empty_file_returns_400(authed_client):
     assert resp.status_code == 400
 
 
+@pytest.mark.parametrize(
+    ("filename", "audio", "extension"),
+    [
+        ("blob", b"\x1a\x45\xdf\xa3rest", "webm"),
+        ("blob", WAV_BYTES, "wav"),
+        ("clip.webm/x", WAV_BYTES, "wav"),
+        ("photo.heic", b"ID3\x03\x00rest", "mp3"),
+        ("noext", b"OggS\x00\x02rest", "ogg"),
+        ("x.bin", b"\x00\x00\x00\x18ftypM4A ", "m4a"),
+        ("x.bin", b"\xff\xfbrest", "mp3"),
+    ],
+)
+async def test_transcribe_sends_the_sniffed_name_not_the_client_filename(
+    authed_client, filename, audio, extension
+):
+    """Whisper trusts the upload name. A MediaRecorder blob has no extension,
+    and a slash in the client name used to miss the temp directory entirely."""
+    openai_client = _mock_openai("Grałem w Hades")
+    gemini_result = {
+        "game": None, "date": None, "start_time": None,
+        "end_time": None, "duration_minutes": None,
+    }
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
+         patch("app.api.v1.endpoints.voice.AsyncOpenAI", return_value=openai_client), \
+         patch("app.api.v1.endpoints.voice._gemini_parse", return_value=gemini_result):
+        resp = await authed_client.post(
+            "/api/v1/voice/transcribe",
+            files={"file": (filename, audio, "application/octet-stream")},
+        )
+
+    assert resp.status_code == 200
+    sent = openai_client.audio.transcriptions.create.await_args.kwargs["file"]
+    assert sent == (f"audio.{extension}", audio)
+
+
+def _ftyp(major: bytes) -> bytes:
+    payload = major + b"\x00\x00\x00\x00"
+    return (8 + len(payload)).to_bytes(4, "big") + b"ftyp" + payload
+
+
+@pytest.mark.parametrize("brand", [b"heic", b"avif", b"mif1"])
+async def test_image_ftyp_is_rejected_without_spending_quota(authed_client, brand):
+    openai_client = _mock_openai("should not be called")
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
+         patch("app.api.v1.endpoints.voice.AsyncOpenAI", return_value=openai_client):
+        resp = await authed_client.post(
+            "/api/v1/voice/transcribe",
+            files={"file": ("photo.bin", _ftyp(brand), "application/octet-stream")},
+        )
+
+    assert resp.status_code == 422
+    openai_client.audio.transcriptions.create.assert_not_called()
+
+    settings_p, openai_p, gemini_p = _patched_pipeline()
+    with settings_p, openai_p, gemini_p:
+        follow = await _post_audio(authed_client)
+
+    assert follow.status_code == 200
+
+
 # ── Missing config ────────────────────────────────────────────────────────────
 
 async def test_missing_openai_key_returns_503(authed_client):
