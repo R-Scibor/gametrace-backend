@@ -64,5 +64,4 @@ coverage.xml
 postgres_data/
 covers_data/
 
-docs/int2/
 docs/internal/
