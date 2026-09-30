@@ -99,31 +99,54 @@ async def redeem_code(r, code: str) -> str | None:
     return str(discord_id)
 
 
+async def _incr_window(r, key: str, window: int) -> int:
+    """Increment *key* and arm *window* only when the key has no TTL.
+
+    EXPIRE NX both starts the window on the first hit and repairs a key left
+    TTL-less by a crash between INCR and EXPIRE. A later hit must not slide
+    a window that is already running.
+    """
+    pipe = r.pipeline()
+    pipe.incr(key)
+    pipe.expire(key, window, nx=True)
+    count, _ = await pipe.execute()
+    return int(count)
+
+
+async def _retry_after(r, key: str, window: int) -> int | None:
+    """Seconds until *key* expires.
+
+    A missing expiry (Redis TTL -1 or -2) is armed to *window* first. It must
+    not be reported as Retry-After: 1, which a client retries forever. If the
+    rearm does not stick, there is no lock.
+    """
+    ttl = int(await r.ttl(key))
+    if ttl < 0:
+        await r.expire(key, window, nx=True)
+        ttl = int(await r.ttl(key))
+    if ttl <= 0:
+        return None
+    return ttl
+
+
 async def check_lockout(r, ip: str) -> int | None:
     """Return Retry-After seconds when locked out, else None (per-IP then global)."""
     ip_key = ip_fail_key(ip)
     ip_count = await r.get(ip_key)
     if ip_count is not None and int(ip_count) >= IP_FAIL_LIMIT:
-        return max(1, int(await r.ttl(ip_key)))
+        return await _retry_after(r, ip_key, IP_FAIL_WINDOW_SECONDS)
 
     global_key = global_fail_key()
     global_count = await r.get(global_key)
     if global_count is not None and int(global_count) >= GLOBAL_FAIL_LIMIT:
-        return max(1, int(await r.ttl(global_key)))
+        return await _retry_after(r, global_key, GLOBAL_FAIL_WINDOW_SECONDS)
 
     return None
 
 
 async def record_failure(r, ip: str) -> None:
-    ip_key = ip_fail_key(ip)
-    ip_count = await r.incr(ip_key)
-    if ip_count == 1:
-        await r.expire(ip_key, IP_FAIL_WINDOW_SECONDS)
-
-    global_key = global_fail_key()
-    global_count = await r.incr(global_key)
-    if global_count == 1:
-        await r.expire(global_key, GLOBAL_FAIL_WINDOW_SECONDS)
+    await _incr_window(r, ip_fail_key(ip), IP_FAIL_WINDOW_SECONDS)
+    await _incr_window(r, global_fail_key(), GLOBAL_FAIL_WINDOW_SECONDS)
 
 
 def demo_rate_key(ip: str) -> str:
@@ -139,11 +162,9 @@ async def check_demo_rate_limit(r, ip: str) -> int | None:
     the module docstring above DEMO_RATE_LIMIT.
     """
     key = demo_rate_key(ip)
-    count = await r.incr(key)
-    if count == 1:
-        await r.expire(key, DEMO_RATE_WINDOW_SECONDS)
+    count = await _incr_window(r, key, DEMO_RATE_WINDOW_SECONDS)
     if count > DEMO_RATE_LIMIT:
-        return max(1, int(await r.ttl(key)))
+        return await _retry_after(r, key, DEMO_RATE_WINDOW_SECONDS)
     return None
 
 

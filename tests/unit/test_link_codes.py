@@ -199,6 +199,60 @@ async def test_expire_set_once_per_window(r):
     assert await r.ttl(global_key) == 40
 
 
+async def test_record_failure_rearms_a_key_left_without_ttl(r):
+    """A blip between INCR and EXPIRE used to leave the counter with no TTL.
+    Later increments never repaired it, because the count was no longer 1."""
+    ip = "203.0.113.78"
+    ip_key = link_codes.ip_fail_key(ip)
+    global_key = link_codes.global_fail_key()
+    await r.set(ip_key, "3")
+    await r.set(global_key, "3")
+    assert await r.ttl(ip_key) == -1
+    assert await r.ttl(global_key) == -1
+
+    await link_codes.record_failure(r, ip)
+
+    assert 0 < await r.ttl(ip_key) <= link_codes.IP_FAIL_WINDOW_SECONDS
+    assert 0 < await r.ttl(global_key) <= link_codes.GLOBAL_FAIL_WINDOW_SECONDS
+
+
+async def test_ttl_less_ip_lockout_is_a_real_window(r):
+    """check_lockout runs before record_failure, so a counter already over the
+    limit and stuck at TTL -1 must not answer Retry-After: 1 forever."""
+    ip = "203.0.113.79"
+    ip_key = link_codes.ip_fail_key(ip)
+    await r.set(ip_key, str(link_codes.IP_FAIL_LIMIT))
+    assert await r.ttl(ip_key) == -1
+
+    retry_after = await link_codes.check_lockout(r, ip)
+
+    assert retry_after is not None and retry_after > 1
+    assert 0 < await r.ttl(ip_key) <= link_codes.IP_FAIL_WINDOW_SECONDS
+
+
+async def test_ttl_less_global_lockout_is_a_real_window(r):
+    global_key = link_codes.global_fail_key()
+    await r.set(global_key, str(link_codes.GLOBAL_FAIL_LIMIT))
+    assert await r.ttl(global_key) == -1
+
+    retry_after = await link_codes.check_lockout(r, "198.51.100.7")
+
+    assert retry_after is not None and retry_after > 1
+    assert 0 < await r.ttl(global_key) <= link_codes.GLOBAL_FAIL_WINDOW_SECONDS
+
+
+async def test_demo_rate_limit_rearms_a_key_left_without_ttl(r):
+    ip = "203.0.113.80"
+    key = link_codes.demo_rate_key(ip)
+    await r.set(key, str(link_codes.DEMO_RATE_LIMIT))
+    assert await r.ttl(key) == -1
+
+    retry_after = await link_codes.check_demo_rate_limit(r, ip)
+
+    assert retry_after is not None and retry_after > 1
+    assert 0 < await r.ttl(key) <= link_codes.DEMO_RATE_WINDOW_SECONDS
+
+
 @pytest.mark.parametrize(
     ("trusted_proxy_ips", "client_host", "xff", "expected"),
     [
