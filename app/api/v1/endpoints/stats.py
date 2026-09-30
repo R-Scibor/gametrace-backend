@@ -214,14 +214,23 @@ async def get_dashboard(
         r.total_seconds for r in rows if r.window_start >= window_today
     )
 
-    # Active session (ONGOING, not soft-deleted)
+    # Active session (ONGOING, not soft-deleted). Same library filter as the
+    # totals. pending_errors below stays unfiltered on purpose.
     active_stmt = (
         select(GameSession, Game.primary_name, Game.cover_image_url)
         .join(Game, GameSession.game_id == Game.id)
+        .outerjoin(
+            UserGamePreference,
+            and_(
+                UserGamePreference.game_id == GameSession.game_id,
+                UserGamePreference.user_id == user.discord_id,
+            ),
+        )
         .where(
             GameSession.user_id == user.discord_id,
             GameSession.status == SessionStatus.ONGOING,
             *visible_session(),
+            library_visible_filter(),
         )
         .order_by(GameSession.start_time.desc())
         .limit(1)

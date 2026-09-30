@@ -1,3 +1,4 @@
+from app.models.game import EnrichmentStatus
 from app.models.session import SessionStatus
 from tests.factories import dt, make_game, make_pref, make_session
 
@@ -49,6 +50,52 @@ async def test_dashboard_pending_errors_not_filtered_by_is_ignored(
 
     assert resp.status_code == 200
     assert len(resp.json()["pending_errors"]) == 1
+
+
+async def test_dashboard_active_session_hides_ignored_game(authed_client, db, user):
+    game = await make_game(db, primary_name="Ignored Live")
+    await make_pref(db, user.discord_id, game.id, is_ignored=True)
+    await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=1), status=SessionStatus.ONGOING
+    )
+
+    resp = await authed_client.get("/api/v1/stats/dashboard")
+
+    assert resp.status_code == 200
+    assert resp.json()["active_session"] is None
+
+
+async def test_dashboard_active_session_hides_unaccepted_needs_review(
+    authed_client, db, user
+):
+    game = await make_game(
+        db, primary_name="Stub Live", enrichment_status=EnrichmentStatus.NEEDS_REVIEW
+    )
+    await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=1), status=SessionStatus.ONGOING
+    )
+
+    resp = await authed_client.get("/api/v1/stats/dashboard")
+
+    assert resp.status_code == 200
+    assert resp.json()["active_session"] is None
+
+
+async def test_dashboard_active_session_keeps_accepted_needs_review(
+    authed_client, db, user
+):
+    game = await make_game(
+        db, primary_name="Accepted Live", enrichment_status=EnrichmentStatus.NEEDS_REVIEW
+    )
+    await make_pref(db, user.discord_id, game.id, is_accepted=True)
+    await make_session(
+        db, user.discord_id, game.id, dt(hours_ago=1), status=SessionStatus.ONGOING
+    )
+
+    resp = await authed_client.get("/api/v1/stats/dashboard")
+
+    assert resp.status_code == 200
+    assert resp.json()["active_session"]["game_id"] == game.id
 
 
 async def test_dashboard_active_session_includes_game_id_and_cover(
