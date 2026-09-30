@@ -8,25 +8,38 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
+import redis
+from sqlalchemy import text
 
 from app.core.celery_app import celery_app
 from app.tasks import weekly_report as wr
-from tests.factories import make_game, make_session, make_user
+from tests.factories import make_device, make_game, make_session, make_user
 
 
 class FakeRedis:
     """Minimal stand-in: .set(key, val, nx, ex) honoring NX semantics."""
 
-    def __init__(self, preset: set[str] | None = None):
+    def __init__(
+        self,
+        preset: set[str] | None = None,
+        fail_keys: set[str] | None = None,
+    ):
         self._keys: set[str] = set(preset or ())
+        self.fail_keys: set[str] = set(fail_keys or ())
         self.calls: list[str] = []
 
     def set(self, key, _val, nx=False, ex=None):
         self.calls.append(key)
+        if key in self.fail_keys:
+            raise redis.RedisError("down")
         if nx and key in self._keys:
             return None
         self._keys.add(key)
         return True
+
+    def delete(self, key):
+        self._keys.discard(key)
+        return 1
 
 
 @pytest.fixture
@@ -152,3 +165,86 @@ def test_beat_schedule_has_weekly_report():
     sched = celery_app.conf.beat_schedule
     assert "weekly_report" in sched
     assert sched["weekly_report"]["task"] == "tasks.weekly_report"
+
+
+async def test_failed_send_releases_the_dedup_key(db, patch_redis, monkeypatch):
+    user = await make_user(db, discord_id="900000000000000010", username="send_fails")
+    await db.commit()
+    # rollback() inside the run expires this instance. Keep the id as a string.
+    user_id = user.discord_id
+    monkeypatch.setattr(
+        wr, "send_to_user", AsyncMock(side_effect=RuntimeError("fcm down"))
+    )
+
+    sent = await wr._run_weekly_report(db)
+
+    assert sent == 0
+    assert wr._dedup_key(user_id, datetime.now(UTC)) not in patch_redis._keys
+
+    monkeypatch.setattr(wr, "send_to_user", AsyncMock(return_value=1))
+    assert await wr._run_weekly_report(db) == 1
+
+
+async def test_rejected_devices_release_the_dedup_key(db, patch_redis, mock_send):
+    """Every token failed open. The user still has devices, so the week is not done."""
+    user = await make_user(db, discord_id="900000000000000011", username="all_rejected")
+    await make_device(db, user.discord_id, "tok-rejected")
+    await db.commit()
+    mock_send.return_value = 0
+
+    sent = await wr._run_weekly_report(db)
+
+    assert sent == 0
+    assert wr._dedup_key(user.discord_id, datetime.now(UTC)) not in patch_redis._keys
+
+
+async def test_user_with_no_devices_keeps_the_dedup_key(db, patch_redis, mock_send):
+    user = await make_user(db, discord_id="900000000000000016", username="no_devices")
+    await db.commit()
+    mock_send.return_value = 0
+
+    sent = await wr._run_weekly_report(db)
+
+    assert sent == 0
+    assert wr._dedup_key(user.discord_id, datetime.now(UTC)) in patch_redis._keys
+
+
+async def test_database_error_rolls_back_and_the_next_user_is_sent(
+    db, patch_redis, monkeypatch
+):
+    bad = await make_user(db, discord_id="900000000000000012", username="bad_row")
+    good = await make_user(db, discord_id="900000000000000013", username="good_row")
+    await db.commit()
+    bad_id = bad.discord_id
+    good_id = good.discord_id
+
+    async def send(session, user_id, title, body, data=None):
+        if user_id == bad_id:
+            await session.execute(text("SELECT * FROM table_that_does_not_exist"))
+        return 1
+
+    monkeypatch.setattr(wr, "send_to_user", send)
+
+    sent = await wr._run_weekly_report(db)
+
+    assert sent == 1
+    now = datetime.now(UTC)
+    assert wr._dedup_key(bad_id, now) not in patch_redis._keys
+    assert wr._dedup_key(good_id, now) in patch_redis._keys
+
+
+async def test_redis_error_on_set_does_not_stop_the_fanout(db, monkeypatch):
+    blocked = await make_user(db, discord_id="900000000000000014", username="redis_down")
+    other = await make_user(db, discord_id="900000000000000015", username="redis_ok")
+    await db.commit()
+    now = datetime.now(UTC)
+    fake = FakeRedis(fail_keys={wr._dedup_key(blocked.discord_id, now)})
+    monkeypatch.setattr(wr.redis_sync, "from_url", lambda *a, **k: fake)
+    mock_send = AsyncMock(return_value=1)
+    monkeypatch.setattr(wr, "send_to_user", mock_send)
+
+    sent = await wr._run_weekly_report(db)
+
+    assert sent == 1
+    mock_send.assert_awaited_once()
+    assert mock_send.await_args.args[1] == other.discord_id

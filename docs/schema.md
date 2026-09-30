@@ -277,7 +277,7 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 
 | Task | Schedule (UTC) | Purpose |
 |---|---|---|
-| `tasks.weekly_report` | Monday 09:00 | FCM digest for users with `weekly_report_enabled` and `push_enabled`; skips accounts scheduled for deletion (`purge_at IS NOT NULL`) |
+| `tasks.weekly_report` | Monday 09:00 | FCM digest for users with `weekly_report_enabled` and `push_enabled`; skips accounts scheduled for deletion (`purge_at IS NOT NULL`). The ISO-week dedup key is released when that user's send fails or every registered device rejects the push, so the next run can retry. A user with no devices keeps the key. A Redis error taking the key does not stop the rest of the list. |
 | `tasks.hard_delete_sweep` | Daily 03:30 | Purge trashed sessions older than `TRASH_RETENTION_DAYS` (default 7); purge FCM tokens idle 6+ months |
 | `tasks.purge_deleted_accounts` | Daily 03:45 | Permanently delete every `users` row whose `purge_at` has passed (`DELETE FROM users WHERE purge_at <= now`). `ON DELETE CASCADE` on `user_id` erases that account's sessions, preferences, tokens, devices, reports, and voice usage along with it. Catalog `games` rows have no FK to `users` and are never touched. In the same transaction, the task also inserts one `purged` event per deleted `discord_id` into `account_deletion_events`. |
 | `tasks.purge_flicker_sessions` | Daily 04:00 | Hard-delete `COMPLETED` flicker rows whose `end_time` is older than `SESSION_FLICKER_GC_MARGIN_SECONDS` (default 86400s). Runs after `hard_delete_sweep` to keep the two sweepers separate. |
