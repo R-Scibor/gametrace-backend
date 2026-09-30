@@ -7,7 +7,7 @@ Called directly with the test `db` fixture — no HTTP client, no Discord connec
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.bot.session_manager import (
     complete_session,
@@ -18,7 +18,7 @@ from app.bot.session_manager import (
     start_session,
 )
 from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
-from app.models.session import SessionSource, SessionStatus
+from app.models.session import GameSession, SessionSource, SessionStatus
 from tests.factories import dt, make_alias, make_game, make_session, make_user
 
 # ── get_user_if_tracked ───────────────────────────────────────────────────────
@@ -334,3 +334,168 @@ async def test_start_or_resume_session_outside_window_creates_new(db):
 
     assert result.status == SessionStatus.ONGOING
     assert result.source == SessionSource.BOT
+
+
+async def _diverge(db, session_id: int, **values) -> None:
+    """Change the row without refreshing the in-memory session."""
+    await db.execute(
+        update(GameSession).where(GameSession.id == session_id).values(**values),
+        execution_options={"synchronize_session": False},
+    )
+    await db.commit()
+
+
+async def test_error_session_does_not_overwrite_a_completed_row(db):
+    user = await make_user(db)
+    game = await make_game(db)
+    end = datetime.now(UTC) - timedelta(minutes=5)
+    session = await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        start_time=datetime.now(UTC) - timedelta(hours=1),
+        status=SessionStatus.ONGOING,
+        source=SessionSource.BOT,
+    )
+    await _diverge(
+        db,
+        session.id,
+        status=SessionStatus.COMPLETED,
+        end_time=end,
+        duration_seconds=3300,
+    )
+
+    result = await error_session(db, session, "bot restarted")
+
+    assert result.status == SessionStatus.COMPLETED
+    assert result.notes is None
+    assert result.end_time is not None
+    await db.refresh(session)
+    assert session.status == SessionStatus.COMPLETED
+    assert session.notes is None
+
+
+async def test_complete_session_does_not_overwrite_an_error_row(db):
+    user = await make_user(db)
+    game = await make_game(db)
+    session = await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        start_time=datetime.now(UTC) - timedelta(hours=1),
+        status=SessionStatus.ONGOING,
+        source=SessionSource.BOT,
+    )
+    await _diverge(db, session.id, status=SessionStatus.ERROR, notes="bot restarted")
+
+    result = await complete_session(db, session)
+
+    assert result.status == SessionStatus.ERROR
+    assert result.notes == "bot restarted"
+    await db.refresh(session)
+    assert session.status == SessionStatus.ERROR
+    assert session.notes == "bot restarted"
+
+
+async def test_start_session_returns_none_when_user_is_scheduled_for_deletion(db):
+    user = await make_user(
+        db,
+        deletion_requested_at=dt(hours_ago=1),
+        purge_at=dt(hours_from_now=24 * 7),
+    )
+    game = await make_game(db)
+
+    result = await start_session(db, user.discord_id, game.id)
+
+    assert result is None
+    rows = await db.execute(select(GameSession).where(GameSession.user_id == user.discord_id))
+    assert rows.scalars().all() == []
+
+
+async def test_start_session_returns_none_when_user_is_missing(db):
+    game = await make_game(db)
+
+    result = await start_session(db, "900000000000000099", game.id)
+
+    assert result is None
+    rows = await db.execute(select(GameSession).where(GameSession.user_id == "900000000000000099"))
+    assert rows.scalars().all() == []
+
+
+async def test_start_or_resume_does_not_reopen_a_row_edited_to_manual(db, monkeypatch):
+    from app.bot.session_manager import start_or_resume_session
+
+    user = await make_user(db)
+    game = await make_game(db)
+    candidate = await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        start_time=datetime.now(UTC) - timedelta(seconds=90),
+        end_time=datetime.now(UTC) - timedelta(seconds=30),
+        status=SessionStatus.COMPLETED,
+        source=SessionSource.BOT,
+        is_flicker=True,
+    )
+    await _diverge(db, candidate.id, source=SessionSource.MANUAL)
+
+    async def _stale(*_args, **_kwargs):
+        return candidate
+
+    monkeypatch.setattr("app.bot.session_manager.find_stitch_candidate", _stale)
+
+    result = await start_or_resume_session(db, user.discord_id, game.id)
+
+    assert result.id != candidate.id
+    assert result.status == SessionStatus.ONGOING
+    assert result.source == SessionSource.BOT
+    await db.refresh(candidate)
+    assert candidate.status == SessionStatus.COMPLETED
+    assert candidate.source == SessionSource.MANUAL
+    assert candidate.end_time is not None
+
+
+async def test_start_or_resume_does_not_reopen_a_trashed_row(db, monkeypatch):
+    from app.bot.session_manager import start_or_resume_session
+
+    user = await make_user(db)
+    game = await make_game(db)
+    candidate = await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        start_time=datetime.now(UTC) - timedelta(seconds=90),
+        end_time=datetime.now(UTC) - timedelta(seconds=30),
+        status=SessionStatus.COMPLETED,
+        source=SessionSource.BOT,
+    )
+    await _diverge(db, candidate.id, deleted_at=datetime.now(UTC))
+
+    async def _stale(*_args, **_kwargs):
+        return candidate
+
+    monkeypatch.setattr("app.bot.session_manager.find_stitch_candidate", _stale)
+
+    result = await start_or_resume_session(db, user.discord_id, game.id)
+
+    assert result.id != candidate.id
+    await db.refresh(candidate)
+    assert candidate.status == SessionStatus.COMPLETED
+    assert candidate.deleted_at is not None
+
+
+async def test_start_or_resume_returns_none_when_user_is_scheduled_for_deletion(db):
+    from app.bot.session_manager import start_or_resume_session
+
+    user = await make_user(
+        db,
+        deletion_requested_at=dt(hours_ago=1),
+        purge_at=dt(hours_from_now=24 * 7),
+    )
+    game = await make_game(db)
+
+    result = await start_or_resume_session(db, user.discord_id, game.id)
+
+    assert result is None
+    rows = await db.execute(select(GameSession).where(GameSession.user_id == user.discord_id))
+    assert rows.scalars().all() == []

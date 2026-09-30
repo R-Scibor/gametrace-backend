@@ -170,6 +170,27 @@ async def test_schedule_deletion_leaves_completed_session_untouched(authed_clien
     assert session.notes is None
 
 
+async def test_schedule_deletion_leaves_trashed_ongoing_session_untouched(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db,
+        user_id=user.discord_id,
+        game_id=game.id,
+        start_time=datetime.now(UTC) - timedelta(hours=1),
+        status=SessionStatus.ONGOING,
+        source=SessionSource.BOT,
+        deleted_at=datetime.now(UTC),
+    )
+
+    resp = await authed_client.post("/api/v1/profile/me/deletion")
+    assert resp.status_code == 202
+
+    await db.refresh(session)
+    assert session.status == SessionStatus.ONGOING
+    assert session.notes is None
+    assert session.deleted_at is not None
+
+
 async def test_schedule_deletion_admin_gets_403(admin_client):
     resp = await admin_client.post("/api/v1/profile/me/deletion")
     assert resp.status_code == 403

@@ -10,10 +10,9 @@ import math
 from datetime import UTC, datetime, timedelta
 
 import redis.exceptions
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.session_manager import error_session
 from app.core.config import settings
 from app.core.redis import get_redis
 from app.models.account_deletion_event import (
@@ -78,21 +77,23 @@ async def schedule_deletion(db: AsyncSession, user: User) -> User:
     user.deletion_requested_at = now
     user.purge_at = now + timedelta(days=settings.account_deletion_grace_days)
 
-    # Insert before token/device deletes and error_session (which commits
-    # internally) so the first flush includes the audit row.
+    # One transaction with the grace stamps: audit row, credential deletes,
+    # and any live ONGOING session. A row the bot already finished, or a
+    # trashed row, matches zero rows and is left as it is.
     record_deletion_event(db, user.discord_id, EVENT_REQUESTED, purge_at=user.purge_at)
 
     await db.execute(delete(UserAuthToken).where(UserAuthToken.user_id == user.discord_id))
     await db.execute(delete(UserDevice).where(UserDevice.user_id == user.discord_id))
-
-    result = await db.execute(
-        select(GameSession).where(
+    await db.execute(
+        update(GameSession)
+        .where(
             GameSession.user_id == user.discord_id,
             GameSession.status == SessionStatus.ONGOING,
+            GameSession.deleted_at.is_(None),
         )
+        .values(status=SessionStatus.ERROR, notes=_ONGOING_SESSION_NOTE),
+        execution_options={"synchronize_session": False},
     )
-    for session in result.scalars().all():
-        await error_session(db, session, _ONGOING_SESSION_NOTE)
 
     await db.commit()
     await db.refresh(user)

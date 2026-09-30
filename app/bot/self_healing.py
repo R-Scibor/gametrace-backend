@@ -51,18 +51,12 @@ async def run_self_healing(db: AsyncSession, guilds: Sequence[discord.Guild]) ->
     logger.info("Self-Healing: starting reconciliation...")
 
     result = await db.execute(
-        select(GameSession, User.purge_at)
-        .join(User, User.discord_id == GameSession.user_id)
-        .where(
+        select(GameSession).where(
             GameSession.status == SessionStatus.ONGOING,
             GameSession.deleted_at.is_(None),
         )
     )
-    rows = list(result.all())
-    ongoing_sessions: list[GameSession] = [row[0] for row in rows]
-    scheduled_for_deletion: dict[int, bool] = {
-        row[0].id: row[1] is not None for row in rows
-    }
+    ongoing_sessions = list(result.scalars().all())
 
     if not ongoing_sessions:
         logger.info("Self-Healing: no ONGOING sessions found, nothing to do.")
@@ -73,6 +67,11 @@ async def run_self_healing(db: AsyncSession, guilds: Sequence[discord.Guild]) ->
 
     for session in ongoing_sessions:
         async with user_session_lock(db, session.user_id):
+            # The list above is a snapshot taken before the lock.
+            await db.refresh(session)
+            if session.status != SessionStatus.ONGOING or session.deleted_at is not None:
+                continue
+
             member = _find_member(guilds, session.user_id)
 
             if member is None:
@@ -118,7 +117,10 @@ async def run_self_healing(db: AsyncSession, guilds: Sequence[discord.Guild]) ->
                     session,
                     f"Self-Healing: bot restarted, player switched from {session_game_name!r} to {current_game!r}.",
                 )
-                if scheduled_for_deletion.get(session.id):
+                owner = await db.get(User, session.user_id)
+                if owner is not None:
+                    await db.refresh(owner)
+                if owner is None or owner.purge_at is not None:
                     logger.info(
                         "Self-Healing: session_id=%d ERROR, new session skipped — "
                         "user %s is scheduled for deletion.",

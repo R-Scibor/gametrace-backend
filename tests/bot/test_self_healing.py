@@ -4,10 +4,12 @@ tests/bot/test_self_healing.py
 Phase 2 — integration tests for run_self_healing(db, guilds).
 Uses real test DB + mocked Discord guilds/members.
 """
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import discord
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.bot.self_healing import run_self_healing
 from app.models.game import Game
@@ -176,3 +178,43 @@ async def test_multiple_sessions_each_reconciled(db):
     for s in sessions:
         await db.refresh(s)
         assert s.status == SessionStatus.ERROR
+
+
+async def test_self_healing_skips_a_session_completed_inside_the_lock(db, monkeypatch):
+    user = await make_user(db)
+    game = await make_game(db, "Hades")
+    session = await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        start_time=dt(hours_ago=1),
+        status=SessionStatus.ONGOING,
+        source=SessionSource.BOT,
+    )
+    session_id = session.id
+    user_id = user.discord_id
+
+    @asynccontextmanager
+    async def _complete_inside_lock(db_session, _user_id):
+        await db_session.execute(
+            update(GameSession)
+            .where(GameSession.id == session_id)
+            .values(
+                status=SessionStatus.COMPLETED,
+                end_time=datetime.now(UTC),
+                duration_seconds=3600,
+            ),
+            execution_options={"synchronize_session": False},
+        )
+        await db_session.commit()
+        yield
+
+    monkeypatch.setattr("app.bot.self_healing.user_session_lock", _complete_inside_lock)
+
+    await run_self_healing(db, guilds=[])
+
+    await db.refresh(session)
+    assert session.status == SessionStatus.COMPLETED
+    assert session.notes is None
+    rows = await db.execute(select(GameSession).where(GameSession.user_id == user_id))
+    assert len(rows.scalars().all()) == 1

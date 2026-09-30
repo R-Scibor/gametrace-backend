@@ -8,14 +8,18 @@ Two independent write paths must stop writing for a `purge_at`-scheduled user:
   2. Self-healing's switched-game branch (self_healing.py) — never calls
      `get_user_if_tracked`, so it needs its own gate.
 """
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import discord
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.bot.self_healing import run_self_healing
 from app.bot.session_manager import get_user_if_tracked
+from app.models.game import Game
 from app.models.session import GameSession, SessionSource, SessionStatus
+from app.models.user import User
 from tests.factories import dt, make_game, make_session, make_user
 
 
@@ -82,3 +86,45 @@ async def test_self_healing_skips_new_session_for_scheduled_user(db):
         )
     )
     assert result.scalar_one_or_none() is None
+
+
+async def test_self_healing_switch_rereads_purge_at_inside_the_lock(db, monkeypatch):
+    user = await make_user(db)
+    game = await make_game(db, "Hades")
+    old_session = await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        start_time=dt(hours_ago=1),
+        status=SessionStatus.ONGOING,
+        source=SessionSource.BOT,
+    )
+    user_id = user.discord_id
+
+    @asynccontextmanager
+    async def _schedule_inside_lock(db_session, _user_id):
+        now = datetime.now(UTC)
+        await db_session.execute(
+            update(User)
+            .where(User.discord_id == user_id)
+            .values(deletion_requested_at=now, purge_at=now + timedelta(days=7)),
+            execution_options={"synchronize_session": False},
+        )
+        await db_session.commit()
+        yield
+
+    monkeypatch.setattr("app.bot.self_healing.user_session_lock", _schedule_inside_lock)
+
+    await run_self_healing(db, guilds=[_guild(user_id, "Minecraft")])
+
+    await db.refresh(old_session)
+    assert old_session.status == SessionStatus.ERROR
+    ongoing = await db.execute(
+        select(GameSession).where(
+            GameSession.user_id == user_id,
+            GameSession.status == SessionStatus.ONGOING,
+        )
+    )
+    assert ongoing.scalar_one_or_none() is None
+    created = await db.execute(select(Game).where(Game.primary_name == "Minecraft"))
+    assert created.scalar_one_or_none() is None

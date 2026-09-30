@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta
 
-from app.models.session import SessionSource, SessionStatus
+from sqlalchemy import update
+
+from app.models.session import GameSession, SessionSource, SessionStatus
 from tests.factories import dt, make_game, make_session, make_user
 
 # ── ERROR → COMPLETED (Fix) ───────────────────────────────────────────────────
@@ -372,3 +374,36 @@ async def test_patch_trashed_future_end_rejected(authed_client, db, user):
     )
     assert resp.status_code == 422
     assert resp.json()["detail"] == "end_time cannot be in the future"
+
+
+async def test_patch_returns_409_when_another_writer_changed_status(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        dt(hours_ago=3),
+        dt(hours_ago=1),
+        status=SessionStatus.COMPLETED,
+    )
+    await db.execute(
+        update(GameSession)
+        .where(GameSession.id == session.id)
+        .values(status=SessionStatus.ONGOING, end_time=None, duration_seconds=None),
+        execution_options={"synchronize_session": False},
+    )
+    await db.commit()
+
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": dt(hours_ago=0.5).isoformat()},
+    )
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["detail"]["detail"] == "Session was updated by another writer"
+    assert body["detail"]["conflicting_session"]["status"] == "ONGOING"
+    db.expire(session)
+    await db.refresh(session)
+    assert session.status == SessionStatus.ONGOING
+    assert session.end_time is None

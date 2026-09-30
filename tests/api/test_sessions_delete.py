@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.models.session import GameSession, SessionSource, SessionStatus
 from tests.factories import dt, make_game, make_session, make_user
@@ -134,3 +134,58 @@ async def test_hard_delete_other_users_session_returns_404(authed_client, db):
 
     resp = await authed_client.delete(f"/api/v1/sessions/{session.id}?hard=true")
     assert resp.status_code == 404
+
+
+async def test_delete_returns_409_when_another_writer_changed_status(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        dt(hours_ago=3),
+        dt(hours_ago=1),
+    )
+    await db.execute(
+        update(GameSession)
+        .where(GameSession.id == session.id)
+        .values(status=SessionStatus.ONGOING, end_time=None, duration_seconds=None),
+        execution_options={"synchronize_session": False},
+    )
+    await db.commit()
+
+    resp = await authed_client.delete(f"/api/v1/sessions/{session.id}")
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["detail"]["detail"] == "Session was updated by another writer"
+    assert body["detail"]["conflicting_session"]["status"] == "ONGOING"
+    db.expire(session)
+    await db.refresh(session)
+    assert session.status == SessionStatus.ONGOING
+    assert session.deleted_at is None
+
+
+async def test_delete_returns_404_when_row_was_trashed_underneath(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        dt(hours_ago=3),
+        dt(hours_ago=1),
+    )
+    await db.execute(
+        update(GameSession)
+        .where(GameSession.id == session.id)
+        .values(deleted_at=datetime.now(UTC)),
+        execution_options={"synchronize_session": False},
+    )
+    await db.commit()
+
+    resp = await authed_client.delete(f"/api/v1/sessions/{session.id}")
+
+    assert resp.status_code == 404
+    db.expire(session)
+    await db.refresh(session)
+    assert session.deleted_at is not None
+    assert session.status == SessionStatus.COMPLETED

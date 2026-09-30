@@ -5,9 +5,10 @@ All functions accept an AsyncSession and perform a single logical operation.
 import logging
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.dml import Update
 
 from app.bot.flicker_policy import find_stitch_candidate, is_short_flicker
 from app.models.game import EnrichmentStatus, Game, GameAlias
@@ -16,6 +17,20 @@ from app.models.user import User
 from app.services.game_review import ensure_inbox_for_user
 
 logger = logging.getLogger(__name__)
+
+
+async def _claim(db: AsyncSession, stmt: Update) -> bool:
+    """Conditional UPDATE that does not mark the in-memory row dirty.
+
+    ``synchronize_session="evaluate"`` would dirty an object whose loaded
+    status still matches the WHERE, and the following commit would write that
+    stale status even when the database matched zero rows.
+    """
+    result = await db.execute(
+        stmt.returning(GameSession.id),
+        execution_options={"synchronize_session": False},
+    )
+    return result.scalar_one_or_none() is not None
 
 
 async def get_user_if_tracked(db: AsyncSession, discord_id: str) -> User | None:
@@ -82,8 +97,16 @@ async def get_ongoing_session(db: AsyncSession, user_id: str) -> GameSession | N
     return sessions[0] if sessions else None
 
 
-async def start_session(db: AsyncSession, user_id: str, game_id: int) -> GameSession:
-    """Create a new ONGOING BOT session."""
+async def start_session(db: AsyncSession, user_id: str, game_id: int) -> GameSession | None:
+    """Create a new ONGOING BOT session.
+
+    Returns None when the user row is missing or ``purge_at`` is set, so a
+    scheduled account does not gain a new session or a stub game from this call.
+    """
+    user = await db.get(User, user_id)
+    if user is None or user.purge_at is not None:
+        logger.info("Session start skipped user=%s; account missing or scheduled for deletion", user_id)
+        return None
     game = await db.get(Game, game_id)
     session = GameSession(
         user_id=user_id,
@@ -114,42 +137,91 @@ async def start_session(db: AsyncSession, user_id: str, game_id: int) -> GameSes
 
 
 async def complete_session(db: AsyncSession, session: GameSession) -> GameSession:
-    """Transition ONGOING → COMPLETED, fill end_time and duration."""
+    """Transition ONGOING → COMPLETED, fill end_time and duration.
+
+    Zero rows means the row is no longer a live ONGOING session. The returned
+    object is the database row, not the caller's stale status.
+    """
     now = datetime.now(UTC)
-    session.status = SessionStatus.COMPLETED
-    session.end_time = now
-    session.duration_seconds = int((now - session.start_time).total_seconds())
-    session.is_flicker = session.source == SessionSource.BOT and is_short_flicker(session.duration_seconds)
-    await db.commit()
-    await db.refresh(session)
-    logger.info(
-        "Session COMPLETED session_id=%d duration=%ds",
-        session.id,
-        session.duration_seconds,
+    duration = int((now - session.start_time).total_seconds())
+    flicker = session.source == SessionSource.BOT and is_short_flicker(duration)
+    claimed = await _claim(
+        db,
+        update(GameSession)
+        .where(
+            GameSession.id == session.id,
+            GameSession.status == SessionStatus.ONGOING,
+            GameSession.deleted_at.is_(None),
+        )
+        .values(
+            status=SessionStatus.COMPLETED,
+            end_time=now,
+            duration_seconds=duration,
+            is_flicker=flicker,
+        ),
     )
+    if claimed:
+        await db.commit()
+        logger.info("Session COMPLETED session_id=%d duration=%ds", session.id, duration)
+    else:
+        logger.info("Session COMPLETE skipped session_id=%d; status changed", session.id)
+    await db.refresh(session)
     return session
 
 
-async def start_or_resume_session(db: AsyncSession, user_id: str, game_id: int) -> GameSession:
-    """Reopen a recent same-game BOT session if within the stitch window, else start fresh."""
+async def start_or_resume_session(db: AsyncSession, user_id: str, game_id: int) -> GameSession | None:
+    """Reopen a recent same-game BOT session if within the stitch window, else start fresh.
+
+    A candidate the user has since edited, trashed, or otherwise moved off
+    ``COMPLETED`` / ``BOT`` is left alone and a new session is started instead.
+    """
     candidate = await find_stitch_candidate(db, user_id, game_id)
     if candidate is not None:
-        candidate.status = SessionStatus.ONGOING
-        candidate.end_time = None
-        candidate.duration_seconds = None
-        candidate.is_flicker = False
-        await db.commit()
-        await db.refresh(candidate)
-        logger.info("Session RESUMED user=%s game_id=%d session_id=%d", user_id, game_id, candidate.id)
-        return candidate
+        claimed = await _claim(
+            db,
+            update(GameSession)
+            .where(
+                GameSession.id == candidate.id,
+                GameSession.status == SessionStatus.COMPLETED,
+                GameSession.source == SessionSource.BOT,
+                GameSession.deleted_at.is_(None),
+            )
+            .values(
+                status=SessionStatus.ONGOING,
+                end_time=None,
+                duration_seconds=None,
+                is_flicker=False,
+            ),
+        )
+        if claimed:
+            await db.commit()
+            await db.refresh(candidate)
+            logger.info("Session RESUMED user=%s game_id=%d session_id=%d", user_id, game_id, candidate.id)
+            return candidate
+        logger.info("Session resume skipped session_id=%d; row changed", candidate.id)
     return await start_session(db, user_id, game_id)
 
 
 async def error_session(db: AsyncSession, session: GameSession, notes: str) -> GameSession:
-    """Transition ONGOING → ERROR with an explanatory note."""
-    session.status = SessionStatus.ERROR
-    session.notes = notes
-    await db.commit()
+    """Transition a live ONGOING session to ERROR with an explanatory note.
+
+    Zero rows means another writer already moved the row. The returned object
+    is the database row, so a completed session is not stamped ERROR.
+    """
+    claimed = await _claim(
+        db,
+        update(GameSession)
+        .where(
+            GameSession.id == session.id,
+            GameSession.status == SessionStatus.ONGOING,
+            GameSession.deleted_at.is_(None),
+        )
+        .values(status=SessionStatus.ERROR, notes=notes),
+    )
+    if claimed:
+        await db.commit()
+        logger.warning("Session ERROR session_id=%d notes=%r", session.id, notes)
+    else:
+        logger.warning("Session ERROR skipped session_id=%d; status changed", session.id)
     await db.refresh(session)
-    logger.warning("Session ERROR session_id=%d notes=%r", session.id, notes)
     return session

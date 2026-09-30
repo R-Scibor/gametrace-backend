@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -23,6 +23,35 @@ from app.services.session_bounds import SessionBoundsError, validate_manual_sess
 from app.services.session_visibility import visible_session
 
 router = APIRouter()
+
+_WRITER_CONFLICT = "Session was updated by another writer"
+
+
+async def _reloaded_session(db: AsyncSession, session: GameSession, user_id: str) -> GameSession | None:
+    """Reload a row after a conditional update matched nothing.
+
+    Expires the caller's object first so the identity map cannot return the
+    status this request loaded.
+    """
+    session_id = session.id
+    db.expire(session)
+    result = await db.execute(
+        select(GameSession)
+        .options(selectinload(GameSession.game))
+        .execution_options(populate_existing=True)
+        .where(GameSession.id == session_id, GameSession.user_id == user_id)
+    )
+    return result.scalar_one_or_none()
+
+
+def _writer_conflict(current: GameSession) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "detail": _WRITER_CONFLICT,
+            "conflicting_session": SessionResponse.model_validate(current).model_dump(mode="json"),
+        },
+    )
 
 
 async def _check_overlap(
@@ -233,6 +262,7 @@ async def patch_session(
     if session is None or session.is_flicker:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
+    user_id = user.discord_id
     if session.status == SessionStatus.ONGOING:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -252,7 +282,7 @@ async def patch_session(
             ) from exc
         if session.deleted_at is None:
             conflict = await _check_overlap(
-                db, user.discord_id, start, end, exclude_id=session_id
+                db, user_id, start, end, exclude_id=session_id
             )
             if conflict is not None:
                 raise HTTPException(
@@ -262,8 +292,36 @@ async def patch_session(
                         "conflicting_session": SessionResponse.model_validate(conflict).model_dump(mode="json"),
                     },
                 )
+        deleted_match = (
+            GameSession.deleted_at.is_(None)
+            if session.deleted_at is None
+            else GameSession.deleted_at.is_not(None)
+        )
+        duration = int((end - start).total_seconds())
+        result = await db.execute(
+            update(GameSession)
+            .where(
+                GameSession.id == session.id,
+                GameSession.user_id == user_id,
+                GameSession.status.in_([SessionStatus.COMPLETED, SessionStatus.ERROR]),
+                deleted_match,
+            )
+            .values(
+                end_time=end,
+                duration_seconds=duration,
+                status=SessionStatus.COMPLETED,
+                source=SessionSource.MANUAL,
+            )
+            .returning(GameSession.id),
+            execution_options={"synchronize_session": False},
+        )
+        if result.scalar_one_or_none() is None:
+            current = await _reloaded_session(db, session, user.discord_id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+            raise _writer_conflict(current)
         session.end_time = end
-        session.duration_seconds = int((end - start).total_seconds())
+        session.duration_seconds = duration
         session.status = SessionStatus.COMPLETED
         session.source = SessionSource.MANUAL
 
@@ -313,7 +371,26 @@ async def delete_session(
             detail="Cannot delete an ONGOING session — managed by bot",
         )
 
-    session.deleted_at = datetime.now(UTC)
+    now = datetime.now(UTC)
+    result = await db.execute(
+        update(GameSession)
+        .where(
+            GameSession.id == session.id,
+            GameSession.user_id == user.discord_id,
+            GameSession.status.in_([SessionStatus.COMPLETED, SessionStatus.ERROR]),
+            GameSession.deleted_at.is_(None),
+            GameSession.is_flicker.is_(False),
+        )
+        .values(deleted_at=now)
+        .returning(GameSession.id),
+        execution_options={"synchronize_session": False},
+    )
+    if result.scalar_one_or_none() is None:
+        current = await _reloaded_session(db, session, user.discord_id)
+        if current is None or current.deleted_at is not None or current.is_flicker:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        raise _writer_conflict(current)
+    session.deleted_at = now
     await db.commit()
 
 
