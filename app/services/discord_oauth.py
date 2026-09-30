@@ -13,7 +13,27 @@ class DiscordAuthError(Exception):
 
 
 class DiscordUpstreamError(Exception):
-    """Discord unreachable or returned 5xx — maps to HTTP 502."""
+    """Discord unreachable, rate-limited, or returned a body we cannot use — maps to HTTP 502."""
+
+
+def _raise_for_status(resp: httpx.Response, what: str) -> None:
+    """400/401 are a rejected login. Every other non-2xx is Discord's problem.
+
+    A 429 body has no access token. Reading it as success turns the rate
+    limit into DiscordAuthError, and the client retries into the limit.
+    """
+    if 200 <= resp.status_code < 300:
+        return
+    if resp.status_code in (400, 401):
+        raise DiscordAuthError(f"{what} rejected: {resp.text}")
+    raise DiscordUpstreamError(f"{what} returned {resp.status_code}")
+
+
+def _read_json(resp: httpx.Response, what: str):
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise DiscordUpstreamError(f"{what} returned a non-JSON body") from exc
 
 
 async def exchange_code(
@@ -36,14 +56,11 @@ async def exchange_code(
         )
     except httpx.HTTPError as exc:
         raise DiscordUpstreamError(str(exc)) from exc
-    if resp.status_code in (400, 401):
-        raise DiscordAuthError(f"token exchange rejected: {resp.text}")
-    if resp.status_code >= 500:
-        raise DiscordUpstreamError(f"discord token endpoint returned {resp.status_code}")
-    access_token = resp.json().get("access_token")
-    if not access_token:
-        raise DiscordAuthError("no access_token in token response")
-    return str(access_token)
+    _raise_for_status(resp, "token exchange")
+    body = _read_json(resp, "token exchange")
+    if not isinstance(body, dict) or not body.get("access_token"):
+        raise DiscordUpstreamError("token exchange returned no access_token")
+    return str(body["access_token"])
 
 
 async def _get(client: httpx.AsyncClient, url: str, access_token: str) -> httpx.Response:
@@ -51,19 +68,24 @@ async def _get(client: httpx.AsyncClient, url: str, access_token: str) -> httpx.
         resp = await client.get(url, headers={"Authorization": f"Bearer {access_token}"})
     except httpx.HTTPError as exc:
         raise DiscordUpstreamError(str(exc)) from exc
-    if resp.status_code in (400, 401):
-        raise DiscordAuthError(f"discord rejected access token at {url}")
-    if resp.status_code >= 500:
-        raise DiscordUpstreamError(f"discord {url} returned {resp.status_code}")
+    _raise_for_status(resp, f"discord {url}")
     return resp
 
 
 async def fetch_identity(client: httpx.AsyncClient, access_token: str) -> dict:
     resp = await _get(client, f"{DISCORD_API}/users/@me", access_token)
-    body = resp.json()
+    body = _read_json(resp, "discord identity")
+    if not isinstance(body, dict) or "id" not in body or "username" not in body:
+        raise DiscordUpstreamError("discord identity response missing id or username")
     return {"id": str(body["id"]), "username": body["username"]}
 
 
 async def fetch_guilds(client: httpx.AsyncClient, access_token: str) -> set[str]:
     resp = await _get(client, f"{DISCORD_API}/users/@me/guilds", access_token)
-    return {str(g["id"]) for g in resp.json()}
+    body = _read_json(resp, "discord guilds")
+    if not isinstance(body, list):
+        raise DiscordUpstreamError("discord guilds response was not a list")
+    try:
+        return {str(g["id"]) for g in body}
+    except (TypeError, KeyError) as exc:
+        raise DiscordUpstreamError("discord guilds response missing id") from exc
