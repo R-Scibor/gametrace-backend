@@ -96,8 +96,10 @@ async def test_filter_by_release_decade(authed_client, db, user):
     in_2010s = await make_game(db, "Twenty-Fifteen", first_release_date=date(2015, 6, 1))
     in_2000s = await make_game(db, "Oh-Five", first_release_date=date(2005, 6, 1))
     no_date = await make_game(db, "Dateless")
-    for g in (in_2010s, in_2000s, no_date):
-        await make_session(db, user.discord_id, g.id, dt(hours_ago=3), dt(hours_ago=2))
+    for i, g in enumerate((in_2010s, in_2000s, no_date)):
+        await make_session(
+            db, user.discord_id, g.id, dt(hours_ago=3 + i * 2), dt(hours_ago=2 + i * 2)
+        )
 
     resp = await authed_client.get("/api/v1/games?release_decade=2010s")
 
@@ -122,7 +124,7 @@ async def test_out_of_range_release_decade_rejected(authed_client, db, user):
 async def test_sort_by_playtime_desc(authed_client, db, user):
     low = await make_game(db, "Low")
     high = await make_game(db, "High")
-    await make_session(db, user.discord_id, low.id, dt(hours_ago=3), dt(hours_ago=2))    # 3600
+    await make_session(db, user.discord_id, low.id, dt(hours_ago=8), dt(hours_ago=7))    # 3600
     await make_session(db, user.discord_id, high.id, dt(hours_ago=6), dt(hours_ago=2))   # 14400
 
     resp = await authed_client.get("/api/v1/games?sort=playtime")
@@ -134,7 +136,7 @@ async def test_sort_by_playtime_desc(authed_client, db, user):
 async def test_sort_by_playtime_asc(authed_client, db, user):
     low = await make_game(db, "Low")
     high = await make_game(db, "High")
-    await make_session(db, user.discord_id, low.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_session(db, user.discord_id, low.id, dt(hours_ago=8), dt(hours_ago=7))
     await make_session(db, user.discord_id, high.id, dt(hours_ago=6), dt(hours_ago=2))
 
     resp = await authed_client.get("/api/v1/games?sort=playtime&order=asc")
@@ -182,7 +184,7 @@ async def test_default_sort_is_name_asc(authed_client, db, user):
     b = await make_game(db, "Bravo")
     a = await make_game(db, "Alpha")
     await make_session(db, user.discord_id, b.id, dt(hours_ago=3), dt(hours_ago=1))
-    await make_session(db, user.discord_id, a.id, dt(hours_ago=3), dt(hours_ago=2))
+    await make_session(db, user.discord_id, a.id, dt(hours_ago=5), dt(hours_ago=4))
 
     resp = await authed_client.get("/api/v1/games")
 
@@ -269,7 +271,9 @@ async def test_is_ignored_filter_includes_needs_review_stubs(authed_client, db, 
 async def test_is_ignored_filter_pagination(authed_client, db, user):
     for i in range(5):
         game = await make_game(db, f"Hidden {i:02d}")
-        await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+        await make_session(
+            db, user.discord_id, game.id, dt(hours_ago=3 + i * 2), dt(hours_ago=2 + i * 2)
+        )
         await make_pref(db, user.discord_id, game.id, is_ignored=True)
 
     resp = await authed_client.get("/api/v1/games?is_ignored=true&skip=2&limit=2")
@@ -301,8 +305,10 @@ async def test_in_library_false_returns_out_of_library_union(authed_client, db, 
     game_hidden = await make_game(db, "Hidden")
     game_review = await make_game(db, "Review Stub", EnrichmentStatus.NEEDS_REVIEW)
     game_both = await make_game(db, "Ignored Review", EnrichmentStatus.NEEDS_REVIEW)
-    for game in (game_visible, game_hidden, game_review, game_both):
-        await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+    for i, game in enumerate((game_visible, game_hidden, game_review, game_both)):
+        await make_session(
+            db, user.discord_id, game.id, dt(hours_ago=3 + i * 2), dt(hours_ago=2 + i * 2)
+        )
     await make_pref(db, user.discord_id, game_hidden.id, is_ignored=True)
     await make_pref(db, user.discord_id, game_both.id, is_ignored=True)
 
@@ -319,7 +325,9 @@ async def test_in_library_false_returns_out_of_library_union(authed_client, db, 
 async def test_in_library_false_pagination(authed_client, db, user):
     for i in range(4):
         game = await make_game(db, f"Hidden {i:02d}")
-        await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+        await make_session(
+            db, user.discord_id, game.id, dt(hours_ago=3 + i * 2), dt(hours_ago=2 + i * 2)
+        )
         await make_pref(db, user.discord_id, game.id, is_ignored=True)
 
     resp = await authed_client.get("/api/v1/games?in_library=false&skip=1&limit=2")
@@ -349,8 +357,10 @@ async def test_in_library_false_with_status_needs_review(authed_client, db, user
     game_hidden = await make_game(db, "Hidden Enriched")
     game_review = await make_game(db, "Review Stub", EnrichmentStatus.NEEDS_REVIEW)
     game_ignored_review = await make_game(db, "Ignored Review", EnrichmentStatus.NEEDS_REVIEW)
-    for game in (game_hidden, game_review, game_ignored_review):
-        await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+    for i, game in enumerate((game_hidden, game_review, game_ignored_review)):
+        await make_session(
+            db, user.discord_id, game.id, dt(hours_ago=3 + i * 2), dt(hours_ago=2 + i * 2)
+        )
     await make_pref(db, user.discord_id, game_hidden.id, is_ignored=True)
     await make_pref(db, user.discord_id, game_ignored_review.id, is_ignored=True)
 
@@ -403,7 +413,9 @@ async def test_status_filter_needs_review(authed_client, db, user):
 async def test_pagination(authed_client, db, user):
     for i in range(25):
         game = await make_game(db, f"Game {i:02d}")
-        await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+        await make_session(
+            db, user.discord_id, game.id, dt(hours_ago=3 + i * 2), dt(hours_ago=2 + i * 2)
+        )
 
     resp = await authed_client.get("/api/v1/games?skip=20&limit=10")
 
@@ -474,7 +486,9 @@ async def test_search_q_no_match_returns_empty(authed_client, db, user):
 async def test_total_reflects_full_count_not_page(authed_client, db, user):
     for i in range(5):
         game = await make_game(db, f"Title {i:02d}")
-        await make_session(db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=2))
+        await make_session(
+            db, user.discord_id, game.id, dt(hours_ago=3 + i * 2), dt(hours_ago=2 + i * 2)
+        )
 
     resp = await authed_client.get("/api/v1/games?limit=2")
 

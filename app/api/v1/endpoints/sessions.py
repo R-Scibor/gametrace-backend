@@ -1,7 +1,9 @@
 from datetime import UTC, datetime, timedelta
+from typing import NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,6 +22,7 @@ from app.schemas.session import (
 )
 from app.services.library_visibility import library_visible_filter
 from app.services.session_bounds import SessionBoundsError, validate_manual_session_bounds
+from app.services.session_overlap import is_session_overlap
 from app.services.session_visibility import visible_session
 
 router = APIRouter()
@@ -42,6 +45,38 @@ async def _reloaded_session(db: AsyncSession, session: GameSession, user_id: str
         .where(GameSession.id == session_id, GameSession.user_id == user_id)
     )
     return result.scalar_one_or_none()
+
+
+def _overlap_conflict(conflict: GameSession) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "detail": "Session overlaps with an existing session",
+            "conflicting_session": SessionResponse.model_validate(conflict).model_dump(mode="json"),
+        },
+    )
+
+
+async def _overlap_from_exclusion(
+    db: AsyncSession,
+    exc: IntegrityError,
+    user_id: str,
+    start: datetime,
+    end: datetime,
+    exclude_id: int | None = None,
+) -> NoReturn:
+    """Turn a range-exclusion violation into the existing overlap 409.
+
+    Other integrity errors propagate. The session is rolled back first so the
+    follow-up SELECT can run.
+    """
+    if not is_session_overlap(exc):
+        raise exc
+    await db.rollback()
+    conflict = await _check_overlap(db, user_id, start, end, exclude_id=exclude_id)
+    if conflict is None:
+        raise exc
+    raise _overlap_conflict(conflict) from exc
 
 
 def _writer_conflict(current: GameSession) -> HTTPException:
@@ -210,15 +245,10 @@ async def create_session(
     if game is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Game not found")
 
-    conflict = await _check_overlap(db, user.discord_id, start, end)
+    user_id = user.discord_id
+    conflict = await _check_overlap(db, user_id, start, end)
     if conflict is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "detail": "Session overlaps with an existing session",
-                "conflicting_session": SessionResponse.model_validate(conflict).model_dump(mode="json"),
-            },
-        )
+        raise _overlap_conflict(conflict)
 
     duration = int((end - start).total_seconds())
     session = GameSession(
@@ -231,7 +261,10 @@ async def create_session(
         source=SessionSource.MANUAL,
     )
     db.add(session)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await _overlap_from_exclusion(db, exc, user_id, start, end)
     await db.refresh(session)
 
     result = await db.execute(
@@ -285,36 +318,33 @@ async def patch_session(
                 db, user_id, start, end, exclude_id=session_id
             )
             if conflict is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail={
-                        "detail": "Session overlaps with an existing session",
-                        "conflicting_session": SessionResponse.model_validate(conflict).model_dump(mode="json"),
-                    },
-                )
+                raise _overlap_conflict(conflict)
         deleted_match = (
             GameSession.deleted_at.is_(None)
             if session.deleted_at is None
             else GameSession.deleted_at.is_not(None)
         )
         duration = int((end - start).total_seconds())
-        result = await db.execute(
-            update(GameSession)
-            .where(
-                GameSession.id == session.id,
-                GameSession.user_id == user_id,
-                GameSession.status.in_([SessionStatus.COMPLETED, SessionStatus.ERROR]),
-                deleted_match,
+        try:
+            result = await db.execute(
+                update(GameSession)
+                .where(
+                    GameSession.id == session.id,
+                    GameSession.user_id == user_id,
+                    GameSession.status.in_([SessionStatus.COMPLETED, SessionStatus.ERROR]),
+                    deleted_match,
+                )
+                .values(
+                    end_time=end,
+                    duration_seconds=duration,
+                    status=SessionStatus.COMPLETED,
+                    source=SessionSource.MANUAL,
+                )
+                .returning(GameSession.id),
+                execution_options={"synchronize_session": False},
             )
-            .values(
-                end_time=end,
-                duration_seconds=duration,
-                status=SessionStatus.COMPLETED,
-                source=SessionSource.MANUAL,
-            )
-            .returning(GameSession.id),
-            execution_options={"synchronize_session": False},
-        )
+        except IntegrityError as exc:
+            await _overlap_from_exclusion(db, exc, user_id, start, end, exclude_id=session_id)
         if result.scalar_one_or_none() is None:
             current = await _reloaded_session(db, session, user.discord_id)
             if current is None:
@@ -421,16 +451,21 @@ async def restore_session(
             db, user.discord_id, session.start_time, session.end_time, exclude_id=session_id
         )
         if conflict is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "detail": "Session overlaps with an existing session",
-                    "conflicting_session": SessionResponse.model_validate(conflict).model_dump(mode="json"),
-                },
-            )
+            raise _overlap_conflict(conflict)
 
+    user_id = user.discord_id
+    session_id = session.id
+    start = session.start_time
+    end = session.end_time
     session.deleted_at = None
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # An ONGOING row has no end; the exclusion range runs to infinity.
+        overlap_end = end if end is not None else datetime.max.replace(tzinfo=UTC)
+        await _overlap_from_exclusion(
+            db, exc, user_id, start, overlap_end, exclude_id=session_id
+        )
     await db.refresh(session)
     return session
 

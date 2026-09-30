@@ -15,6 +15,7 @@ from app.models.game import EnrichmentStatus, Game, GameAlias
 from app.models.session import GameSession, SessionSource, SessionStatus
 from app.models.user import User
 from app.services.game_review import ensure_inbox_for_user
+from app.services.session_overlap import is_session_overlap
 
 logger = logging.getLogger(__name__)
 
@@ -120,17 +121,20 @@ async def start_session(db: AsyncSession, user_id: str, game_id: int) -> GameSes
         await ensure_inbox_for_user(db, game_id, user_id)
     try:
         await db.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         await db.rollback()
         existing = await get_ongoing_session(db, user_id)
-        if existing is None:
-            raise
-        logger.warning(
-            "ONGOING insert raced for user=%s; returning session_id=%d",
-            user_id,
-            existing.id,
-        )
-        return existing
+        if existing is not None:
+            logger.warning(
+                "ONGOING insert raced for user=%s; returning session_id=%d",
+                user_id,
+                existing.id,
+            )
+            return existing
+        if is_session_overlap(exc):
+            logger.info("Session start skipped user=%s; this instant is already covered", user_id)
+            return None
+        raise
     await db.refresh(session)
     logger.info("Session STARTED user=%s game_id=%d session_id=%d", user_id, game_id, session.id)
     return session
@@ -177,28 +181,45 @@ async def start_or_resume_session(db: AsyncSession, user_id: str, game_id: int) 
     """
     candidate = await find_stitch_candidate(db, user_id, game_id)
     if candidate is not None:
-        claimed = await _claim(
-            db,
-            update(GameSession)
-            .where(
-                GameSession.id == candidate.id,
-                GameSession.status == SessionStatus.COMPLETED,
-                GameSession.source == SessionSource.BOT,
-                GameSession.deleted_at.is_(None),
+        # Rollback below expires the identity map; keep the id as a plain int.
+        candidate_id = candidate.id
+        try:
+            claimed = await _claim(
+                db,
+                update(GameSession)
+                .where(
+                    GameSession.id == candidate_id,
+                    GameSession.status == SessionStatus.COMPLETED,
+                    GameSession.source == SessionSource.BOT,
+                    GameSession.deleted_at.is_(None),
+                )
+                .values(
+                    status=SessionStatus.ONGOING,
+                    end_time=None,
+                    duration_seconds=None,
+                    is_flicker=False,
+                ),
             )
-            .values(
-                status=SessionStatus.ONGOING,
-                end_time=None,
-                duration_seconds=None,
-                is_flicker=False,
-            ),
-        )
-        if claimed:
-            await db.commit()
-            await db.refresh(candidate)
-            logger.info("Session RESUMED user=%s game_id=%d session_id=%d", user_id, game_id, candidate.id)
-            return candidate
-        logger.info("Session resume skipped session_id=%d; row changed", candidate.id)
+        except IntegrityError as exc:
+            await db.rollback()
+            if not is_session_overlap(exc):
+                raise
+            logger.info(
+                "Session resume skipped session_id=%d; range already covered",
+                candidate_id,
+            )
+        else:
+            if claimed:
+                await db.commit()
+                await db.refresh(candidate)
+                logger.info(
+                    "Session RESUMED user=%s game_id=%d session_id=%d",
+                    user_id,
+                    game_id,
+                    candidate_id,
+                )
+                return candidate
+            logger.info("Session resume skipped session_id=%d; row changed", candidate_id)
     return await start_session(db, user_id, game_id)
 
 

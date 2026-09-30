@@ -2,8 +2,10 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func, text
+from sqlalchemy.dialects.postgresql import ExcludeConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.sql import column
 
 from app.core.database import Base
 
@@ -31,6 +33,23 @@ class GameSession(Base):
             "user_id",
             unique=True,
             postgresql_where="status = 'ONGOING' AND deleted_at IS NULL",
+        ),
+        ExcludeConstraint(
+            (column("user_id"), "="),
+            (
+                func.tstzrange(
+                    column("start_time"),
+                    func.coalesce(column("end_time"), text("'infinity'::timestamptz")),
+                    text("'[)'"),
+                ),
+                "&&",
+            ),
+            name="excl_game_sessions_no_overlap",
+            using="gist",
+            where=text(
+                "deleted_at IS NULL AND is_flicker = false "
+                "AND status IN ('ONGOING', 'COMPLETED')"
+            ),
         ),
     )
 

@@ -121,6 +121,8 @@ The 7-day figure is the grace period, not the exact purge time: the sweeper that
 
 Flicker sessions (`is_flicker=true`) are excluded from `GET /sessions` (list and detail), all stats aggregates, `GET /games`, `GET /games/resolve`, the voice-context library candidates, and overlap validation — exactly like `ERROR` and soft-deleted rows. `GET /sessions/{id}`, `PATCH /sessions/{id}`, and `DELETE /sessions/{id}` return `404` for a flicker row. `is_flicker` is not exposed in `SessionResponse`.
 
+A race that gets past the overlap `SELECT` on create, patch, or restore still returns that same nested 409. Postgres rejects the write with `excl_game_sessions_no_overlap`, and the handler fills `conflicting_session` from one follow-up `SELECT`.
+
 Session state machine — see the [README session state machine](../README.md#session-state-machine).
 
 ## Games

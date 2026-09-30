@@ -116,6 +116,7 @@ The core table. State machine described in the [README](../README.md#session-sta
 
 - `ix_game_sessions_user_id_start_time` — composite btree on `(user_id, start_time)`. Used by overlap validation in `POST/PATCH /sessions` and by `/stats/summary` window aggregation. Migration `0004`.
 - `ix_game_sessions_deleted_at_partial` — partial btree on `deleted_at WHERE deleted_at IS NOT NULL`. Used by the hard-delete sweeper. Migration `0005`.
+- `excl_game_sessions_no_overlap` — gist exclusion on `user_id` and `tstzrange(start_time, COALESCE(end_time, 'infinity'), '[)')` for live, non-flicker `ONGOING` and `COMPLETED` rows. Half-open, so two sessions that only meet at an endpoint are allowed. `btree_gist` supplies `=` for `user_id`. Migration `0022`.
 
 **State-machine transitions (soft-delete layer):**
 
@@ -126,6 +127,7 @@ The core table. State machine described in the [README](../README.md#session-sta
 **Invariants:**
 
 - Only one `ONGOING` session per user at any time. Enforced by partial unique index `uq_game_sessions_user_ongoing` plus per-user Postgres advisory locks in the bot.
+- Live, non-flicker `ONGOING` and `COMPLETED` ranges for one user do not overlap (`excl_game_sessions_no_overlap`). `ERROR`, flicker, and soft-deleted rows may. A create, patch, or restore that loses the race returns the same nested 409 as the application check.
 - `ERROR` sessions are excluded from all aggregates (`/stats/*`, weekly report) until resolved.
 - `ONGOING` sessions cannot be soft-deleted directly — only the bot owns those rows.
 - `is_flicker=true` rows are excluded at every SELECT layer (sessions, stats, games, resolve, voice context, overlap validation) — they never surface to the user or cause 409s.
@@ -272,6 +274,7 @@ The only "hard" link is `game_sessions.game_id` — no cascade because games can
 | `0019_account_deletion_events.py` | Adds append-only `account_deletion_events` Art. 17 audit table (`discord_id`, `event`, `created_at`, `purge_at`) with `ck_account_deletion_events_event` and index `ix_account_deletion_events_discord_id_created_at`. No FK to `users`. |
 | `0020_demo_account.py` | Adds `demo_seed_sessions` and `demo_seed_preferences` (see above), and inserts the reserved demo `users` row (`discord_id='1'`, `ON CONFLICT DO NOTHING`). The demo identity literals are duplicated in the migration rather than imported from `app.services.demo`, since migrations must not depend on app code that can change after the migration is frozen in history. |
 | `0021_drop_username_unique.py` | Drops the unique index on `users.username` and recreates it non-unique. Identity is `discord_id`; a Discord rename onto a name another account already holds previously failed that account's login. `downgrade()` restores the unique form and fails if duplicates have accumulated. |
+| `0022_session_overlap_exclusion.py` | Adds `btree_gist` and `excl_game_sessions_no_overlap`. Before the constraint, walks live non-flicker `ONGOING` and `COMPLETED` rows per user in start order. A later row that sticks out past an earlier one keeps the tail and moves `start_time` forward. A later row with nothing left outside the earlier range becomes `ERROR`, with a reconciliation note appended. `downgrade()` drops the constraint and does not restore those rows or drop the extension. |
 
 ## Scheduled tasks (Celery Beat)
 

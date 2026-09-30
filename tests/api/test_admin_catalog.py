@@ -242,13 +242,21 @@ async def test_sort_sessions_desc_orders_by_count_then_id_asc(admin_client, db, 
     if low_id_high_count.id > high_id_high_count.id:
         low_id_high_count, high_id_high_count = high_id_high_count, low_id_high_count
 
-    for _ in range(2):
+    for i in range(2):
         await make_session(
-            db, user.discord_id, low_id_high_count.id, dt(hours_ago=4), dt(hours_ago=3)
+            db,
+            user.discord_id,
+            low_id_high_count.id,
+            dt(hours_ago=4 + i * 2),
+            dt(hours_ago=3 + i * 2),
         )
-    for _ in range(2):
+    for i in range(2):
         await make_session(
-            db, user.discord_id, high_id_high_count.id, dt(hours_ago=6), dt(hours_ago=5)
+            db,
+            user.discord_id,
+            high_id_high_count.id,
+            dt(hours_ago=10 + i * 2),
+            dt(hours_ago=9 + i * 2),
         )
 
     resp = await admin_client.get(URL, params={"sort": "sessions_desc"})
