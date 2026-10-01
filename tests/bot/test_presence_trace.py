@@ -25,7 +25,7 @@ async def test_presence_change_binds_trace_id():
     after = _member("Celeste")
 
     fake_game = SimpleNamespace(id=7)
-    with patch.object(bot_main, "_get_game_name", side_effect=[None, "Celeste"]), \
+    with patch.object(bot_main, "activity_name", side_effect=[None, "Celeste"]), \
          patch.object(bot_main, "_queue_enrichment", side_effect=fake_queue), \
          patch.object(bot_main, "AsyncSessionLocal") as sess, \
          patch("app.bot.session_manager.get_user_if_tracked",

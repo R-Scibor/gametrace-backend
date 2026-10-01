@@ -8,9 +8,10 @@ from unittest.mock import MagicMock
 
 import discord
 
-from app.bot.self_healing import _find_member, _get_game_name
+from app.bot.activity import activity_name
+from app.bot.self_healing import _find_member
 
-# ── _get_game_name ────────────────────────────────────────────────────────────
+# ── activity_name ─────────────────────────────────────────────────────────────
 
 def _member_with(*activities) -> MagicMock:
     m = MagicMock(spec=discord.Member)
@@ -20,13 +21,13 @@ def _member_with(*activities) -> MagicMock:
 
 def test_discord_game_activity():
     member = _member_with(discord.Game(name="Minecraft"))
-    assert _get_game_name(member) == "Minecraft"
+    assert activity_name(member) == "Minecraft"
 
 
 def test_playing_type_activity():
     activity = discord.Activity(type=discord.ActivityType.playing, name="Hades")
     member = _member_with(activity)
-    assert _get_game_name(member) == "Hades"
+    assert activity_name(member) == "Hades"
 
 
 def test_non_game_activities():
@@ -34,12 +35,12 @@ def test_non_game_activities():
         discord.Streaming(name="Just Chatting", url="https://twitch.tv/x"),
         discord.Activity(type=discord.ActivityType.listening, name="Spotify"),
     )
-    assert _get_game_name(member) is None
+    assert activity_name(member) is None
 
 
 def test_empty_activities():
     member = _member_with()
-    assert _get_game_name(member) is None
+    assert activity_name(member) is None
 
 
 def test_first_game_activity_wins():
@@ -47,7 +48,15 @@ def test_first_game_activity_wins():
         discord.Activity(type=discord.ActivityType.listening, name="Spotify"),
         discord.Game(name="Hades"),
     )
-    assert _get_game_name(member) == "Hades"
+    assert activity_name(member) == "Hades"
+
+
+def test_there_is_one_activity_name_helper():
+    import app.bot.main as main
+    import app.bot.self_healing as healing
+
+    assert not hasattr(main, "_get_game_name")
+    assert not hasattr(healing, "_get_game_name")
 
 
 # ── _find_member ──────────────────────────────────────────────────────────────

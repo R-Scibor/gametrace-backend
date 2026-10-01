@@ -45,6 +45,18 @@ async def get_user_if_tracked(db: AsyncSession, discord_id: str) -> User | None:
     return user
 
 
+async def resolve_alias(db: AsyncSession, process_name: str) -> int | None:
+    """Return the game id for this exact Discord process name, or None.
+
+    The match is case-sensitive. A second alias of the same game returns that
+    game's id. A miss does not insert a stub.
+    """
+    result = await db.execute(
+        select(GameAlias.game_id).where(GameAlias.discord_process_name == process_name)
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_or_create_game(db: AsyncSession, process_name: str) -> tuple[Game, bool]:
     """
     Look up a game by Discord process name via game_aliases.

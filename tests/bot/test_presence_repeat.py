@@ -29,7 +29,7 @@ async def _run_presence(*, ongoing_game_id, resolved_game_id, error_session, sta
     ongoing = SimpleNamespace(id=99, game_id=ongoing_game_id)
     resolved_game = SimpleNamespace(id=resolved_game_id)
 
-    with patch.object(bot_main, "_get_game_name", side_effect=[None, "ROBLOX"]), \
+    with patch.object(bot_main, "activity_name", side_effect=[None, "ROBLOX"]), \
          patch.object(bot_main, "_queue_enrichment"), \
          patch.object(bot_main, "AsyncSessionLocal") as sess, \
          patch("app.bot.session_manager.get_user_if_tracked",

@@ -15,6 +15,7 @@ import discord
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.activity import activity_name
 from app.bot.session_lock import user_session_lock
 from app.bot.session_manager import error_session, get_or_create_game, start_session
 from app.models.session import GameSession, SessionStatus
@@ -23,19 +24,6 @@ from app.models.user import User
 logger = logging.getLogger(__name__)
 
 STALE_SESSION_HOURS = 12
-
-
-def _get_game_name(member: discord.Member) -> str | None:
-    """Extract the currently played game name from a member's activities."""
-    for activity in member.activities:
-        if isinstance(activity, discord.Game):
-            return activity.name
-        if (
-            isinstance(activity, discord.Activity)
-            and activity.type == discord.ActivityType.playing
-        ):
-            return activity.name
-    return None
 
 
 def _find_member(guilds: Sequence[discord.Guild], discord_id: str) -> discord.Member | None:
@@ -82,7 +70,7 @@ async def run_self_healing(db: AsyncSession, guilds: Sequence[discord.Guild]) ->
                 )
                 continue
 
-            current_game = _get_game_name(member)
+            current_game = activity_name(member)
 
             # Fetch the game name that was recorded for this session
             from app.models.game import Game  # avoid circular at module level

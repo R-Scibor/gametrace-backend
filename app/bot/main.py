@@ -13,6 +13,7 @@ from discord import app_commands
 from discord.ext import tasks
 
 from app.bot import layout, replies
+from app.bot.activity import activity_name
 from app.bot.panel import PERSISTENT_VIEWS, PanelView
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
@@ -46,19 +47,6 @@ tree = app_commands.CommandTree(bot)
 # needless repeated work — guard it the same way `_heartbeat_loop.is_running()`
 # guards the heartbeat loop below.
 _views_registered = False
-
-
-def _get_game_name(member: discord.Member) -> str | None:
-    """Extract the currently played game name from a member's activities."""
-    for activity in member.activities:
-        if isinstance(activity, discord.Game):
-            return activity.name
-        if (
-            isinstance(activity, discord.Activity)
-            and activity.type == discord.ActivityType.playing
-        ):
-            return activity.name
-    return None
 
 
 @bot.event
@@ -240,8 +228,8 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
     if after.bot:
         return
 
-    before_game = _get_game_name(before)
-    after_game = _get_game_name(after)
+    before_game = activity_name(before)
+    after_game = activity_name(after)
 
     # No change in game status — nothing to do
     if before_game == after_game:

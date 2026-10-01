@@ -15,6 +15,7 @@ from app.bot.session_manager import (
     get_ongoing_session,
     get_or_create_game,
     get_user_if_tracked,
+    resolve_alias,
     start_session,
 )
 from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
@@ -499,3 +500,15 @@ async def test_start_or_resume_returns_none_when_user_is_scheduled_for_deletion(
     assert result is None
     rows = await db.execute(select(GameSession).where(GameSession.user_id == user.discord_id))
     assert rows.scalars().all() == []
+
+
+async def test_resolve_alias_matches_the_exact_string(db):
+    game = await make_game(db, "Hades")
+    await make_alias(db, game.id, "Hades")
+    await make_alias(db, game.id, "Hades.exe")
+
+    assert await resolve_alias(db, "Hades.exe") == game.id
+    assert await resolve_alias(db, "hades") is None
+    assert await resolve_alias(db, "Missing") is None
+    games = (await db.execute(select(Game))).scalars().all()
+    assert [row.id for row in games] == [game.id]
