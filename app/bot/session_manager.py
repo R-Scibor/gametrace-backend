@@ -67,8 +67,7 @@ async def get_or_create_game(db: AsyncSession, process_name: str) -> tuple[Game,
 
     ``created`` is True only when this call inserted the alias. A concurrent
     insert rolls this call's stub back and returns the owner's row.
-    The created stub is committed here so the current presence and startup
-    callers, which do not commit this write themselves, still persist it.
+    The caller commits the stub. This function only flushes.
     """
     game_id = await resolve_alias(db, process_name)
     if game_id is not None:
@@ -91,21 +90,23 @@ async def get_or_create_game(db: AsyncSession, process_name: str) -> tuple[Game,
     except _AliasOwned:
         owner = await db.get(Game, owner_id) if owner_id is not None else None
         if owner is None:
-            resolved = await resolve_alias(db, process_name)
-            owner = await db.get(Game, resolved) if resolved is not None else None
-        if owner is None:
             raise
         return owner, False
 
     assert created is not None
     logger.info("Created stub game %r (id=%d)", process_name, created.id)
-    await db.commit()
     return created, True
 
 
-async def get_ongoing_session(db: AsyncSession, user_id: str) -> GameSession | None:
-    """Return the current ONGOING session for a user, or None."""
-    result = await db.execute(
+async def get_ongoing_session(
+    db: AsyncSession, user_id: str, *, populate_existing: bool = False
+) -> GameSession | None:
+    """Return the current ONGOING session for a user, or None.
+
+    ``populate_existing`` re-reads a row already in the identity map. Reconcile
+    passes it after a rollback, which expires every loaded instance.
+    """
+    stmt = (
         select(GameSession)
         .where(
             GameSession.user_id == user_id,
@@ -114,6 +115,9 @@ async def get_ongoing_session(db: AsyncSession, user_id: str) -> GameSession | N
         )
         .order_by(GameSession.start_time.desc(), GameSession.id.desc())
     )
+    if populate_existing:
+        stmt = stmt.execution_options(populate_existing=True)
+    result = await db.execute(stmt)
     sessions = list(result.scalars().all())
     if len(sessions) > 1:
         logger.warning(

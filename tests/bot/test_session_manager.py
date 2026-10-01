@@ -605,3 +605,13 @@ async def test_concurrent_get_or_create_shares_one_row():
             await session.execute(delete(Game).where(Game.primary_name == name))
             await session.commit()
         await engine.dispose()
+
+
+async def test_get_or_create_flush_is_undone_by_rollback(db):
+    game, created = await get_or_create_game(db, "BrandNewProcess")
+    game_id = game.id
+    assert created is True
+
+    await db.rollback()
+
+    assert await db.get(Game, game_id) is None
