@@ -154,10 +154,11 @@ Required permissions in that channel:
 
 | `before` activity | `after` activity | Action |
 |---|---|---|
-| game | none | `complete_session` — set `end_time = NOW()`, `status = COMPLETED` |
-| none | game | if the current `ONGOING` is already this game, leave it running (spurious repeat event); otherwise `start_session` for the new game, erroring any stale ONGOING for a *different* game first |
-| game A | game B | `complete_session` for A, `start_session` for B |
-| same | same | no-op (filtered before reaching the handler) |
+| game | none | No open row: no-op. Open row's `game_id` matches the before alias: `complete_session`. Open row exists and does not match: `ERROR`, `end_time` stays null, note `Presence: open session did not match activity {before!r}.` |
+| none | game | Open row is already that alias's `game_id`: leave it. Otherwise `ERROR` a different open row with the presence note naming the after string, then `start_or_resume_session`. |
+| game A | game B, same `game_id` | Open row is that game: no-op. No open row: `start_or_resume_session` for that game. |
+| game A | game B, different `game_id` | Open row matches A: `complete_session`, then `start_or_resume_session` for B. Open row exists and does not match A: `ERROR` with the presence note naming A, then start B. No open row: start B and do not call `error_session`. |
+| same string | same string | no-op, filtered before the lock |
 
 Only one `ONGOING` session per user is allowed at a time — this is invariant the handler relies on.
 
@@ -191,24 +192,29 @@ On `on_ready`, the bot writes `bot:started_at` to Redis (Unix timestamp). A back
 
 ## Self-Healing
 
-`app/bot/self_healing.py`. Runs once on `on_ready` (after slash-command sync, before the bot starts processing presence events).
+`app/bot/self_healing.py`. The pass runs once per process, from `_startup_reconciliation_done` in `app/bot/main.py`, after the first successful `on_ready`. A raised pass leaves the flag false. A gateway reconnect does not run it. `_views_registered` is only the view-registration guard. Command sync, `bot:started_at`, and the heartbeat still run on every `on_ready`.
 
-Bot downtime — restarts, deploys, container kills, network blips — leaves `ONGOING` rows in the database with no corresponding live presence event to close them. Self-Healing reconciles every such row:
+Bot downtime — restarts, deploys, container kills, network blips — leaves `ONGOING` rows in the database with no corresponding live presence event to close them. Self-Healing reconciles every such row. The order below is after the re-read inside the lock:
 
 ```
-For each ONGOING session:
-  1. Find the user in any guild the bot is in.
-     • Not found → ERROR ("user not found in any guild after bot restart")
-
-  2. Check session age.
-     • NOW() - start_time > 12h → ERROR ("exceeded 12h threshold")
-       (Catches sessions left running through long outages or forgotten games.)
-
-  3. Compare current presence to session's recorded game.
-     • Same game → keep ONGOING, do nothing
-       (This is the goal: a 30-second container restart should not fragment a real play session.)
-     • Different game → ERROR old session ("switched from X to Y"), start fresh ONGOING for the new game
-     • Not playing → ERROR ("no longer in-game")
+For each source=BOT, status=ONGOING, deleted_at IS NULL session:
+  1. No user row, or purge_at is set → ERROR ("account scheduled for deletion").
+     Do not start a session, including when the activity still matches.
+  2. Member not in any guild → ERROR ("user not found in any guild after bot restart").
+     This wins over the 12-hour check.
+  3. The activity's alias resolves to the open game_id → keep ONGOING, including
+     when the session is older than 12 hours. No note. No second row.
+     Same game means that game_id, not games.primary_name. A second alias matches.
+     The comparison is case-sensitive.
+  4. The activity is set and does not resolve to the open game_id → ERROR with
+     "switched from {primary_name} to {activity}", end_time stays null, then
+     start_session for the new name. This path does not stitch. Age does not
+     matter. primary_name is only the repair-screen label; a missing game row
+     uses "unknown".
+  5. Not playing, and NOW() - start_time > 12h → ERROR ("exceeded 12h threshold").
+     No new row. Age is start_time.astimezone(UTC) against one clock taken at
+     the start of the pass.
+  6. Not playing, within 12h → ERROR ("no longer in-game").
 ```
 
 Sessions transitioned to `ERROR` are surfaced to the user via the Dashboard banner (`pending_errors` in `/stats/dashboard` and `/stats/summary`). The user resolves them by either supplying an `end_time` (`PATCH /sessions/{id}` → `COMPLETED`) or discarding them (`DELETE /api/v1/sessions/{id}` → soft-deleted). PATCH is also bound by the 48h duration cap and the 5-minute future grace. A client that always sends `end_time=now` will 422 when `now - start_time > 48h`; trash the row instead.
@@ -220,7 +226,7 @@ The 12h ceiling is intentionally generous — it's a backstop for "user fell asl
 - **No graceful shutdown of `ONGOING` on bot stop.** A bot restart that closes sessions on the way down would split one continuous play session into two whenever the container redeploys — which it does often. Leaving ONGOING alone and reconciling on startup gives seamless continuation in the common case.
 - **`notes` is system-owned.** Self-Healing writes the human-readable reason (`"switched from X to Y"`, `"no longer in-game"`, `"12h threshold"`) into `game_sessions.notes`. The frontend surfaces this read-only in the Napraw/Odrzuć flow so the user knows why a session needs attention.
 - **`source=BOT` distinction.** Manual sessions (`source=MANUAL`) are written by the API, skip the state machine, and land directly as `COMPLETED`. Self-Healing only touches `source=BOT, status=ONGOING`.
-- **Accounts scheduled for deletion never get a new `ONGOING` session.** Self-Healing never calls `get_user_if_tracked`, so it needs its own check: it joins `users` on each `ONGOING` row and, on the switched-game branch, still errors the stale session but skips `start_session` when that user's `purge_at` is set. This closes a race the presence gate alone can't: a presence event already in flight when a deletion is scheduled can leave an `ONGOING` session behind, and a later bot restart would otherwise reopen it as a fresh session for an account queued for erasure.
+- **Accounts scheduled for deletion never get a new `ONGOING` session.** Self-Healing never calls `get_user_if_tracked`, so it needs its own check. That check is first, for every startup row, including a matching activity: no user row, or `purge_at` set, marks the row `ERROR` ("account scheduled for deletion") and does not start a session. This closes a race the presence gate alone can't: a presence event already in flight when a deletion is scheduled can leave an `ONGOING` session behind, and a later bot restart would otherwise reopen it as a fresh session for an account queued for erasure.
 
 ## Failure modes worth knowing
 
@@ -228,7 +234,7 @@ The 12h ceiling is intentionally generous — it's a backstop for "user fell asl
 |---|---|
 | Discord rate-limits the bot | `discord.py` handles backoff internally; presence events queue up and replay |
 | Database briefly unavailable | The handler raises and `discord.py` swallows it — the missed presence change is lost. Next restart's Self-Healing catches stuck `ONGOING` rows. |
-| Celery / Redis down at session start | Enrichment task fails to enqueue; the session is still written. Game stays `enrichment_status=PENDING` until the next presence event for that game (which retries the enqueue). |
+| Celery / Redis down at session start | Enrichment task fails to enqueue; the session is still written. The session stays written; the game stays `PENDING` until the next event that commits a session for that game while it is still `PENDING`. A stop does not enqueue. A startup keep does not enqueue. `ENRICHED` and `NEEDS_REVIEW` are not enqueued. The task id `enrich_game_{id}` collapses duplicates. |
 | User leaves all guilds the bot is in | Their `ONGOING` session can no longer be reconciled; on next restart Self-Healing marks it `ERROR` with "user not found". |
 | Discord rich-presence flicker | Handled by stitch-resume + flicker suppression (see above). Short BOT sessions are flagged `is_flicker=true` at close; if the same game resumes within `SESSION_STITCH_WINDOW_SECONDS`, the session is reopened and the flag is cleared. |
 | `LINK_CODE_SECRET` unset | `/login` replies with an error message; `POST /auth/link` returns `503`. |
