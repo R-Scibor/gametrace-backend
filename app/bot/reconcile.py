@@ -29,11 +29,6 @@ logger = logging.getLogger(__name__)
 
 STALE_SESSION_HOURS = 12
 
-
-class _NoStart(Exception):
-    """start returned None. Roll back the stub savepoint and do not enqueue."""
-
-
 _SCHEDULED_NOTE = "Self-Healing: account scheduled for deletion."
 _MISSING_MEMBER_NOTE = "Self-Healing: user not found in any guild after bot restart."
 _IDLE_NOTE = "Self-Healing: bot restarted, player is no longer in-game."
@@ -70,26 +65,20 @@ async def _start_and_commit(
     *,
     startup: bool,
 ) -> None:
-    # Session.rollback() expires every identity-map object. The stub is already
-    # released from get_or_create_game's savepoint, so it lives in this one.
-    # A None start rolls that savepoint back. IntegrityError still rolls the
-    # whole session back and re-raises, and nothing is enqueued either way.
+    game, _created = await get_or_create_game(db, process_name)
+    game_id = game.id
+    pending = game.enrichment_status == EnrichmentStatus.PENDING
     try:
-        async with db.begin_nested():
-            game, _created = await get_or_create_game(db, process_name)
-            game_id = game.id
-            pending = game.enrichment_status == EnrichmentStatus.PENDING
-            if startup:
-                started = await start_session(db, user_id, game_id)
-            else:
-                started = await start_or_resume_session(db, user_id, game_id)
-            if started is None:
-                raise _NoStart()
-    except _NoStart:
-        return
+        if startup:
+            started = await start_session(db, user_id, game_id)
+        else:
+            started = await start_or_resume_session(db, user_id, game_id)
     except IntegrityError:
         await db.rollback()
         raise
+    if started is None:
+        await db.rollback()
+        return
     await db.commit()
     if pending:
         _enqueue(game_id)

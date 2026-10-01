@@ -531,16 +531,17 @@ async def test_none_from_start_rolls_back_the_stub_and_does_not_enqueue(db, monk
         await db.execute(select(func.count()).select_from(Game))
     ).scalar_one()
 
+    user_id = user.discord_id
     await reconcile_user(
-        db, user.discord_id, before_name=None, after_name="BrandNew", gap=False
+        db, user_id, before_name=None, after_name="BrandNew", gap=False
     )
 
     after = (
         await db.execute(select(func.count()).select_from(Game))
     ).scalar_one()
     assert after == before
-    assert await _sessions(db, user.discord_id) != []
-    assert all(row.status != SessionStatus.ONGOING for row in await _sessions(db, user.discord_id))
+    assert await _sessions(db, user_id) != []
+    assert all(row.status != SessionStatus.ONGOING for row in await _sessions(db, user_id))
     assert queued == []
 
 
