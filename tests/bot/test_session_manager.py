@@ -512,3 +512,64 @@ async def test_resolve_alias_matches_the_exact_string(db):
     assert await resolve_alias(db, "Missing") is None
     games = (await db.execute(select(Game))).scalars().all()
     assert [row.id for row in games] == [game.id]
+
+
+async def test_get_or_create_conflict_returns_the_owner_and_drops_the_stub(db, monkeypatch):
+    owner = await make_game(db, "Hades")
+    await make_alias(db, owner.id, "Hades.exe")
+    await db.commit()
+
+    async def miss(_db, _name):
+        return None
+
+    monkeypatch.setattr("app.bot.session_manager.resolve_alias", miss)
+
+    game, created = await get_or_create_game(db, "Hades.exe")
+
+    assert created is False
+    assert game.id == owner.id
+    names = (await db.execute(select(Game.primary_name))).scalars().all()
+    assert names == ["Hades"]
+
+
+async def test_concurrent_get_or_create_shares_one_row():
+    import asyncio
+    from uuid import uuid4
+
+    from sqlalchemy import delete
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from app.core.config import settings
+
+    name = f"race-{uuid4()}"
+    url = settings.database_url.replace("/gametrace_db", "/gametrace_test")
+    engine = create_async_engine(url, poolclass=NullPool)
+
+    async def once() -> int:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            game, _created = await get_or_create_game(session, name)
+            await session.commit()
+            return game.id
+
+    try:
+        first, second = await asyncio.gather(once(), once())
+        assert first == second
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            games = (
+                await session.execute(select(Game).where(Game.primary_name == name))
+            ).scalars().all()
+            aliases = (
+                await session.execute(
+                    select(GameAlias).where(GameAlias.discord_process_name == name)
+                )
+            ).scalars().all()
+            assert len(games) == 1
+            assert len(aliases) == 1
+            assert games[0].id == first
+    finally:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            await session.execute(delete(GameAlias).where(GameAlias.discord_process_name == name))
+            await session.execute(delete(Game).where(Game.primary_name == name))
+            await session.commit()
+        await engine.dispose()

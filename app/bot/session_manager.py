@@ -14,10 +14,15 @@ from app.bot.flicker_policy import find_stitch_candidate, is_short_flicker
 from app.models.game import EnrichmentStatus, Game, GameAlias
 from app.models.session import GameSession, SessionSource, SessionStatus
 from app.models.user import User
+from app.services.game_aliases import AliasResult, add_alias
 from app.services.game_review import ensure_inbox_for_user
 from app.services.session_overlap import is_session_overlap
 
 logger = logging.getLogger(__name__)
+
+
+class _AliasOwned(Exception):
+    """The process name already belongs to a game. Roll back the new stub."""
 
 
 async def _claim(db: AsyncSession, stmt: Update) -> bool:
@@ -58,35 +63,44 @@ async def resolve_alias(db: AsyncSession, process_name: str) -> int | None:
 
 
 async def get_or_create_game(db: AsyncSession, process_name: str) -> tuple[Game, bool]:
-    """
-    Look up a game by Discord process name via game_aliases.
-    If not found, create a stub Game + GameAlias.
+    """Look up a game by Discord process name. Insert one stub on a miss.
 
-    Returns (game, created) where created=True means a new stub was inserted.
+    ``created`` is True only when this call inserted the alias. A concurrent
+    insert rolls this call's stub back and returns the owner's row.
+    The created stub is committed here so the current presence and startup
+    callers, which do not commit this write themselves, still persist it.
     """
-    result = await db.execute(
-        select(GameAlias).where(GameAlias.discord_process_name == process_name)
-    )
-    alias = result.scalar_one_or_none()
-
-    if alias:
-        game = await db.get(Game, alias.game_id)
-        # The alias row's FK guarantees its game exists.
+    game_id = await resolve_alias(db, process_name)
+    if game_id is not None:
+        game = await db.get(Game, game_id)
         assert game is not None
         return game, False
 
-    # Create stub game + alias
-    game = Game(primary_name=process_name)
-    db.add(game)
-    await db.flush()  # get game.id without full commit
+    owner_id: int | None = None
+    created: Game | None = None
+    try:
+        async with db.begin_nested():
+            game = Game(primary_name=process_name)
+            db.add(game)
+            await db.flush()
+            result, found_owner = await add_alias(db, game.id, process_name)
+            if result is not AliasResult.CREATED:
+                owner_id = found_owner
+                raise _AliasOwned()
+            created = game
+    except _AliasOwned:
+        owner = await db.get(Game, owner_id) if owner_id is not None else None
+        if owner is None:
+            resolved = await resolve_alias(db, process_name)
+            owner = await db.get(Game, resolved) if resolved is not None else None
+        if owner is None:
+            raise
+        return owner, False
 
-    alias = GameAlias(game_id=game.id, discord_process_name=process_name)
-    db.add(alias)
+    assert created is not None
+    logger.info("Created stub game %r (id=%d)", process_name, created.id)
     await db.commit()
-    await db.refresh(game)
-
-    logger.info("Created stub game %r (id=%d)", process_name, game.id)
-    return game, True
+    return created, True
 
 
 async def get_ongoing_session(db: AsyncSession, user_id: str) -> GameSession | None:
