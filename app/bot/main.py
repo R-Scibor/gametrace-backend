@@ -262,6 +262,7 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
                     # Game closed — complete the ongoing session
                     if ongoing:
                         await complete_session(db, ongoing)
+                        await db.commit()
 
                 elif not before_game and after_game:
                     # Game started. Discord sometimes redelivers a start with an
@@ -280,7 +281,9 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
                                 ongoing,
                                 f"Self-Healing: unexpected ONGOING session when new game {after_game!r} started.",
                             )
+                            await db.commit()
                         await start_or_resume_session(db, discord_id, game.id)
+                        await db.commit()
                         if created:
                             _queue_enrichment(game.id)
 
@@ -288,8 +291,10 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
                     # Switched game — complete old, start new
                     if ongoing:
                         await complete_session(db, ongoing)
+                        await db.commit()
                     game, created = await get_or_create_game(db, after_game)
                     await start_or_resume_session(db, discord_id, game.id)
+                    await db.commit()
                     if created:
                         _queue_enrichment(game.id)
 

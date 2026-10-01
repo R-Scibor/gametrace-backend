@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.bot.session_manager import start_session
+from app.models.game import Game
 from app.models.session import GameSession, SessionSource, SessionStatus
 from tests.factories import dt, make_game, make_session, make_user
 
@@ -125,3 +126,26 @@ async def test_start_or_resume_does_not_reopen_into_a_covered_instant(db):
     await db.refresh(candidate)
     assert candidate.status == SessionStatus.COMPLETED
     assert candidate.end_time is not None
+
+
+async def test_start_session_overlap_none_keeps_an_outer_stub(db):
+    user = await make_user(db)
+    game = await make_game(db)
+    await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        dt(hours_ago=1),
+        dt(hours_from_now=1),
+        source=SessionSource.MANUAL,
+    )
+    await db.commit()
+    stub = Game(primary_name="kept-stub")
+    db.add(stub)
+    await db.flush()
+    stub_id = stub.id
+
+    result = await start_session(db, user.discord_id, game.id)
+
+    assert result is None
+    assert await db.get(Game, stub_id) is not None

@@ -127,43 +127,59 @@ async def get_ongoing_session(db: AsyncSession, user_id: str) -> GameSession | N
 async def start_session(db: AsyncSession, user_id: str, game_id: int) -> GameSession | None:
     """Create a new ONGOING BOT session.
 
-    Returns None when the user row is missing or ``purge_at`` is set, so a
-    scheduled account does not gain a new session or a stub game from this call.
+    Returns None when the user row is missing or ``purge_at`` is set, and when
+    the exclusion constraint says this instant is already covered. A live
+    ONGOING for this ``game_id`` is returned. A live ONGOING for a different
+    game is re-raised. This function flushes and does not commit.
     """
     user = await db.get(User, user_id)
     if user is None or user.purge_at is not None:
-        logger.info("Session start skipped user=%s; account missing or scheduled for deletion", user_id)
+        logger.info(
+            "Session start skipped user=%s; account missing or scheduled for deletion",
+            user_id,
+        )
         return None
     game = await db.get(Game, game_id)
-    session = GameSession(
-        user_id=user_id,
-        game_id=game_id,
-        start_time=datetime.now(UTC),
-        status=SessionStatus.ONGOING,
-        source=SessionSource.BOT,
-    )
-    db.add(session)
-    if game is not None and game.enrichment_status == EnrichmentStatus.NEEDS_REVIEW:
-        await ensure_inbox_for_user(db, game_id, user_id)
     try:
-        await db.commit()
+        async with db.begin_nested():
+            session = GameSession(
+                user_id=user_id,
+                game_id=game_id,
+                start_time=datetime.now(UTC),
+                status=SessionStatus.ONGOING,
+                source=SessionSource.BOT,
+            )
+            db.add(session)
+            await db.flush()
     except IntegrityError as exc:
-        await db.rollback()
         existing = await get_ongoing_session(db, user_id)
-        if existing is not None:
+        if existing is not None and existing.game_id == game_id:
             logger.warning(
                 "ONGOING insert raced for user=%s; returning session_id=%d",
                 user_id,
                 existing.id,
             )
             return existing
+        if existing is not None:
+            raise
         if is_session_overlap(exc):
-            logger.info("Session start skipped user=%s; this instant is already covered", user_id)
+            logger.info(
+                "Session start skipped user=%s; this instant is already covered",
+                user_id,
+            )
             return None
         raise
-    await db.refresh(session)
-    logger.info("Session STARTED user=%s game_id=%d session_id=%d", user_id, game_id, session.id)
-    return session
+    else:
+        if game is not None and game.enrichment_status == EnrichmentStatus.NEEDS_REVIEW:
+            await ensure_inbox_for_user(db, game_id, user_id)
+            await db.flush()
+        logger.info(
+            "Session STARTED user=%s game_id=%d session_id=%d",
+            user_id,
+            game_id,
+            session.id,
+        )
+        return session
 
 
 async def complete_session(db: AsyncSession, session: GameSession) -> GameSession:
@@ -191,7 +207,6 @@ async def complete_session(db: AsyncSession, session: GameSession) -> GameSessio
         ),
     )
     if claimed:
-        await db.commit()
         logger.info("Session COMPLETED session_id=%d duration=%ds", session.id, duration)
     else:
         logger.info("Session COMPLETE skipped session_id=%d; status changed", session.id)
@@ -207,27 +222,26 @@ async def start_or_resume_session(db: AsyncSession, user_id: str, game_id: int) 
     """
     candidate = await find_stitch_candidate(db, user_id, game_id)
     if candidate is not None:
-        # Rollback below expires the identity map; keep the id as a plain int.
         candidate_id = candidate.id
         try:
-            claimed = await _claim(
-                db,
-                update(GameSession)
-                .where(
-                    GameSession.id == candidate_id,
-                    GameSession.status == SessionStatus.COMPLETED,
-                    GameSession.source == SessionSource.BOT,
-                    GameSession.deleted_at.is_(None),
+            async with db.begin_nested():
+                claimed = await _claim(
+                    db,
+                    update(GameSession)
+                    .where(
+                        GameSession.id == candidate_id,
+                        GameSession.status == SessionStatus.COMPLETED,
+                        GameSession.source == SessionSource.BOT,
+                        GameSession.deleted_at.is_(None),
+                    )
+                    .values(
+                        status=SessionStatus.ONGOING,
+                        end_time=None,
+                        duration_seconds=None,
+                        is_flicker=False,
+                    ),
                 )
-                .values(
-                    status=SessionStatus.ONGOING,
-                    end_time=None,
-                    duration_seconds=None,
-                    is_flicker=False,
-                ),
-            )
         except IntegrityError as exc:
-            await db.rollback()
             if not is_session_overlap(exc):
                 raise
             logger.info(
@@ -236,7 +250,6 @@ async def start_or_resume_session(db: AsyncSession, user_id: str, game_id: int) 
             )
         else:
             if claimed:
-                await db.commit()
                 await db.refresh(candidate)
                 logger.info(
                     "Session RESUMED user=%s game_id=%d session_id=%d",
@@ -266,7 +279,6 @@ async def error_session(db: AsyncSession, session: GameSession, notes: str) -> G
         .values(status=SessionStatus.ERROR, notes=notes),
     )
     if claimed:
-        await db.commit()
         logger.warning("Session ERROR session_id=%d notes=%r", session.id, notes)
     else:
         logger.warning("Session ERROR skipped session_id=%d; status changed", session.id)

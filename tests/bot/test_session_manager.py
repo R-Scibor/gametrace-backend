@@ -7,7 +7,9 @@ Called directly with the test `db` fixture — no HTTP client, no Discord connec
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.bot.session_manager import (
     complete_session,
@@ -175,7 +177,7 @@ async def test_get_ongoing_session_returns_newest_when_duplicates(caplog):
     assert "duplicate ongoing" in caplog.text.lower()
 
 
-async def test_start_session_returns_existing_on_unique_index_race(db):
+async def test_start_session_returns_open_row_when_game_id_matches(db):
     user = await make_user(db)
     game = await make_game(db)
     existing = await make_session(
@@ -187,11 +189,41 @@ async def test_start_session_returns_existing_on_unique_index_race(db):
         source=SessionSource.BOT,
     )
     await db.commit()
+    stub = Game(primary_name="outer-stub")
+    db.add(stub)
+    await db.flush()
+    stub_id = stub.id
 
-    other_game = await make_game(db, "Other Game")
-    result = await start_session(db, user.discord_id, other_game.id)
+    result = await start_session(db, user.discord_id, game.id)
 
+    assert result is not None
     assert result.id == existing.id
+    assert await db.get(Game, stub_id) is not None
+
+
+async def test_start_session_reraises_when_open_game_id_differs(db):
+    user = await make_user(db)
+    game = await make_game(db)
+    existing = await make_session(
+        db,
+        user.discord_id,
+        game.id,
+        start_time=dt(hours_ago=1),
+        status=SessionStatus.ONGOING,
+        source=SessionSource.BOT,
+    )
+    await db.commit()
+    other = await make_game(db, "Other Game")
+    other_id = other.id
+    existing_id = existing.id
+
+    with pytest.raises(IntegrityError):
+        await start_session(db, user.discord_id, other.id)
+
+    assert await db.get(Game, other_id) is not None
+    ongoing = await get_ongoing_session(db, user.discord_id)
+    assert ongoing is not None
+    assert ongoing.id == existing_id
 
 
 # ── complete_session flicker flagging ─────────────────────────────────────────

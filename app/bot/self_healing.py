@@ -68,6 +68,7 @@ async def run_self_healing(db: AsyncSession, guilds: Sequence[discord.Guild]) ->
                     session,
                     "Self-Healing: user not found in any guild after bot restart.",
                 )
+                await db.commit()
                 continue
 
             current_game = activity_name(member)
@@ -86,6 +87,7 @@ async def run_self_healing(db: AsyncSession, guilds: Sequence[discord.Guild]) ->
                     f"Self-Healing: session exceeded {STALE_SESSION_HOURS}h threshold "
                     "after bot restart — possible stale session.",
                 )
+                await db.commit()
                 logger.warning(
                     "Self-Healing: session_id=%d marked ERROR (>12h stale)", session.id
                 )
@@ -105,6 +107,7 @@ async def run_self_healing(db: AsyncSession, guilds: Sequence[discord.Guild]) ->
                     session,
                     f"Self-Healing: bot restarted, player switched from {session_game_name!r} to {current_game!r}.",
                 )
+                await db.commit()
                 owner = await db.get(User, session.user_id)
                 if owner is not None:
                     await db.refresh(owner)
@@ -118,6 +121,7 @@ async def run_self_healing(db: AsyncSession, guilds: Sequence[discord.Guild]) ->
                     continue
                 new_game, _ = await get_or_create_game(db, current_game)
                 await start_session(db, session.user_id, new_game.id)
+                await db.commit()
                 logger.info(
                     "Self-Healing: session_id=%d ERROR, new session started for %r",
                     session.id,
@@ -130,5 +134,6 @@ async def run_self_healing(db: AsyncSession, guilds: Sequence[discord.Guild]) ->
                     session,
                     "Self-Healing: bot restarted, player is no longer in-game.",
                 )
+                await db.commit()
 
     logger.info("Self-Healing: reconciliation complete.")
