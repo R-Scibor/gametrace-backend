@@ -47,6 +47,22 @@ tree = app_commands.CommandTree(bot)
 # needless repeated work — guard it the same way `_heartbeat_loop.is_running()`
 # guards the heartbeat loop below.
 _views_registered = False
+_startup_reconciliation_done = False
+
+
+async def run_startup_reconciliation(db, guilds) -> None:
+    """Run the startup pass once per process.
+
+    A raised scanner leaves the flag false so the next ``on_ready`` retries.
+    Command sync, ``bot:started_at``, and the heartbeat are not this function.
+    """
+    global _startup_reconciliation_done
+    if _startup_reconciliation_done:
+        return
+    from app.bot.self_healing import run_self_healing
+
+    await run_self_healing(db, guilds)
+    _startup_reconciliation_done = True
 
 
 @bot.event
@@ -77,8 +93,7 @@ async def on_ready():
     if not _heartbeat_loop.is_running():
         _heartbeat_loop.start()
     async with AsyncSessionLocal() as db:
-        from app.bot.self_healing import run_self_healing
-        await run_self_healing(db, bot.guilds)
+        await run_startup_reconciliation(db, bot.guilds)
 
 
 @tree.command(name="register", description="Zarejestruj się w GameTrace")
@@ -230,84 +245,27 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
 
     before_game = activity_name(before)
     after_game = activity_name(after)
-
-    # No change in game status — nothing to do
     if before_game == after_game:
         return
 
     discord_id = str(after.id)
-
     with structlog.contextvars.bound_contextvars(trace_id=new_trace_id()):
+        from app.bot.reconcile import reconcile_user
         from app.bot.session_lock import user_session_lock
+        from app.bot.session_manager import get_user_if_tracked
 
         async with AsyncSessionLocal() as db:
             async with user_session_lock(db, discord_id):
-                from app.bot.session_manager import (
-                    complete_session,
-                    error_session,
-                    get_ongoing_session,
-                    get_or_create_game,
-                    get_user_if_tracked,
-                    start_or_resume_session,
-                )
-
                 user = await get_user_if_tracked(db, discord_id)
                 if user is None:
-                    # User has never logged into the app — bot ignores them
                     return
-
-                ongoing = await get_ongoing_session(db, discord_id)
-
-                if before_game and not after_game:
-                    # Game closed — complete the ongoing session
-                    if ongoing:
-                        await complete_session(db, ongoing)
-                        await db.commit()
-
-                elif not before_game and after_game:
-                    # Game started. Discord sometimes redelivers a start with an
-                    # empty `before`, so this fires while the same game is still
-                    # ONGOING — the equality guard above misses it. Resolve the
-                    # game first: if it matches the ONGOING session, this is a
-                    # spurious repeat, leave the session running. Only a stale
-                    # ONGOING for a *different* game is an orphan worth erroring.
-                    game, created = await get_or_create_game(db, after_game)
-                    if ongoing and ongoing.game_id == game.id:
-                        pass
-                    else:
-                        if ongoing:
-                            await error_session(
-                                db,
-                                ongoing,
-                                f"Self-Healing: unexpected ONGOING session when new game {after_game!r} started.",
-                            )
-                            await db.commit()
-                        await start_or_resume_session(db, discord_id, game.id)
-                        await db.commit()
-                        if created:
-                            _queue_enrichment(game.id)
-
-                elif before_game and after_game:
-                    # Switched game — complete old, start new
-                    if ongoing:
-                        await complete_session(db, ongoing)
-                        await db.commit()
-                    game, created = await get_or_create_game(db, after_game)
-                    await start_or_resume_session(db, discord_id, game.id)
-                    await db.commit()
-                    if created:
-                        _queue_enrichment(game.id)
-
-
-def _queue_enrichment(game_id: int) -> None:
-    """Fire-and-forget enrichment task. Redis deduplication via fixed task ID."""
-    try:
-        from app.services.enrichment_dispatch import queue_enrichment
-
-        queue_enrichment(game_id)
-    except Exception:
-        # Never crash the bot over a background task failure
-        logger.exception("Failed to queue enrichment for game_id=%d", game_id)
+                await reconcile_user(
+                    db,
+                    discord_id,
+                    before_name=before_game,
+                    after_name=after_game,
+                    gap=False,
+                )
 
 
 if __name__ == "__main__":

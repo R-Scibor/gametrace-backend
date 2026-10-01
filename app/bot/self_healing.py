@@ -1,29 +1,24 @@
-"""
-Self-Healing: runs once on bot startup to reconcile all ONGOING sessions.
+"""Startup reconciliation. Live presence uses the same ``reconcile_user``.
 
-Logic per session:
-  - Find member in any guild.
-  - Member is playing the SAME game → keep ONGOING (unless >12h → ERROR).
-  - Member is playing a DIFFERENT game → ERROR + start new session for new game.
-  - Member is not playing / not found → ERROR.
+Runs once per process, on the first successful ``on_ready``. The candidate
+list is taken before the per-user lock. ``reconcile_user`` re-reads inside
+the lock and skips a row that is no longer a live ONGOING.
 """
+
 import logging
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import discord
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.activity import activity_name
+from app.bot.reconcile import reconcile_user
 from app.bot.session_lock import user_session_lock
-from app.bot.session_manager import error_session, get_or_create_game, start_session
-from app.models.session import GameSession, SessionStatus
-from app.models.user import User
+from app.models.session import GameSession, SessionSource, SessionStatus
 
 logger = logging.getLogger(__name__)
-
-STALE_SESSION_HOURS = 12
 
 
 def _find_member(guilds: Sequence[discord.Guild], discord_id: str) -> discord.Member | None:
@@ -37,103 +32,31 @@ def _find_member(guilds: Sequence[discord.Guild], discord_id: str) -> discord.Me
 
 async def run_self_healing(db: AsyncSession, guilds: Sequence[discord.Guild]) -> None:
     logger.info("Self-Healing: starting reconciliation...")
-
+    now = datetime.now(UTC)
     result = await db.execute(
         select(GameSession).where(
+            GameSession.source == SessionSource.BOT,
             GameSession.status == SessionStatus.ONGOING,
             GameSession.deleted_at.is_(None),
         )
     )
     ongoing_sessions = list(result.scalars().all())
-
     if not ongoing_sessions:
         logger.info("Self-Healing: no ONGOING sessions found, nothing to do.")
         return
 
     logger.info("Self-Healing: found %d ONGOING session(s)", len(ongoing_sessions))
-    now = datetime.now(UTC)
-
     for session in ongoing_sessions:
-        async with user_session_lock(db, session.user_id):
-            # The list above is a snapshot taken before the lock.
-            await db.refresh(session)
-            if session.status != SessionStatus.ONGOING or session.deleted_at is not None:
-                continue
-
-            member = _find_member(guilds, session.user_id)
-
-            if member is None:
-                await error_session(
-                    db,
-                    session,
-                    "Self-Healing: user not found in any guild after bot restart.",
-                )
-                await db.commit()
-                continue
-
-            current_game = activity_name(member)
-
-            # Fetch the game name that was recorded for this session
-            from app.models.game import Game  # avoid circular at module level
-            game = await db.get(Game, session.game_id)
-            session_game_name = game.primary_name if game else None
-
-            # Check for stale session (>12h regardless of game)
-            age = now - session.start_time.replace(tzinfo=UTC)
-            if age > timedelta(hours=STALE_SESSION_HOURS):
-                await error_session(
-                    db,
-                    session,
-                    f"Self-Healing: session exceeded {STALE_SESSION_HOURS}h threshold "
-                    "after bot restart — possible stale session.",
-                )
-                await db.commit()
-                logger.warning(
-                    "Self-Healing: session_id=%d marked ERROR (>12h stale)", session.id
-                )
-                continue
-
-            if current_game and current_game == session_game_name:
-                # Same game — session continues uninterrupted
-                logger.info(
-                    "Self-Healing: session_id=%d continues (same game %r)",
-                    session.id,
-                    current_game,
-                )
-            elif current_game and current_game != session_game_name:
-                # Switched game — error old session, start new one
-                await error_session(
-                    db,
-                    session,
-                    f"Self-Healing: bot restarted, player switched from {session_game_name!r} to {current_game!r}.",
-                )
-                await db.commit()
-                owner = await db.get(User, session.user_id)
-                if owner is not None:
-                    await db.refresh(owner)
-                if owner is None or owner.purge_at is not None:
-                    logger.info(
-                        "Self-Healing: session_id=%d ERROR, new session skipped — "
-                        "user %s is scheduled for deletion.",
-                        session.id,
-                        session.user_id,
-                    )
-                    continue
-                new_game, _ = await get_or_create_game(db, current_game)
-                await start_session(db, session.user_id, new_game.id)
-                await db.commit()
-                logger.info(
-                    "Self-Healing: session_id=%d ERROR, new session started for %r",
-                    session.id,
-                    current_game,
-                )
-            else:
-                # Not playing anything
-                await error_session(
-                    db,
-                    session,
-                    "Self-Healing: bot restarted, player is no longer in-game.",
-                )
-                await db.commit()
-
+        user_id = session.user_id
+        async with user_session_lock(db, user_id):
+            member = _find_member(guilds, user_id)
+            await reconcile_user(
+                db,
+                user_id,
+                before_name=None,
+                after_name=activity_name(member) if member is not None else None,
+                gap=True,
+                member_found=member is not None,
+                now=now,
+            )
     logger.info("Self-Healing: reconciliation complete.")

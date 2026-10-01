@@ -14,7 +14,7 @@ from sqlalchemy import select, update
 from app.bot.self_healing import run_self_healing
 from app.models.game import Game
 from app.models.session import GameSession, SessionSource, SessionStatus
-from tests.factories import dt, make_game, make_session, make_user
+from tests.factories import dt, make_alias, make_game, make_session, make_user
 
 # ── Guild / member helpers ────────────────────────────────────────────────────
 
@@ -65,6 +65,8 @@ async def test_member_not_found_errors_session(db):
 async def test_same_game_keeps_ongoing(db):
     user = await make_user(db)
     game = await make_game(db, "Hades")
+    await make_alias(db, game.id, "Hades.exe")
+    await make_alias(db, game.id, "Hades Steam")
     session = await make_session(
         db, user.discord_id, game.id,
         start_time=dt(hours_ago=1),
@@ -72,33 +74,59 @@ async def test_same_game_keeps_ongoing(db):
         source=SessionSource.BOT,
     )
 
-    await run_self_healing(db, guilds=[_guild(user.discord_id, "Hades")])
+    await run_self_healing(db, guilds=[_guild(user.discord_id, "Hades Steam")])
 
     await db.refresh(session)
     assert session.status == SessionStatus.ONGOING
+    assert session.notes is None
 
 
-async def test_same_game_over_12h_errors(db):
+async def test_same_game_over_12h_stays_ongoing(db):
     user = await make_user(db)
     game = await make_game(db, "Hades")
+    await make_alias(db, game.id, "Hades.exe")
     session = await make_session(
         db, user.discord_id, game.id,
         start_time=dt(hours_ago=13),
         status=SessionStatus.ONGOING,
         source=SessionSource.BOT,
     )
+    original_start = session.start_time
 
-    await run_self_healing(db, guilds=[_guild(user.discord_id, "Hades")])
+    await run_self_healing(db, guilds=[_guild(user.discord_id, "Hades.exe")])
 
     await db.refresh(session)
-    assert session.status == SessionStatus.ERROR
-    assert "12h threshold" in session.notes
+    assert session.status == SessionStatus.ONGOING
+    assert session.start_time == original_start
+    assert session.notes is None
+    rows = (
+        await db.execute(select(GameSession).where(GameSession.user_id == user.discord_id))
+    ).scalars().all()
+    assert len(list(rows)) == 1
+
+
+async def test_startup_ignores_a_non_bot_ongoing(db):
+    user = await make_user(db)
+    game = await make_game(db, "Hades")
+    session = await make_session(
+        db, user.discord_id, game.id,
+        start_time=dt(hours_ago=1),
+        status=SessionStatus.ONGOING,
+        source=SessionSource.MANUAL,
+    )
+
+    await run_self_healing(db, guilds=[_guild(user.discord_id, None)])
+
+    await db.refresh(session)
+    assert session.status == SessionStatus.ONGOING
+    assert session.notes is None
 
 
 async def test_same_game_under_12h_stays_ongoing(db):
-    """Predicate is strict >: a session under 12h old is NOT stale."""
+    """A session under 12h whose alias matches stays ONGOING. Age is not what keeps it."""
     user = await make_user(db)
     game = await make_game(db, "Hades")
+    await make_alias(db, game.id, "Hades.exe")
     session = await make_session(
         db, user.discord_id, game.id,
         start_time=dt(hours_ago=11),
@@ -106,7 +134,7 @@ async def test_same_game_under_12h_stays_ongoing(db):
         source=SessionSource.BOT,
     )
 
-    await run_self_healing(db, guilds=[_guild(user.discord_id, "Hades")])
+    await run_self_healing(db, guilds=[_guild(user.discord_id, "Hades.exe")])
 
     await db.refresh(session)
     assert session.status == SessionStatus.ONGOING
@@ -136,6 +164,11 @@ async def test_different_game_errors_old_starts_new(db):
     new_session = result.scalar_one()
     new_game = await db.get(Game, new_session.game_id)
     assert new_game.primary_name == "Minecraft"
+    assert old_session.end_time is None
+    assert old_session.notes == (
+        "Self-Healing: bot restarted, player switched from 'Hades' to 'Minecraft'."
+    )
+    assert new_session.id != old_session.id
 
 
 async def test_no_game_playing_errors_session(db):
