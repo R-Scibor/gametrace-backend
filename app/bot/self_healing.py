@@ -34,11 +34,13 @@ async def run_self_healing(db: AsyncSession, guilds: Sequence[discord.Guild]) ->
     logger.info("Self-Healing: starting reconciliation...")
     now = datetime.now(UTC)
     result = await db.execute(
-        select(GameSession).where(
+        select(GameSession)
+        .where(
             GameSession.source == SessionSource.BOT,
             GameSession.status == SessionStatus.ONGOING,
             GameSession.deleted_at.is_(None),
         )
+        .order_by(GameSession.id)
     )
     ongoing_sessions = list(result.scalars().all())
     if not ongoing_sessions:
@@ -46,8 +48,8 @@ async def run_self_healing(db: AsyncSession, guilds: Sequence[discord.Guild]) ->
         return
 
     logger.info("Self-Healing: found %d ONGOING session(s)", len(ongoing_sessions))
-    for session in ongoing_sessions:
-        user_id = session.user_id
+    user_ids = [row.user_id for row in ongoing_sessions]
+    for user_id in user_ids:
         async with user_session_lock(db, user_id):
             member = _find_member(guilds, user_id)
             await reconcile_user(

@@ -48,21 +48,30 @@ tree = app_commands.CommandTree(bot)
 # guards the heartbeat loop below.
 _views_registered = False
 _startup_reconciliation_done = False
+_startup_reconciliation_running = False
 
 
 async def run_startup_reconciliation(db, guilds) -> None:
     """Run the startup pass once per process.
 
-    A raised scanner leaves the flag false so the next ``on_ready`` retries.
+    A second call while the pass is still awaiting returns immediately.
+    A raised scanner leaves the done flag false so the next ``on_ready`` retries.
     Command sync, ``bot:started_at``, and the heartbeat are not this function.
     """
-    global _startup_reconciliation_done
-    if _startup_reconciliation_done:
+    global _startup_reconciliation_done, _startup_reconciliation_running
+    if _startup_reconciliation_done or _startup_reconciliation_running:
         return
+    _startup_reconciliation_running = True
     from app.bot.self_healing import run_self_healing
 
-    await run_self_healing(db, guilds)
-    _startup_reconciliation_done = True
+    try:
+        await run_self_healing(db, guilds)
+    except Exception:
+        raise
+    else:
+        _startup_reconciliation_done = True
+    finally:
+        _startup_reconciliation_running = False
 
 
 @bot.event

@@ -251,3 +251,57 @@ async def test_self_healing_skips_a_session_completed_inside_the_lock(db, monkey
     assert session.notes is None
     rows = await db.execute(select(GameSession).where(GameSession.user_id == user_id))
     assert len(rows.scalars().all()) == 1
+
+
+async def test_next_user_is_reconciled_after_a_rolled_back_start(db, monkeypatch):
+    """A start that rolls back must not expire the next candidate's user id."""
+    user_a = await make_user(db, discord_id="111111111111111101", username="user-a")
+    user_b = await make_user(db, discord_id="111111111111111102", username="user-b")
+    a_id = user_a.discord_id
+    b_id = user_b.discord_id
+    game = await make_game(db, "Hades")
+    session_a = await make_session(
+        db,
+        a_id,
+        game.id,
+        start_time=dt(hours_ago=1),
+        status=SessionStatus.ONGOING,
+        source=SessionSource.BOT,
+    )
+    session_b = await make_session(
+        db,
+        b_id,
+        game.id,
+        start_time=dt(hours_ago=1),
+        status=SessionStatus.ONGOING,
+        source=SessionSource.BOT,
+    )
+
+    from app.bot.session_manager import start_session as real_start_session
+
+    async def start_session(db_session, user_id, game_id):
+        if user_id == a_id:
+            return None
+        return await real_start_session(db_session, user_id, game_id)
+
+    monkeypatch.setattr("app.bot.reconcile.start_session", start_session)
+
+    await run_self_healing(
+        db,
+        guilds=[_guild(a_id, "Minecraft"), _guild(b_id, None)],
+    )
+
+    await db.refresh(session_b)
+    assert session_b.status == SessionStatus.ERROR
+    assert session_b.notes == "Self-Healing: bot restarted, player is no longer in-game."
+    await db.refresh(session_a)
+    assert session_a.status == SessionStatus.ERROR
+    ongoing_a = (
+        await db.execute(
+            select(GameSession).where(
+                GameSession.user_id == a_id,
+                GameSession.status == SessionStatus.ONGOING,
+            )
+        )
+    ).scalars().all()
+    assert list(ongoing_a) == []
