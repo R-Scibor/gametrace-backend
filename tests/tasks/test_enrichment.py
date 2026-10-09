@@ -19,6 +19,7 @@ from celery.exceptions import Retry
 from app.models.game import CoverSource, EnrichmentStatus, Game
 from app.tasks.enrichment import (
     IGDBResult,
+    LookupRetryable,
     _RateLimited,
     _run_backfill,
     _run_enrichment,
@@ -659,3 +660,246 @@ def test_lookup_kind_other_errors_are_unexpected(exc):
     from app.tasks.enrichment import _lookup_kind
 
     assert _lookup_kind(exc) == "unexpected"
+
+
+def _enriched_game() -> MagicMock:
+    game = _game_mock("Kept Title", cover_url="http://cover.example/kept.jpg")
+    game.enrichment_status = EnrichmentStatus.ENRICHED
+    game.external_api_id = "igdb:42"
+    game.primary_name = "Kept Title"
+    game.genres = ["RPG"]
+    return game
+
+
+def _assert_unchanged(game: MagicMock) -> None:
+    assert game.enrichment_status == EnrichmentStatus.ENRICHED
+    assert game.external_api_id == "igdb:42"
+    assert game.primary_name == "Kept Title"
+    assert game.cover_image_url == "http://cover.example/kept.jpg"
+    assert game.genres == ["RPG"]
+
+
+async def test_igdb_timeout_while_retries_remain_skips_steam():
+    game = _enriched_game()
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search",
+               side_effect=httpx.TimeoutException("slow")), \
+         patch("app.tasks.enrichment._steam_search") as steam:
+        with pytest.raises(LookupRetryable) as raised:
+            await _run_enrichment(1, retries=0, max_retries=5)
+    assert raised.value.source == "igdb"
+    steam.assert_not_called()
+    _assert_unchanged(game)
+
+
+async def test_igdb_5xx_while_retries_remain_skips_steam():
+    game = _game_mock()
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search", side_effect=_http_status(502)), \
+         patch("app.tasks.enrichment._steam_search") as steam:
+        with pytest.raises(LookupRetryable):
+            await _run_enrichment(1)
+    steam.assert_not_called()
+    assert game.enrichment_status == EnrichmentStatus.PENDING
+
+
+async def test_exhausted_igdb_timeout_calls_steam_and_writes_nothing_on_a_miss():
+    game = _enriched_game()
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search",
+               side_effect=httpx.ConnectError("down")), \
+         patch("app.tasks.enrichment._steam_search",
+               return_value=(None, None, None)) as steam:
+        status, _, ext_id = await _run_enrichment(1, retries=5, max_retries=5)
+    steam.assert_called_once()
+    assert status == EnrichmentStatus.ENRICHED
+    assert ext_id == "igdb:42"
+    _assert_unchanged(game)
+
+
+async def test_exhausted_igdb_timeout_steam_hit_writes_steam_id_on_empty_row():
+    game = _game_mock("Hades")
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search",
+               side_effect=httpx.TimeoutException("slow")), \
+         patch("app.tasks.enrichment._steam_search",
+               return_value=(1145360, "http://steam.example/hades.jpg", "Hades")):
+        status, cover, ext_id = await _run_enrichment(1, retries=5, max_retries=5)
+    assert status == EnrichmentStatus.ENRICHED
+    assert cover == "http://steam.example/hades.jpg"
+    assert ext_id == "steam:1145360"
+    assert game.external_api_id == "steam:1145360"
+    assert game.primary_name == "Hades"
+
+
+async def test_exhausted_igdb_timeout_does_not_replace_an_existing_id():
+    game = _enriched_game()
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search", side_effect=_http_status(503)), \
+         patch("app.tasks.enrichment._steam_search",
+               return_value=(1145360, "http://steam.example/hades.jpg", "Hades")):
+        await _run_enrichment(1, retries=5, max_retries=5)
+    assert game.external_api_id == "igdb:42"
+    assert game.primary_name == "Kept Title"
+    assert game.enrichment_status == EnrichmentStatus.ENRICHED
+
+
+async def test_exhausted_steam_timeout_returns_without_writing():
+    game = _game_mock()
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search",
+               side_effect=httpx.TimeoutException("slow")), \
+         patch("app.tasks.enrichment._steam_search",
+               side_effect=httpx.TimeoutException("slow")):
+        status, _, _ = await _run_enrichment(1, retries=5, max_retries=5)
+    assert status == EnrichmentStatus.PENDING
+    assert game.enrichment_status == EnrichmentStatus.PENDING
+
+
+async def test_igdb_400_calls_steam_and_a_miss_leaves_pending():
+    game = _game_mock()
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search", side_effect=_http_status(400)), \
+         patch("app.tasks.enrichment._steam_search",
+               return_value=(None, None, None)) as steam:
+        status, _, _ = await _run_enrichment(1, retries=0, max_retries=5)
+    steam.assert_called_once()
+    assert status == EnrichmentStatus.PENDING
+    assert game.enrichment_status == EnrichmentStatus.PENDING
+
+
+async def test_igdb_bad_json_calls_steam_and_does_not_raise():
+    game = _enriched_game()
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search",
+               side_effect=json.JSONDecodeError("bad", "doc", 0)), \
+         patch("app.tasks.enrichment._steam_search",
+               return_value=(None, None, None)) as steam:
+        status, _, _ = await _run_enrichment(1)
+    steam.assert_called_once()
+    assert status == EnrichmentStatus.ENRICHED
+    _assert_unchanged(game)
+
+
+async def test_igdb_value_error_does_not_call_steam():
+    game = _enriched_game()
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search", side_effect=ValueError("shape")), \
+         patch("app.tasks.enrichment._steam_search") as steam:
+        with pytest.raises(ValueError):
+            await _run_enrichment(1)
+    steam.assert_not_called()
+    _assert_unchanged(game)
+
+
+async def test_igdb_400_steam_hit_writes_steam_on_empty_id():
+    game = _game_mock("Hades")
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search", side_effect=_http_status(400)), \
+         patch("app.tasks.enrichment._steam_search",
+               return_value=(1145360, "http://steam.example/hades.jpg", "Hades")):
+        status, _, ext_id = await _run_enrichment(1)
+    assert status == EnrichmentStatus.ENRICHED
+    assert ext_id == "steam:1145360"
+
+
+async def test_parsed_igdb_non_hit_with_high_score_and_no_id_needs_review():
+    game = _game_mock("Obscure")
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search",
+               return_value=_igdb_result(None, 0.95, name=None, igdb_id=None)), \
+         patch("app.tasks.enrichment._steam_search", return_value=(None, None, None)):
+        status, _, _ = await _run_enrichment(1)
+    assert status == EnrichmentStatus.NEEDS_REVIEW
+    assert game.enrichment_status == EnrichmentStatus.NEEDS_REVIEW
+
+
+async def test_enriched_double_non_hit_keeps_the_row():
+    game = _enriched_game()
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment.sync_review_preferences", new_callable=AsyncMock) as sync, \
+         patch("app.tasks.enrichment._igdb_search",
+               return_value=_igdb_result(None, 0.95, name=None, igdb_id=None)), \
+         patch("app.tasks.enrichment._steam_search", return_value=(None, None, None)):
+        status, _, ext_id = await _run_enrichment(1)
+    assert status == EnrichmentStatus.ENRICHED
+    assert ext_id == "igdb:42"
+    _assert_unchanged(game)
+    sync.assert_not_awaited()
+
+
+async def test_missing_igdb_credentials_call_steam():
+    pending = _game_mock("Obscure")
+    p_engine, p_sm, _ = _db_patches(pending)
+    with p_engine, p_sm, \
+         patch("app.services.game_matching.settings.igdb_client_id", ""), \
+         patch("app.services.game_matching.settings.igdb_client_secret", ""), \
+         patch("app.tasks.enrichment._steam_search",
+               return_value=(None, None, None)) as steam:
+        status, _, _ = await _run_enrichment(1)
+    steam.assert_called_once()
+    assert status == EnrichmentStatus.NEEDS_REVIEW
+
+    enriched = _enriched_game()
+    p_engine, p_sm, _ = _db_patches(enriched)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment.sync_review_preferences", new_callable=AsyncMock) as sync, \
+         patch("app.services.game_matching.settings.igdb_client_id", ""), \
+         patch("app.services.game_matching.settings.igdb_client_secret", ""), \
+         patch("app.tasks.enrichment._steam_search", return_value=(None, None, None)):
+        status, _, _ = await _run_enrichment(1)
+    assert status == EnrichmentStatus.ENRICHED
+    _assert_unchanged(enriched)
+    sync.assert_not_awaited()
+
+
+async def test_steam_timeout_after_a_parsed_miss_retries():
+    game = _enriched_game()
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search",
+               return_value=_igdb_result(None, 0.2)), \
+         patch("app.tasks.enrichment._steam_search",
+               side_effect=httpx.TimeoutException("slow")):
+        with pytest.raises(LookupRetryable) as raised:
+            await _run_enrichment(1, retries=1, max_retries=5)
+    assert raised.value.source == "steam"
+    _assert_unchanged(game)
+
+
+async def test_steam_400_after_a_parsed_miss_writes_nothing():
+    game = _game_mock()
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search",
+               return_value=_igdb_result(None, 0.2)), \
+         patch("app.tasks.enrichment._steam_search", side_effect=_http_status(400)):
+        status, _, _ = await _run_enrichment(1)
+    assert status == EnrichmentStatus.PENDING
+    assert game.enrichment_status == EnrichmentStatus.PENDING
+
+
+async def test_steam_429_after_a_parsed_miss_retries():
+    game = _enriched_game()
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search",
+               return_value=_igdb_result(None, 0.2)), \
+         patch("app.tasks.enrichment._steam_search",
+               side_effect=_RateLimited("Steam")):
+        with pytest.raises(LookupRetryable) as raised:
+            await _run_enrichment(1, retries=0, max_retries=5)
+    assert raised.value.source == "steam"
+    _assert_unchanged(game)

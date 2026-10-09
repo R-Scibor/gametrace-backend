@@ -336,6 +336,13 @@ async def _write_enrichment(
         await db.commit()
         return EnrichmentStatus.ENRICHED, steam_cover, game.external_api_id
 
+    if game.enrichment_status == EnrichmentStatus.ENRICHED:
+        logger.info(
+            "enrich_game.miss_kept_enriched",
+            extra={"game_id": game_id},
+        )
+        return prior_status, prior_cover, prior_external_id
+
     game.enrichment_status = EnrichmentStatus.NEEDS_REVIEW
     await sync_review_preferences(
         db,
@@ -351,14 +358,21 @@ async def _write_enrichment(
 # Single async function — owns its own engine for this event loop
 # ---------------------------------------------------------------------------
 
-async def _run_enrichment(game_id: int) -> tuple[EnrichmentStatus, str | None, str | None]:
-    """
-    Returns (status, cover_url, external_api_id).
-    Raises _RateLimited if an API returns HTTP 429.
-    Raises LookupError if the game row is not found.
+async def _run_enrichment(
+    game_id: int,
+    *,
+    retries: int = 0,
+    max_retries: int = 5,
+) -> tuple[EnrichmentStatus, str | None, str | None]:
+    """Return ``(status, cover_url, external_api_id)``.
+
+    Raises ``LookupRetryable`` when a lookup should be tried again and
+    ``retries`` is still below ``max_retries``. Raises ``LookupError`` when
+    the row is gone. Any other exception from a lookup propagates.
 
     The name is read and the session closed before HTTP. The empty-id
-    decision is the locked load inside _write_enrichment, after HTTP.
+    decision and the ``ENRICHED`` guard are the locked load inside
+    ``_write_enrichment``, after HTTP.
     """
     engine = create_async_engine(settings.database_url, echo=False)
     SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
@@ -369,23 +383,61 @@ async def _run_enrichment(game_id: int) -> tuple[EnrichmentStatus, str | None, s
             if game is None:
                 raise LookupError(game_id)
             name: str = game.primary_name
+            prior_status = game.enrichment_status
+            prior_cover = game.cover_image_url
+            prior_external_id = game.external_api_id
 
         igdb_result: IGDBResult = _empty_igdb_result()
+        igdb_state = "answered"
         try:
             igdb_result = await asyncio.to_thread(_igdb_search, name)
-        except _RateLimited:
-            raise
-        except Exception:
-            logger.exception("enrich_game.igdb_lookup_failed", extra={"game_id": game_id})
+        except Exception as exc:
+            kind = _lookup_kind(exc)
+            if kind == "unexpected":
+                raise
+            if kind == "retry" and retries < max_retries:
+                raise LookupRetryable("igdb") from exc
+            if kind == "retry":
+                logger.error(
+                    "enrich_game.retries_exhausted",
+                    extra={"game_id": game_id, "source": "igdb"},
+                )
+                igdb_state = "exhausted"
+            else:
+                logger.warning(
+                    "enrich_game.lookup_unanswered",
+                    extra={"game_id": game_id, "source": "igdb"},
+                )
+                igdb_state = "unanswered"
 
         steam: tuple[int | None, str | None, str | None] = (None, None, None)
-        if not _igdb_hit(igdb_result):
+        call_steam = igdb_state != "answered" or not _igdb_hit(igdb_result)
+        if call_steam:
             try:
                 steam = await asyncio.to_thread(_steam_search, name)
-            except _RateLimited:
-                raise
-            except Exception:
-                logger.exception("enrich_game.steam_lookup_failed", extra={"game_id": game_id})
+            except Exception as exc:
+                kind = _lookup_kind(exc)
+                if kind == "unexpected":
+                    raise
+                if kind == "retry" and retries < max_retries:
+                    raise LookupRetryable("steam") from exc
+                if kind == "retry":
+                    logger.error(
+                        "enrich_game.retries_exhausted",
+                        extra={"game_id": game_id, "source": "steam"},
+                    )
+                else:
+                    logger.warning(
+                        "enrich_game.lookup_unanswered",
+                        extra={"game_id": game_id, "source": "steam"},
+                    )
+                return prior_status, prior_cover, prior_external_id
+
+        igdb_hit = igdb_state == "answered" and _igdb_hit(igdb_result)
+        steam_hit = steam[0] is not None and bool(steam[2])
+        both_non_hits = igdb_state == "answered" and not igdb_hit
+        if not (igdb_hit or steam_hit or both_non_hits):
+            return prior_status, prior_cover, prior_external_id
 
         async with SessionLocal() as db:
             return await _write_enrichment(
