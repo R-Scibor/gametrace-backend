@@ -89,6 +89,7 @@ class IGDBResult(NamedTuple):
     first_release_date: date | None
     name: str | None = None
     igdb_id: int | None = None
+    ambiguous: bool = False
 
 
 async def apply_igdb_metadata(
@@ -150,6 +151,7 @@ def _empty_igdb_result() -> IGDBResult:
         first_release_date=None,
         name=None,
         igdb_id=None,
+        ambiguous=False,
     )
 
 
@@ -369,6 +371,7 @@ def _igdb_search(name: str) -> IGDBResult:
     resp.raise_for_status()
 
     best_score = 0.0
+    tied_ids: set[int] = set()
     best_cover: str | None = None
     best_genres: list[str] = []
     best_themes: list[str] = []
@@ -377,6 +380,27 @@ def _igdb_search(name: str) -> IGDBResult:
     best_release: date | None = None
     best_name: str | None = None
     best_igdb_id: int | None = None
+
+    def _remember(row: dict) -> int | None:
+        nonlocal best_cover, best_genres, best_themes
+        nonlocal best_developers, best_publishers, best_release
+        nonlocal best_name, best_igdb_id
+        cover = row.get("cover")
+        if cover and cover.get("url"):
+            url = cover["url"]
+            if url.startswith("//"):
+                url = "https:" + url
+            url = url.replace("/t_thumb/", "/t_cover_big/")
+            best_cover = url
+        else:
+            best_cover = None
+        best_genres = [g["name"] for g in row.get("genres", []) if g.get("name")]
+        best_themes = [t["name"] for t in row.get("themes", []) if t.get("name")]
+        best_developers, best_publishers = resolve_companies(row.get("involved_companies", []))
+        ts = row.get("first_release_date")
+        best_release = date.fromtimestamp(ts) if ts else None
+        best_name, best_igdb_id = _hit_identity(row)
+        return best_igdb_id
 
     for game in resp.json():
         candidate_names = [game.get("name", "")]
@@ -387,23 +411,29 @@ def _igdb_search(name: str) -> IGDBResult:
 
         if score > best_score:
             best_score = score
+            hit_id = _remember(game)
+            tied_ids = {hit_id} if hit_id is not None else set()
+        elif score == best_score and score >= CONFIDENCE_THRESHOLD:
+            _, hit_id = _hit_identity(game)
+            if hit_id is None:
+                continue
+            if not tied_ids:
+                _remember(game)
+            tied_ids.add(hit_id)
 
-            cover = game.get("cover")
-            if cover and cover.get("url"):
-                url = cover["url"]
-                if url.startswith("//"):
-                    url = "https:" + url
-                url = url.replace("/t_thumb/", "/t_cover_big/")
-                best_cover = url
-            else:
-                best_cover = None
-
-            best_genres = [g["name"] for g in game.get("genres", []) if g.get("name")]
-            best_themes = [t["name"] for t in game.get("themes", []) if t.get("name")]
-            best_developers, best_publishers = resolve_companies(game.get("involved_companies", []))
-            ts = game.get("first_release_date")
-            best_release = date.fromtimestamp(ts) if ts else None
-            best_name, best_igdb_id = _hit_identity(game)
+    if len(tied_ids) >= 2:
+        return IGDBResult(
+            cover_url=None,
+            confidence=best_score,
+            genres=[],
+            themes=[],
+            developers=[],
+            publishers=[],
+            first_release_date=None,
+            name=None,
+            igdb_id=None,
+            ambiguous=True,
+        )
 
     return IGDBResult(
         cover_url=best_cover,
@@ -415,4 +445,5 @@ def _igdb_search(name: str) -> IGDBResult:
         first_release_date=best_release,
         name=best_name,
         igdb_id=best_igdb_id,
+        ambiguous=False,
     )
