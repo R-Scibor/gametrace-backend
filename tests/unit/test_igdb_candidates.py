@@ -261,6 +261,22 @@ class TestIgdbFetchById:
             with pytest.raises(_RateLimited):
                 _igdb_fetch_by_id(1942)
 
+    def test_name_and_igdb_id_come_from_the_hit(self):
+        _, igdb_result = self._call(1942, _FETCH_PAYLOAD)
+        assert igdb_result.name == "The Witcher 3: Wild Hunt"
+        assert igdb_result.igdb_id == 1942
+
+
+def test_empty_igdb_result_has_no_identity():
+    from app.services.game_matching import IGDBResult, _empty_igdb_result
+
+    empty = _empty_igdb_result()
+    positional = IGDBResult(None, 0.0, [], [], [], [], None)
+    assert empty.name is None
+    assert empty.igdb_id is None
+    assert positional.name is None
+    assert positional.igdb_id is None
+
 
 # ---------------------------------------------------------------------------
 # Candidate count — the two search functions must NOT move together

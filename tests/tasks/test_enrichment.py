@@ -299,6 +299,7 @@ def test_igdb_search_parses_metadata_response():
     fake_resp.status_code = 200
     fake_resp.json.return_value = [
         {
+            "id": 1877,
             "name": "Cyberpunk 2077",
             "cover": {"url": "//images.igdb.com/t_thumb/abc.jpg"},
             "alternative_names": [],
@@ -332,6 +333,8 @@ def test_igdb_search_parses_metadata_response():
     assert result.developers == ["CD Projekt Red", "Both Co"]
     assert result.publishers == ["CD Projekt", "Both Co"]
     assert result.first_release_date == date.fromtimestamp(1577836800)
+    assert result.name == "Cyberpunk 2077"
+    assert result.igdb_id == 1877
 
 
 def test_igdb_search_parses_parent_rollup():
@@ -342,6 +345,7 @@ def test_igdb_search_parses_parent_rollup():
     fake_resp.status_code = 200
     fake_resp.json.return_value = [
         {
+            "id": 217958,
             "name": "Honkai: Star Rail",
             "cover": {"url": "//images.igdb.com/t_thumb/hsr.jpg"},
             "alternative_names": [],
@@ -392,6 +396,8 @@ def test_igdb_search_parses_parent_rollup():
     assert result.developers == ["Child Dev Studio"]
     # Publishers: Sub Label → Parent Group; Cognosphere/HoYoverse → miHoYo (alias to IGDB root); deduped
     assert result.publishers == ["Parent Group", "miHoYo"]
+    assert result.name == "Honkai: Star Rail"
+    assert result.igdb_id == 217958
 
 
 async def test_game_not_found_raises():

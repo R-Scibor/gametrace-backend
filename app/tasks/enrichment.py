@@ -73,12 +73,14 @@ Step 2 — _confidence(a, b) → float [0.0, 1.0]
         through to Steam or NEEDS_REVIEW.
 
 Step 3 — _igdb_search(name) → IGDBResult(cover_url, confidence, genres, themes,
-  developers, publishers, first_release_date)
+  developers, publishers, first_release_date, name, igdb_id)
   - Sends _sanitize(name) as the IGDB search query to strip process-name
     noise before the API call.
   - Requests alternative_names.name alongside the primary name field.
   - Scores every candidate (primary + all alternative names) with
     _confidence(original_name, candidate); takes the maximum.
+  - Stores the chosen hit's name and numeric id on the result. A miss, or a
+    hit whose id is missing or < 1, leaves name/igdb_id as None.
   - Normalises returned cover URLs:
       protocol-relative "//…" → "https://…"
       /t_thumb/ → /t_cover_big/  (vertical box art, ~264×352 px)

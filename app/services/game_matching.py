@@ -86,6 +86,8 @@ class IGDBResult(NamedTuple):
     developers: list[str]
     publishers: list[str]
     first_release_date: date | None
+    name: str | None = None
+    igdb_id: int | None = None
 
 
 async def apply_igdb_metadata(
@@ -126,6 +128,8 @@ def _empty_igdb_result() -> IGDBResult:
         developers=[],
         publishers=[],
         first_release_date=None,
+        name=None,
+        igdb_id=None,
     )
 
 
@@ -218,6 +222,16 @@ def _igdb_search_candidates(name: str) -> list[IGDBCandidate]:
     return candidates
 
 
+def _hit_identity(game: dict) -> tuple[str | None, int | None]:
+    """Name and id from one IGDB row. A missing or non-positive id stays None."""
+    raw_name = game.get("name")
+    name = raw_name if isinstance(raw_name, str) and raw_name else None
+    raw_id = game.get("id")
+    if isinstance(raw_id, bool) or not isinstance(raw_id, int) or raw_id < 1:
+        return name, None
+    return name, raw_id
+
+
 def _igdb_fetch_by_id(igdb_id: int) -> tuple[str, IGDBResult] | None:
     """Fetch a single IGDB game row by its numeric id.
 
@@ -276,6 +290,7 @@ def _igdb_fetch_by_id(igdb_id: int) -> tuple[str, IGDBResult] | None:
     ts = game.get("first_release_date")
     release_date = date.fromtimestamp(ts) if ts else None
 
+    name, igdb_identity = _hit_identity(game)
     return canonical_name, IGDBResult(
         cover_url=cover_url,
         confidence=1.0,
@@ -284,6 +299,8 @@ def _igdb_fetch_by_id(igdb_id: int) -> tuple[str, IGDBResult] | None:
         developers=developers,
         publishers=publishers,
         first_release_date=release_date,
+        name=name,
+        igdb_id=igdb_identity,
     )
 
 
@@ -338,6 +355,8 @@ def _igdb_search(name: str) -> IGDBResult:
     best_developers: list[str] = []
     best_publishers: list[str] = []
     best_release: date | None = None
+    best_name: str | None = None
+    best_igdb_id: int | None = None
 
     for game in resp.json():
         candidate_names = [game.get("name", "")]
@@ -364,6 +383,7 @@ def _igdb_search(name: str) -> IGDBResult:
             best_developers, best_publishers = resolve_companies(game.get("involved_companies", []))
             ts = game.get("first_release_date")
             best_release = date.fromtimestamp(ts) if ts else None
+            best_name, best_igdb_id = _hit_identity(game)
 
     return IGDBResult(
         cover_url=best_cover,
@@ -373,4 +393,6 @@ def _igdb_search(name: str) -> IGDBResult:
         developers=best_developers,
         publishers=best_publishers,
         first_release_date=best_release,
+        name=best_name,
+        igdb_id=best_igdb_id,
     )
