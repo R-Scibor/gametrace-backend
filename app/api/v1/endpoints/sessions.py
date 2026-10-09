@@ -14,7 +14,7 @@ from app.models.game import Game, UserGamePreference
 from app.models.session import GameSession, SessionSource, SessionStatus
 from app.models.user import User
 from app.schemas.session import (
-    ConflictResponse,
+    ConflictEnvelope,
     SessionCreate,
     SessionPatch,
     SessionResponse,
@@ -47,14 +47,19 @@ async def _reloaded_session(db: AsyncSession, session: GameSession, user_id: str
     return result.scalar_one_or_none()
 
 
-def _overlap_conflict(conflict: GameSession) -> HTTPException:
+def _session_conflict(message: str, row: GameSession) -> HTTPException:
+    """One nested body for overlap and lost-update 409s."""
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail={
-            "detail": "Session overlaps with an existing session",
-            "conflicting_session": SessionResponse.model_validate(conflict).model_dump(mode="json"),
+            "detail": message,
+            "conflicting_session": SessionResponse.model_validate(row).model_dump(mode="json"),
         },
     )
+
+
+def _overlap_conflict(conflict: GameSession) -> HTTPException:
+    return _session_conflict("Session overlaps with an existing session", conflict)
 
 
 async def _overlap_from_exclusion(
@@ -80,13 +85,10 @@ async def _overlap_from_exclusion(
 
 
 def _writer_conflict(current: GameSession) -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail={
-            "detail": _WRITER_CONFLICT,
-            "conflicting_session": SessionResponse.model_validate(current).model_dump(mode="json"),
-        },
-    )
+    return _session_conflict(_WRITER_CONFLICT, current)
+
+
+_CONFLICT_RESPONSE = {409: {"model": ConflictEnvelope}}
 
 
 async def _check_overlap(
@@ -224,7 +226,7 @@ async def get_session(
     "",
     response_model=SessionResponse,
     status_code=status.HTTP_201_CREATED,
-    responses={409: {"model": ConflictResponse}},
+    responses=_CONFLICT_RESPONSE,
 )
 async def create_session(
     payload: SessionCreate,
@@ -278,7 +280,7 @@ async def create_session(
 @router.patch(
     "/{session_id}",
     response_model=SessionResponse,
-    responses={409: {"model": ConflictResponse}},
+    responses=_CONFLICT_RESPONSE,
 )
 async def patch_session(
     session_id: int,
@@ -368,7 +370,11 @@ async def patch_session(
     return session
 
 
-@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{session_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=_CONFLICT_RESPONSE,
+)
 async def delete_session(
     session_id: int,
     hard: bool = Query(default=False),
@@ -432,7 +438,11 @@ async def delete_session(
     await db.commit()
 
 
-@router.post("/{session_id}/restore", response_model=SessionResponse)
+@router.post(
+    "/{session_id}/restore",
+    response_model=SessionResponse,
+    responses=_CONFLICT_RESPONSE,
+)
 async def restore_session(
     session_id: int,
     db: AsyncSession = Depends(get_db),

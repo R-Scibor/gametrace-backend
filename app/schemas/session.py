@@ -67,3 +67,9 @@ class TrashedSessionResponse(SessionResponse):
 class ConflictResponse(BaseModel):
     detail: str
     conflicting_session: SessionResponse
+
+
+class ConflictEnvelope(BaseModel):
+    """HTTP body is this object. ConflictResponse is the nested detail."""
+
+    detail: ConflictResponse
