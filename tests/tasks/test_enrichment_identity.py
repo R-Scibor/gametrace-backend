@@ -9,20 +9,29 @@ from app.tasks.enrichment import _write_enrichment
 from tests.factories import make_alias, make_game
 
 
-def _hit(**overrides) -> IGDBResult:
-    base = dict(
-        cover_url="https://images.igdb.com/cover.jpg",
-        confidence=0.95,
-        genres=["RPG"],
-        themes=["Action"],
-        developers=["CD Projekt"],
-        publishers=["CD Projekt"],
-        first_release_date=date(2020, 12, 10),
-        name="Cyberpunk 2077",
-        igdb_id=1877,
+def _hit(
+    *,
+    cover_url: str | None = "https://images.igdb.com/cover.jpg",
+    confidence: float = 0.95,
+    genres: list[str] | None = None,
+    themes: list[str] | None = None,
+    developers: list[str] | None = None,
+    publishers: list[str] | None = None,
+    first_release_date: date | None = date(2020, 12, 10),
+    name: str | None = "Cyberpunk 2077",
+    igdb_id: int | None = 1877,
+) -> IGDBResult:
+    return IGDBResult(
+        cover_url=cover_url,
+        confidence=confidence,
+        genres=["RPG"] if genres is None else genres,
+        themes=["Action"] if themes is None else themes,
+        developers=["CD Projekt"] if developers is None else developers,
+        publishers=["CD Projekt"] if publishers is None else publishers,
+        first_release_date=first_release_date,
+        name=name,
+        igdb_id=igdb_id,
     )
-    base.update(overrides)
-    return IGDBResult(**base)
 
 
 async def test_igdb_first_fill_sets_id_and_title_and_keeps_the_alias(db):

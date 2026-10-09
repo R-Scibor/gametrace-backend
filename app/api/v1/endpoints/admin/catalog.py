@@ -277,7 +277,7 @@ async def igdb_link_game(
                 Game.id != game_id,
             )
         )
-        detail = {"message": _IGDB_TAKEN}
+        detail: dict[str, str | int] = {"message": _IGDB_TAKEN}
         if winner is not None:
             detail["conflicting_game_id"] = winner
         raise HTTPException(status_code=409, detail=detail) from exc
