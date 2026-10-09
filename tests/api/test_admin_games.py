@@ -469,3 +469,33 @@ async def test_merge_into_identified_survivor_keeps_its_metadata(
     assert survivor.genres == ["RPG"]
     assert survivor.cover_image_url == "https://kept.example/cover.jpg"
     assert session.game_id == survivor.id
+
+
+async def test_merge_keeps_custom_survivor_cover(admin_client, db, admin_user):
+    survivor = await make_game(db, "stub")
+    source = await make_game(
+        db,
+        "Canonical",
+        enrichment_status=EnrichmentStatus.ENRICHED,
+        genres=["RPG"],
+    )
+    survivor.cover_image_url = "/covers/survivor.jpg"
+    survivor.cover_source = CoverSource.CUSTOM
+    source.external_api_id = "igdb:123"
+    source.cover_image_url = "https://images.igdb.com/igdb/image/upload/t_cover_big/co72u9.jpg"
+    source.cover_source = CoverSource.EXTERNAL
+    await db.flush()
+    assert survivor.id < source.id
+
+    resp = await admin_client.post(
+        f"/api/v1/admin/games/{source.id}/merge/{survivor.id}"
+    )
+
+    assert resp.status_code == 204
+    await db.refresh(survivor)
+    assert survivor.cover_image_url == "/covers/survivor.jpg"
+    assert survivor.cover_source == CoverSource.CUSTOM
+    assert survivor.external_api_id == "igdb:123"
+    assert survivor.primary_name == "Canonical"
+    assert survivor.enrichment_status == EnrichmentStatus.ENRICHED
+    assert survivor.genres == ["RPG"]

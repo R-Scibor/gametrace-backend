@@ -68,8 +68,9 @@ async def merge_game(
             target.developers = list(source.developers)
             target.publishers = list(source.publishers)
             target.first_release_date = source.first_release_date
-            target.cover_image_url = source.cover_image_url
-            target.cover_source = source.cover_source
+            if CoverSource(target.cover_source) != CoverSource.CUSTOM:
+                target.cover_image_url = source.cover_image_url
+                target.cover_source = source.cover_source
             target.external_api_id = copied_id
             await db.flush()
 
