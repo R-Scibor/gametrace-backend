@@ -484,6 +484,22 @@ async def test_igdb_link_missing_game_returns_404(admin_client, db, admin_user):
     mock_fetch.assert_not_called()
 
 
+async def test_igdb_link_id_below_one_is_422(admin_client, db, admin_user):
+    game = await make_game(db, "Below One", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    with patch(IGDB_LINK_PATCH_TARGET) as fetch:
+        zero = await admin_client.post(
+            IGDB_LINK_URL.format(game_id=game.id),
+            json={"igdb_id": 0},
+        )
+        negative = await admin_client.post(
+            IGDB_LINK_URL.format(game_id=game.id),
+            json={"igdb_id": -1},
+        )
+    assert zero.status_code == 422
+    assert negative.status_code == 422
+    fetch.assert_not_called()
+
+
 async def test_igdb_link_igdb_not_found_returns_404(admin_client, db, admin_user):
     game = await make_game(db, "Unknown IGDB", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
 

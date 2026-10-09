@@ -152,6 +152,16 @@ async def test_neither_mode_422(authed_client):
     assert resp.status_code == 422
 
 
+async def test_igdb_id_below_one_is_422(authed_client):
+    """0 and negatives never reach IGDB."""
+    with patch(PATCH_TARGET) as fetch:
+        zero = await authed_client.post(URL, json={"igdb_id": 0})
+        negative = await authed_client.post(URL, json={"igdb_id": -5})
+    assert zero.status_code == 422
+    assert negative.status_code == 422
+    fetch.assert_not_called()
+
+
 async def test_unrecognized_without_name_422(authed_client):
     """unrecognized=True but name missing or blank → 422."""
     resp = await authed_client.post(URL, json={"unrecognized": True})

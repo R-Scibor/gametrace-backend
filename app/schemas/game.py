@@ -65,7 +65,7 @@ class GameCreateRequest(BaseModel):
     - unrecognized mode: unrecognized=True AND name is non-empty/non-blank.
     Optional query — only honoured (stored as a GameAlias) in igdb_id mode.
     """
-    igdb_id: int | None = None
+    igdb_id: int | None = Field(default=None, ge=1)
     name: str | None = None
     unrecognized: bool = False
     query: str | None = None

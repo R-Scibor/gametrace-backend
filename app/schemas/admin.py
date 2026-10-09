@@ -92,7 +92,7 @@ class AdminGameListResponse(BaseModel):
 class IgdbLinkRequest(BaseModel):
     """Link an existing catalog row to a specific IGDB game id."""
 
-    igdb_id: int
+    igdb_id: int = Field(ge=1)
 
 
 class AliasCreateRequest(BaseModel):
