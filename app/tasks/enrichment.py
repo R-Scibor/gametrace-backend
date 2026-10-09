@@ -388,9 +388,10 @@ async def _run_enrichment(
             prior_external_id = game.external_api_id
 
         igdb_result: IGDBResult = _empty_igdb_result()
-        igdb_state = "answered"
+        igdb_state = "unanswered"
         try:
             igdb_result = await asyncio.to_thread(_igdb_search, name)
+            igdb_state = "answered"
         except Exception as exc:
             kind = _lookup_kind(exc)
             if kind == "unexpected":

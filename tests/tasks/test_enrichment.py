@@ -720,6 +720,20 @@ async def test_exhausted_igdb_timeout_calls_steam_and_writes_nothing_on_a_miss()
     _assert_unchanged(game)
 
 
+async def test_exhausted_igdb_timeout_leaves_pending_on_a_miss():
+    game = _game_mock()
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search",
+               side_effect=httpx.ConnectError("down")), \
+         patch("app.tasks.enrichment._steam_search",
+               return_value=(None, None, None)) as steam:
+        status, _, _ = await _run_enrichment(1, retries=5, max_retries=5)
+    steam.assert_called_once()
+    assert status == EnrichmentStatus.PENDING
+    assert game.enrichment_status == EnrichmentStatus.PENDING
+
+
 async def test_exhausted_igdb_timeout_steam_hit_writes_steam_id_on_empty_row():
     game = _game_mock("Hades")
     p_engine, p_sm, _ = _db_patches(game)
