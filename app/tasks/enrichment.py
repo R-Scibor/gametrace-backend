@@ -84,6 +84,11 @@ Step 3 — _igdb_search(name) → IGDBResult(cover_url, confidence, genres, them
   - Normalises returned cover URLs:
       protocol-relative "//…" → "https://…"
       /t_thumb/ → /t_cover_big/  (vertical box art, ~264×352 px)
+  - Two or more distinct ids (int >= 1) that share the top score, when that
+    score is >= 0.85, return ambiguous=True and no id, name, cover, or
+    metadata. Confidence stays the shared score. One row counts once: the
+    score is the max of its primary name and its alternative names. A tie
+    below 0.85 stays an ordinary miss.
 
 Step 4 — _steam_search(name) → (app_id | None, cover_url | None, name | None)
   Fuzzy match against Steam Store search results using the same _confidence()
@@ -102,6 +107,11 @@ Step 5 — Pipeline decision
     empty id → ENRICHED, external_api_id = igdb:{id}, primary_name = IGDB name
     id already set → refresh genres, themes, developers, publishers, and
     first_release_date. Do not change the id or the title.
+  IGDB ambiguous (two ids share a top score >= 0.85):
+    Do not call Steam. Do not apply either candidate.
+    The locked row is ENRICHED → leave status, id, title, cover, and
+    metadata unchanged.
+    Otherwise → NEEDS_REVIEW.
   Otherwise a Steam score >= 0.85:
     empty id → ENRICHED, external_api_id = steam:{app_id}, primary_name = Steam name
     id already set → leave the id, the title, and the metadata columns alone
@@ -417,7 +427,10 @@ async def _run_enrichment(
                 igdb_state = "unanswered"
 
         steam: tuple[int | None, str | None, str | None] = (None, None, None)
-        call_steam = igdb_state != "answered" or not _igdb_hit(igdb_result)
+        call_steam = (
+            (igdb_state != "answered" or not _igdb_hit(igdb_result))
+            and not igdb_result.ambiguous
+        )
         if call_steam:
             try:
                 steam = await asyncio.to_thread(_steam_search, name)
