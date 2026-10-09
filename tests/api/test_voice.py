@@ -98,6 +98,62 @@ async def test_partial_fields_preserved(authed_client):
     assert data["duration_minutes"] is None
 
 
+def _gemini_model(payload: str) -> MagicMock:
+    response = MagicMock()
+    response.text = payload
+    model = MagicMock()
+    model.generate_content.return_value = response
+    return model
+
+
+def _parse(payload: str) -> dict:
+    from app.api.v1.endpoints.voice import _gemini_parse
+
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
+         patch("vertexai.init"), \
+         patch("vertexai.generative_models.GenerativeModel", return_value=_gemini_model(payload)), \
+         patch("vertexai.generative_models.GenerationConfig", return_value=MagicMock()):
+        return _gemini_parse("transcript", "now", "pl", "none")
+
+
+# ── Gemini body shape ─────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("payload", ["[]", "null", "true", '"nope"'])
+def test_gemini_non_object_is_rejected(payload):
+    with pytest.raises(ValueError):
+        _parse(payload)
+
+
+def test_gemini_bool_duration_is_not_turned_into_one():
+    body = '{"game": null, "date": null, "start_time": null, "end_time": null, "duration_minutes": true}'
+    with pytest.raises(ValueError):
+        _parse(body)
+
+
+def test_gemini_object_with_nulls_is_kept():
+    parsed = _parse(
+        '{"game": "Hades", "date": null, "start_time": null, "end_time": null, "duration_minutes": 60}'
+    )
+    assert parsed["game"] == "Hades"
+    assert parsed["duration_minutes"] == 60
+    assert parsed["date"] is None
+
+
+async def test_gemini_non_object_returns_502_not_500(authed_client):
+    with patch("app.api.v1.endpoints.voice.settings", _voice_settings()), \
+         patch("app.api.v1.endpoints.voice.AsyncOpenAI", return_value=_mock_openai("hello")), \
+         patch("vertexai.init"), \
+         patch("vertexai.generative_models.GenerativeModel", return_value=_gemini_model("[]")), \
+         patch("vertexai.generative_models.GenerationConfig", return_value=MagicMock()):
+        resp = await authed_client.post(
+            "/api/v1/voice/transcribe",
+            files={"file": ("session.m4a", WAV_BYTES, "audio/m4a")},
+        )
+
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "Parsing failed."
+
+
 # ── Gemini failure modes ──────────────────────────────────────────────────────
 
 async def test_gemini_failure_returns_502(authed_client):

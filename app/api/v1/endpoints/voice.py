@@ -18,7 +18,7 @@ User always confirms the result — this endpoint only suggests values.
 import asyncio
 import json
 import logging
-from typing import Any, cast
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from openai import AsyncOpenAI
@@ -119,7 +119,27 @@ def _gemini_parse(
     )
     raw_json = response.text
     logger.debug("voice/transcribe: gemini raw response=%r", raw_json)
-    return cast(dict, json.loads(raw_json))
+    return _gemini_object(raw_json)
+
+
+def _gemini_object(raw_json: str) -> dict[str, Any]:
+    """Accept only the response object. A list, null, or a coerced bool is a 502.
+
+    Called from ``_gemini_parse`` so the endpoint's existing handler turns the
+    raise into ``Parsing failed.`` instead of a 500 after Whisper has run.
+    ``bool`` is an ``int`` in Python; ``true`` must not become duration 1.
+    """
+    parsed = json.loads(raw_json)
+    if not isinstance(parsed, dict):
+        raise ValueError("Gemini response must be a JSON object")
+    for key in ("game", "date", "start_time", "end_time"):
+        value = parsed.get(key)
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"Gemini field {key} must be a string or null")
+    duration = parsed.get("duration_minutes")
+    if duration is not None and (isinstance(duration, bool) or not isinstance(duration, int)):
+        raise ValueError("Gemini field duration_minutes must be an integer or null")
+    return parsed
 
 
 @router.post("/transcribe", response_model=TranscribeResponse)

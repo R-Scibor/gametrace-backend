@@ -464,7 +464,7 @@ unavailable the hourly check fails open so voice stays usable; the DB-backed dai
 still binds. Because the `voice_usage` insert is best-effort (it must never fail a request
 the user already paid for), the daily count is a floor rather than an exact ledger.
 
-Gemini uses `response_mime_type="application/json"` + `response_schema` — no markdown-fence stripping. Invalid `users.timezone` values fall back to `DEFAULT_TIMEZONE` (env, default `Europe/Warsaw`) with a warning log; users still at the DB default `UTC` also use `DEFAULT_TIMEZONE` for the voice datetime anchor.
+Gemini uses `response_mime_type="application/json"` + `response_schema` — no markdown-fence stripping. A body that is not that object, or a known field of the wrong type, is the same `502` `Parsing failed.` A boolean `duration_minutes` is not coerced to `1`. Invalid `users.timezone` values fall back to `DEFAULT_TIMEZONE` (env, default `Europe/Warsaw`) with a warning log; users still at the DB default `UTC` also use `DEFAULT_TIMEZONE` for the voice datetime anchor.
 
 ## Preferences
 
