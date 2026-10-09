@@ -190,20 +190,20 @@ Both candidates scored **1.0** via `_confidence` (and the number guard does not 
 
 **Interim remediation (2026-06-30):** Fetched correct metadata with `_igdb_fetch_by_id(21593)`, inserted a fresh correct `Game` row (new `id=77` with `external_api_id="21593"`, cover `co72u9`, `first_release_date=2023-10-13`, developers `["HEXWORKS"]`, publishers `["CI Games"]`, proper genres/themes). Re-pointed the 6 sessions and the existing `game_aliases` row to it, then deleted the wrong `id=63`.
 
-**Worker behavior (2026-10-09):** `_igdb_search` treats two or more distinct IGDB ids at the same top score of at least 0.85 as ambiguous. The worker does not call Steam and does not apply either row. A stub that is not already `ENRICHED` becomes `NEEDS_REVIEW`. An `ENRICHED` row is left unchanged, so re-queueing does not repair a cover chosen by the old search order. A person picks the edition from `POST /games/match`, and an admin applies that id with igdb-link. The rule is written up in [game-matching.md](../game-matching.md).
+**Worker behavior (2026-10-09):** `_igdb_search` treats two or more distinct IGDB ids at the same top score of at least 0.85 as ambiguous. The worker does not call Steam and does not apply either row. A stub that is not already `ENRICHED` becomes `NEEDS_REVIEW`. An `ENRICHED` row is left unchanged, so re-queueing does not repair a cover chosen by the old search order. A person picks the edition from `POST /games/match`, and an admin applies that id with igdb-link. The rule is written up in [game-matching.md](game-matching.md).
 
 ### Symptoms / user impact
 
 - Wrong (old) cover appeared for what was actually the 2023 game.
 - Metadata (release date, developers) was incorrect in stats and game details.
 - Because the row was already `ENRICHED`, it never landed in Unrecognized; no user-visible signal that enrichment had chosen the wrong IGDB entry.
-- Simply re-queuing `enrich_game` on the old row produces the *same* wrong result (search order + perfect score tie is stable in this case).
+- Simply re-queuing `enrich_game` on the old row produced the same wrong result (search order plus a perfect score tie was stable). Re-queueing an `ENRICHED` row still does not repair that cover.
 
 ### Root causes
 
-1. **Title collision across releases.** "Lords of the Fallen" legitimately refers to two (actually three) different IGDB records. The pipeline has no tie-breaker when multiple candidates reach the maximum score (1.0 here).
+1. **Title collision across releases.** "Lords of the Fallen" legitimately refers to two (actually three) different IGDB records. On 2026-06-30 the pipeline had no tie-breaker when multiple candidates reached the maximum score (1.0 here).
 
-2. **Search result ordering decides the winner.** `_igdb_search` walks the returned list and keeps the first one whose score improves `best_score`. API order is not guaranteed to prefer recent / mainline releases.
+2. **Search result ordering decided the winner.** `_igdb_search` walked the returned list and kept the first row whose score improved `best_score`. API order was not guaranteed to prefer recent or mainline releases. As of 2026-10-09 a shared top score of at least 0.85 does not pick a row. See the worker-behavior note above.
 
 3. **No year / platform signal used at selection time.** The number guard only penalizes *digit mismatch*; identical names with no numbers always tie.
 
