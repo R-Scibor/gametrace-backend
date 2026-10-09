@@ -4,16 +4,17 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from app.core.bot_heartbeat import (
+    BOT_HEARTBEAT_KEY,
+    BOT_STARTED_AT_KEY,
+    HEARTBEAT_WINDOW_SECONDS,
+)
 from app.core.config import settings
 from app.core.redis import get_redis
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-BOT_STARTED_AT_KEY = "bot:started_at"
-BOT_HEARTBEAT_KEY = "bot:heartbeat"
-HEARTBEAT_STALE_AFTER_SECONDS = 90
 
 API_STARTED_AT = int(time.time())
 
@@ -30,14 +31,15 @@ async def health() -> dict[str, Any]:
         started_at = int(started_at_raw) if started_at_raw else None
         heartbeat = int(heartbeat_raw) if heartbeat_raw else None
 
-        if heartbeat is not None and (now - heartbeat) <= HEARTBEAT_STALE_AFTER_SECONDS:
-            bot_status = "online"
-        else:
-            bot_status = "offline"
-
+        fresh = (
+            heartbeat is not None
+            and (now - heartbeat) <= HEARTBEAT_WINDOW_SECONDS
+        )
         bot = {
-            "status": bot_status,
-            "uptime_seconds": (now - started_at) if started_at else None,
+            "status": "online" if fresh else "offline",
+            # started_at has no TTL. Ignore it once the heartbeat is gone,
+            # or a crashed bot's uptime climbs forever.
+            "uptime_seconds": (now - started_at) if fresh and started_at else None,
             "last_heartbeat_seconds_ago": (now - heartbeat) if heartbeat else None,
         }
     except Exception:

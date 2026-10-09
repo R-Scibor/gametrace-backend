@@ -15,6 +15,11 @@ from discord.ext import tasks
 from app.bot import layout, replies
 from app.bot.activity import activity_name
 from app.bot.panel import PERSISTENT_VIEWS, PanelView
+from app.core.bot_heartbeat import (
+    BOT_HEARTBEAT_KEY,
+    BOT_STARTED_AT_KEY,
+    HEARTBEAT_WINDOW_SECONDS,
+)
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.core.logging import configure_logging, new_trace_id
@@ -23,14 +28,10 @@ from app.core.redis import get_redis
 
 logger = logging.getLogger(__name__)
 
-BOT_STARTED_AT_KEY = "bot:started_at"
-BOT_HEARTBEAT_KEY = "bot:heartbeat"
-HEARTBEAT_TTL_SECONDS = 90
-
 @tasks.loop(seconds=30)
 async def _heartbeat_loop() -> None:
     try:
-        await get_redis().set(BOT_HEARTBEAT_KEY, int(time.time()), ex=HEARTBEAT_TTL_SECONDS)
+        await get_redis().set(BOT_HEARTBEAT_KEY, int(time.time()), ex=HEARTBEAT_WINDOW_SECONDS)
     except Exception:
         logger.warning("Heartbeat write to Redis failed", exc_info=True)
 
