@@ -190,6 +190,8 @@ Both candidates scored **1.0** via `_confidence` (and the number guard does not 
 
 **Interim remediation (2026-06-30):** Fetched correct metadata with `_igdb_fetch_by_id(21593)`, inserted a fresh correct `Game` row (new `id=77` with `external_api_id="21593"`, cover `co72u9`, `first_release_date=2023-10-13`, developers `["HEXWORKS"]`, publishers `["CI Games"]`, proper genres/themes). Re-pointed the 6 sessions and the existing `game_aliases` row to it, then deleted the wrong `id=63`.
 
+**Worker behavior (2026-10-09):** `_igdb_search` treats two or more distinct IGDB ids at the same top score of at least 0.85 as ambiguous. The worker does not call Steam and does not apply either row. A stub that is not already `ENRICHED` becomes `NEEDS_REVIEW`. An `ENRICHED` row is left unchanged, so re-queueing does not repair a cover chosen by the old search order. A person picks the edition from `POST /games/match`, and an admin applies that id with igdb-link. The rule is written up in [game-matching.md](../game-matching.md).
+
 ### Symptoms / user impact
 
 - Wrong (old) cover appeared for what was actually the 2023 game.

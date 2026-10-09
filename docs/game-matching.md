@@ -18,8 +18,11 @@ raw name from Discord
       │
       ▼
   score ≥ 0.85?
-   ├── yes → ENRICHED (IGDB cover)
-   └── no  → Steam exact-match fallback
+   ├── two or more IGDB ids share that top score
+   │     → NEEDS_REVIEW, Steam is not called
+   │     an already ENRICHED row stays ENRICHED
+   ├── one IGDB id → ENRICHED (IGDB cover)
+   └── no → Steam exact-match fallback
                 ├── hit → ENRICHED (Steam cover)
                 └── miss → NEEDS_REVIEW, unless the locked row is already ENRICHED
 ```
@@ -49,7 +52,11 @@ Words stay space-separated. The whitespace strip needed for substring scoring (e
 - **Parenthesis content is dropped entirely.** `"Dark Souls (Remastered)"` loses the word `"Remastered"`. The score usually still clears the threshold via WRatio partial matching, but information is gone.
 - **Standalone `i` and `v` are treated as roman numerals.** A game title containing these as words (e.g. `"I Am Alive"`) gets digits injected (`"1 am alive"`). Same-game comparisons are unaffected since both sides transform identically, but cross-game comparisons involving such titles may produce unexpected number sets.
 - **Non-ASCII characters are stripped.** `"Pokémon"` → `"pokmon"`. Because the same transformation applies to both sides, the match still works for the same title; it only fails if the two sides use different encodings of the same accented character (rare in practice).
-- **Identical titles across distinct releases (reboots / remakes).** When IGDB contains multiple games with the exact same name (e.g. the 2014/2017 "Lords of the Fallen" vs the 2023 reboot), they all score 1.0. The first result in the IGDB search response wins; there is no year, platform, or recency tie-breaker. This attaches the wrong cover + metadata. See the Lords of the Fallen incident in [tech-debt.md](tech-debt.md). Workaround: use `POST /api/v1/games/match` (returns candidates with `year`) + `POST /games {igdb_id}` + merge if needed.
+- **Identical titles across distinct releases (reboots / remakes).** When two or more IGDB ids share the top score and that score is at least 0.85, the worker does not pick one. The search result is ambiguous: no id, name, cover, or metadata is applied, and Steam is not called. A stub that is not already `ENRICHED` becomes `NEEDS_REVIEW`. An `ENRICHED` row stays `ENRICHED`.
+
+  Lords of the Fallen is the case. Discord reports "Lords of the Fallen". IGDB 194987 (2017, Deck13) and IGDB 21593 (2023, Hexworks) both use that canonical name and both score 1.0. The titles have no digits, so the number guard does not split them. The worker leaves a new stub `NEEDS_REVIEW` instead of attaching the 2017 cover because that row came back first. The person picks the edition from `POST /api/v1/games/match`, which returns both candidates with `year`.
+
+  `_sanitize` drops parenthetical text before scoring, so "Dark Souls" and "Dark Souls (Remastered)" also score 1.0 against each other. If both ids are in the five rows the worker fetches, that stub goes to `NEEDS_REVIEW` too. The tie is only among those five rows. `/games/match` still asks for ten.
 
 ## Gotcha — search-query vs scoring sanitization
 
