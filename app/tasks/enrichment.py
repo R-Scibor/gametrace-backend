@@ -85,23 +85,40 @@ Step 3 — _igdb_search(name) → IGDBResult(cover_url, confidence, genres, them
       protocol-relative "//…" → "https://…"
       /t_thumb/ → /t_cover_big/  (vertical box art, ~264×352 px)
 
-Step 4 — _steam_search(name) → (app_id | None, cover_url | None)
+Step 4 — _steam_search(name) → (app_id | None, cover_url | None, name | None)
   Fuzzy match against Steam Store search results using the same _confidence()
   pipeline (sanitize both sides, WRatio, number guard) and CONFIDENCE_THRESHOLD.
-  Takes the highest-scoring candidate; returns (None, None) if none reach 0.85.
+  The module calls a score >= 0.85 a Steam exact match. It is not string equality.
+  An item with a missing id or an id < 1 is skipped.
+  Takes the highest-scoring candidate; returns (None, None, None) if none reach 0.85.
   Cover: library_600x900.jpg (vertical portrait, same aspect ratio).
 
 Step 5 — Pipeline decision
-  IGDB confidence >= 0.85  →  ENRICHED  (IGDB cover)
-  IGDB confidence <  0.85, Steam exact match found  →  ENRICHED  (Steam cover)
-  Neither  →  NEEDS_REVIEW  (human review required in admin UI)
+  The name is loaded and that session is closed before either HTTP call.
+  The write session then loads the row with SELECT … FOR UPDATE. That load
+  is the empty-id check. A bare legacy external_api_id counts as set.
+
+  IGDB confidence >= 0.85, with an id >= 1 and a name:
+    empty id → ENRICHED, external_api_id = igdb:{id}, primary_name = IGDB name
+    id already set → refresh genres, themes, developers, publishers, and
+    first_release_date. Do not change the id or the title.
+  Otherwise a Steam score >= 0.85:
+    empty id → ENRICHED, external_api_id = steam:{app_id}, primary_name = Steam name
+    id already set → leave the id, the title, and the metadata columns alone
+  Otherwise NEEDS_REVIEW.
+
+  A unique violation on uq_games_external_api_id rolls that write back, logs
+  enrich_game.external_id_taken, and returns. The row is not demoted.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OPERATIONAL NOTES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Exponential backoff on HTTP 429: 2^retry * 60s countdown (max 5 retries).
 Redis deduplication: task_id="enrich_game_{game_id}" — one task per game queued at a time.
-Custom covers: cover_image_url is NOT updated when cover_source=CUSTOM.
+Custom covers: cover_image_url and cover_source stay when cover_source=CUSTOM.
+An IGDB hit still writes genres, themes, developers, publishers, and
+first_release_date on a CUSTOM row. A null IGDB cover does not clear a cover
+the worker already stored.
 
 Event loop note: asyncpg connections are bound to the loop they were created on.
 Reusing the global AsyncSessionLocal across multiple asyncio.run() calls causes
@@ -114,11 +131,13 @@ import logging
 import httpx
 from celery.exceptions import MaxRetriesExceededError
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.celery_app import celery_app
 from app.core.config import settings
 from app.models.game import CoverSource, EnrichmentStatus, Game
+from app.services.external_ids import is_external_id_conflict, steam_external_id
 from app.services.game_matching import (
     CONFIDENCE_THRESHOLD,
     IGDBResult,
@@ -127,14 +146,19 @@ from app.services.game_matching import (
     _igdb_search,
     _RateLimited,
     _sanitize,
+    apply_igdb_metadata,
 )
 from app.services.game_review import sync_review_preferences
 
 logger = logging.getLogger(__name__)
 
 
-def _steam_search(name: str) -> tuple[str | None, str | None]:
-    """Returns (app_id, cover_url) on confident match, else (None, None). Raises _RateLimited on 429."""
+def _steam_search(name: str) -> tuple[int | None, str | None, str | None]:
+    """Return (app_id, cover_url, name) when the best score is >= 0.85.
+
+    The threshold is the same fuzzy _confidence score as IGDB. It is not
+    string equality. A missing id or an id < 1 is not a candidate.
+    """
     with httpx.Client(timeout=10) as client:
         resp = client.get(
             "https://store.steampowered.com/api/storesearch/",
@@ -146,23 +170,151 @@ def _steam_search(name: str) -> tuple[str | None, str | None]:
     resp.raise_for_status()
 
     best_score = 0.0
-    best_app_id: str | None = None
+    best_app_id: int | None = None
     best_cover: str | None = None
+    best_name: str | None = None
 
     for item in resp.json().get("items", []):
         item_name = item.get("name", "")
         if not item_name:
             continue
+        raw_id = item.get("id")
+        try:
+            app_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(raw_id, bool) or app_id < 1:
+            continue
         score = _confidence(name, item_name)
         if score > best_score:
             best_score = score
-            best_app_id = str(item["id"])
-            best_cover = f"https://cdn.akamai.steamstatic.com/steam/apps/{best_app_id}/library_600x900.jpg"
+            best_app_id = app_id
+            best_name = item_name
+            best_cover = (
+                f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/library_600x900.jpg"
+            )
 
-    if best_score >= CONFIDENCE_THRESHOLD:
-        return best_app_id, best_cover
+    if best_score >= CONFIDENCE_THRESHOLD and best_app_id is not None and best_name:
+        return best_app_id, best_cover, best_name
+    return None, None, None
 
-    return None, None
+
+def _igdb_hit(result: IGDBResult) -> bool:
+    return (
+        result.confidence >= CONFIDENCE_THRESHOLD
+        and isinstance(result.igdb_id, int)
+        and not isinstance(result.igdb_id, bool)
+        and result.igdb_id >= 1
+        and bool(result.name)
+    )
+
+
+def _apply_steam(
+    game: Game,
+    *,
+    app_id: int,
+    cover_url: str | None,
+    name: str,
+    replace_identity: bool,
+) -> None:
+    """Steam has no genres, companies, or release date. Never clear those columns."""
+    if replace_identity:
+        game.external_api_id = steam_external_id(app_id)
+        game.primary_name = name
+    if game.cover_source != CoverSource.CUSTOM and cover_url is not None:
+        game.cover_image_url = cover_url
+
+
+async def _write_enrichment(
+    db: AsyncSession,
+    game_id: int,
+    *,
+    igdb_result: IGDBResult,
+    steam: tuple[int | None, str | None, str | None],
+) -> tuple[EnrichmentStatus, str | None, str | None]:
+    """Lock the row and write one enrich attempt. The caller commits nothing else.
+
+    Returns (status, cover_url, external_api_id). On a unique violation the
+    returned triple is the row from before this attempt, and the savepoint
+    is already rolled back.
+    """
+    result = await db.execute(
+        select(Game).where(Game.id == game_id).with_for_update()
+    )
+    game = result.scalar_one_or_none()
+    if game is None:
+        raise LookupError(game_id)
+
+    prior_status = game.enrichment_status
+    prior_cover = game.cover_image_url
+    prior_external_id = game.external_api_id
+    identity_empty = prior_external_id is None
+
+    if _igdb_hit(igdb_result):
+        assert igdb_result.igdb_id is not None
+        assert igdb_result.name is not None
+        try:
+            async with db.begin_nested():
+                await apply_igdb_metadata(
+                    db,
+                    game,
+                    igdb_result.name,
+                    igdb_result,
+                    igdb_id=igdb_result.igdb_id,
+                    replace_identity=identity_empty,
+                    clear_cover_on_null=False,
+                )
+                await db.flush()
+        except IntegrityError as exc:
+            if not is_external_id_conflict(exc):
+                raise
+            logger.info(
+                "enrich_game.external_id_taken",
+                extra={"game_id": game_id},
+            )
+            return prior_status, prior_cover, prior_external_id
+        await db.commit()
+        return game.enrichment_status, igdb_result.cover_url, game.external_api_id
+
+    app_id, steam_cover, steam_name = steam
+    if app_id is not None and steam_name:
+        try:
+            async with db.begin_nested():
+                _apply_steam(
+                    game,
+                    app_id=app_id,
+                    cover_url=steam_cover,
+                    name=steam_name,
+                    replace_identity=identity_empty,
+                )
+                game.enrichment_status = EnrichmentStatus.ENRICHED
+                await sync_review_preferences(
+                    db,
+                    game_id,
+                    previous_status=prior_status,
+                    new_status=EnrichmentStatus.ENRICHED,
+                )
+                await db.flush()
+        except IntegrityError as exc:
+            if not is_external_id_conflict(exc):
+                raise
+            logger.info(
+                "enrich_game.external_id_taken",
+                extra={"game_id": game_id},
+            )
+            return prior_status, prior_cover, prior_external_id
+        await db.commit()
+        return EnrichmentStatus.ENRICHED, steam_cover, game.external_api_id
+
+    game.enrichment_status = EnrichmentStatus.NEEDS_REVIEW
+    await sync_review_preferences(
+        db,
+        game_id,
+        previous_status=prior_status,
+        new_status=EnrichmentStatus.NEEDS_REVIEW,
+    )
+    await db.commit()
+    return EnrichmentStatus.NEEDS_REVIEW, None, game.external_api_id
 
 
 # ---------------------------------------------------------------------------
@@ -174,19 +326,20 @@ async def _run_enrichment(game_id: int) -> tuple[EnrichmentStatus, str | None, s
     Returns (status, cover_url, external_api_id).
     Raises _RateLimited if an API returns HTTP 429.
     Raises LookupError if the game row is not found.
+
+    The name is read and the session closed before HTTP. The empty-id
+    decision is the locked load inside _write_enrichment, after HTTP.
     """
     engine = create_async_engine(settings.database_url, echo=False)
     SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
     try:
-        # ── Read game name ───────────────────────────────────────────────────
         async with SessionLocal() as db:
             game = await db.get(Game, game_id)
             if game is None:
                 raise LookupError(game_id)
             name: str = game.primary_name
 
-        # ── IGDB (sync HTTP in thread pool) ──────────────────────────────────
         igdb_result: IGDBResult = _empty_igdb_result()
         try:
             igdb_result = await asyncio.to_thread(_igdb_search, name)
@@ -195,38 +348,19 @@ async def _run_enrichment(game_id: int) -> tuple[EnrichmentStatus, str | None, s
         except Exception:
             logger.exception("enrich_game.igdb_lookup_failed", extra={"game_id": game_id})
 
-        if igdb_result.confidence >= CONFIDENCE_THRESHOLD:
-            async with SessionLocal() as db:
-                await _apply(
-                    db,
-                    game_id,
-                    EnrichmentStatus.ENRICHED,
-                    igdb_result.cover_url,
-                    None,
-                    metadata=igdb_result,
-                )
-            return EnrichmentStatus.ENRICHED, igdb_result.cover_url, None
+        steam: tuple[int | None, str | None, str | None] = (None, None, None)
+        if not _igdb_hit(igdb_result):
+            try:
+                steam = await asyncio.to_thread(_steam_search, name)
+            except _RateLimited:
+                raise
+            except Exception:
+                logger.exception("enrich_game.steam_lookup_failed", extra={"game_id": game_id})
 
-        # ── Steam fallback ───────────────────────────────────────────────────
-        steam_id: str | None = None
-        steam_cover: str | None = None
-        try:
-            steam_id, steam_cover = await asyncio.to_thread(_steam_search, name)
-        except _RateLimited:
-            raise
-        except Exception:
-            logger.exception("enrich_game.steam_lookup_failed", extra={"game_id": game_id})
-
-        if steam_id is not None:
-            async with SessionLocal() as db:
-                await _apply(db, game_id, EnrichmentStatus.ENRICHED, steam_cover, steam_id)
-            return EnrichmentStatus.ENRICHED, steam_cover, steam_id
-
-        # ── No match ─────────────────────────────────────────────────────────
         async with SessionLocal() as db:
-            await _apply(db, game_id, EnrichmentStatus.NEEDS_REVIEW, None, None)
-        return EnrichmentStatus.NEEDS_REVIEW, None, None
-
+            return await _write_enrichment(
+                db, game_id, igdb_result=igdb_result, steam=steam,
+            )
     finally:
         await engine.dispose()
 

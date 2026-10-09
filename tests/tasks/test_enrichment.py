@@ -26,10 +26,8 @@ from app.tasks.enrichment import (
 
 @pytest.fixture(autouse=True)
 def _mock_sync_review_preferences():
-    with patch(
-        "app.tasks.enrichment.sync_review_preferences",
-        new_callable=AsyncMock,
-    ):
+    with patch("app.tasks.enrichment.sync_review_preferences", new_callable=AsyncMock), \
+         patch("app.services.game_matching.sync_review_preferences", new_callable=AsyncMock):
         yield
 
 
@@ -41,6 +39,9 @@ def _igdb_result(
     developers: list[str] | None = None,
     publishers: list[str] | None = None,
     first_release_date: date | None = None,
+    *,
+    name: str | None = "Canonical Title",
+    igdb_id: int | None = 42,
 ) -> IGDBResult:
     return IGDBResult(
         cover_url=cover_url,
@@ -50,6 +51,8 @@ def _igdb_result(
         developers=developers or [],
         publishers=publishers or [],
         first_release_date=first_release_date,
+        name=name,
+        igdb_id=igdb_id,
     )
 
 
@@ -77,6 +80,13 @@ def _game_mock(
 def _make_mock_session(game: MagicMock) -> MagicMock:
     session = AsyncMock()
     session.get.return_value = game
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = game
+    session.execute = AsyncMock(return_value=result)
+    nested = AsyncMock()
+    nested.__aenter__ = AsyncMock(return_value=nested)
+    nested.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested)
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=None)
     return session
@@ -112,6 +122,8 @@ async def test_igdb_high_confidence():
     mock_steam.assert_not_called()
     assert game.enrichment_status == EnrichmentStatus.ENRICHED
     assert game.cover_image_url == "http://cover.jpg"
+    assert game.external_api_id == "igdb:42"
+    assert game.primary_name == "Canonical Title"
 
 
 async def test_igdb_at_threshold_passes():
@@ -138,13 +150,14 @@ async def test_igdb_below_threshold_tries_steam():
          patch("app.tasks.enrichment._igdb_search",
                return_value=_igdb_result(None, 0.84)), \
          patch("app.tasks.enrichment._steam_search",
-               return_value=("1145360", "http://steam-cover.jpg")):
+               return_value=(1145360, "http://steam-cover.jpg", "Hollow Knight")):
 
         status, cover, ext_id = await _run_enrichment(1)
 
     assert status == EnrichmentStatus.ENRICHED
     assert cover == "http://steam-cover.jpg"
-    assert ext_id == "1145360"
+    assert ext_id == "steam:1145360"
+    assert game.primary_name == "Hollow Knight"
     assert game.cover_image_url == "http://steam-cover.jpg"
 
 
@@ -156,7 +169,7 @@ async def test_igdb_and_steam_miss():
     with p_engine, p_sm, \
          patch("app.tasks.enrichment._igdb_search",
                return_value=_igdb_result(None, 0.40)), \
-         patch("app.tasks.enrichment._steam_search", return_value=(None, None)):
+         patch("app.tasks.enrichment._steam_search", return_value=(None, None, None)):
 
         status, cover, ext_id = await _run_enrichment(1)
 
@@ -229,17 +242,12 @@ async def test_igdb_empty_metadata():
     assert game.first_release_date is None
 
 
-async def test_igdb_metadata_skipped_when_cover_custom():
-    """cover_source=CUSTOM → status updated, but metadata + cover untouched."""
+async def test_igdb_custom_cover_still_writes_metadata():
+    """CUSTOM keeps the cover URL and cover_source. Metadata, id, and title write."""
     original_cover = "http://my-custom.jpg"
-    game = _game_mock("Cyberpunk 2077", cover_source=CoverSource.CUSTOM, cover_url=original_cover)
+    game = _game_mock("game.exe", cover_source=CoverSource.CUSTOM, cover_url=original_cover)
     game.genres = ["preexisting"]
-    game.themes = ["preexisting"]
-    game.developers = ["preexisting"]
-    game.publishers = ["preexisting"]
-    game.first_release_date = date(1999, 1, 1)
     p_engine, p_sm, _ = _db_patches(game)
-
     result = _igdb_result(
         cover_url="http://igdb-cover.jpg",
         confidence=0.95,
@@ -248,20 +256,37 @@ async def test_igdb_metadata_skipped_when_cover_custom():
         developers=["CDPR"],
         publishers=["CDP"],
         first_release_date=date(2020, 12, 10),
+        name="Cyberpunk 2077",
+        igdb_id=1877,
     )
 
     with p_engine, p_sm, \
          patch("app.tasks.enrichment._igdb_search", return_value=result):
-
-        status, _, _ = await _run_enrichment(1)
+        status, _, ext_id = await _run_enrichment(1)
 
     assert status == EnrichmentStatus.ENRICHED
+    assert ext_id == "igdb:1877"
     assert game.cover_image_url == original_cover
-    assert game.genres == ["preexisting"]
-    assert game.themes == ["preexisting"]
-    assert game.developers == ["preexisting"]
-    assert game.publishers == ["preexisting"]
-    assert game.first_release_date == date(1999, 1, 1)
+    assert game.cover_source == CoverSource.CUSTOM
+    assert game.primary_name == "Cyberpunk 2077"
+    assert game.genres == ["RPG"]
+    assert game.first_release_date == date(2020, 12, 10)
+
+
+async def test_igdb_hit_without_an_id_falls_through_to_steam():
+    game = _game_mock("Hollow Knight")
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search",
+               return_value=_igdb_result("http://igdb.jpg", 0.95, name=None, igdb_id=None)), \
+         patch("app.tasks.enrichment._steam_search",
+               return_value=(1145360, "http://steam-cover.jpg", "Hollow Knight")):
+        status, cover, ext_id = await _run_enrichment(1)
+
+    assert status == EnrichmentStatus.ENRICHED
+    assert cover == "http://steam-cover.jpg"
+    assert ext_id == "steam:1145360"
+    assert game.external_api_id == "steam:1145360"
 
 
 async def test_steam_fallback_does_not_touch_metadata():
@@ -278,7 +303,7 @@ async def test_steam_fallback_does_not_touch_metadata():
          patch("app.tasks.enrichment._igdb_search",
                return_value=_igdb_result(None, 0.40)), \
          patch("app.tasks.enrichment._steam_search",
-               return_value=("1145360", "http://steam-cover.jpg")):
+               return_value=(1145360, "http://steam-cover.jpg", "Hollow Knight")):
 
         status, _, _ = await _run_enrichment(1)
 
@@ -543,3 +568,44 @@ async def test_backfill_default_keeps_genre_predicate():
 
     stmt = session.execute.call_args_list[0].args[0]
     assert "jsonb_array_length" in str(stmt)
+
+
+def test_steam_search_returns_int_id_cover_and_name():
+    from app.tasks.enrichment import _steam_search
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.return_value = {
+        "items": [
+            {"id": "0", "name": "Not A Game"},
+            {"id": 1145360, "name": "Hollow Knight"},
+        ]
+    }
+    fake_resp.raise_for_status.return_value = None
+    fake_client = MagicMock()
+    fake_client.__enter__ = MagicMock(return_value=fake_client)
+    fake_client.__exit__ = MagicMock(return_value=False)
+    fake_client.get.return_value = fake_resp
+
+    with patch("app.tasks.enrichment.httpx.Client", return_value=fake_client):
+        app_id, cover, name = _steam_search("Hollow Knight")
+
+    assert app_id == 1145360
+    assert name == "Hollow Knight"
+    assert cover == "https://cdn.akamai.steamstatic.com/steam/apps/1145360/library_600x900.jpg"
+
+
+def test_steam_search_miss_is_a_triple_of_nones():
+    from app.tasks.enrichment import _steam_search
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.return_value = {"items": [{"id": None, "name": "Nope"}]}
+    fake_resp.raise_for_status.return_value = None
+    fake_client = MagicMock()
+    fake_client.__enter__ = MagicMock(return_value=fake_client)
+    fake_client.__exit__ = MagicMock(return_value=False)
+    fake_client.get.return_value = fake_resp
+
+    with patch("app.tasks.enrichment.httpx.Client", return_value=fake_client):
+        assert _steam_search("Nope") == (None, None, None)
