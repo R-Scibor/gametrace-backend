@@ -8,9 +8,11 @@ mocked HTTP helpers. Sync tests call enrich_game.run() to test the Celery task's
 retry behaviour — sync because enrich_game calls asyncio.run(), which cannot be
 nested inside a running event loop.
 """
+import json
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from celery.exceptions import Retry
 
@@ -609,3 +611,51 @@ def test_steam_search_miss_is_a_triple_of_nones():
 
     with patch("app.tasks.enrichment.httpx.Client", return_value=fake_client):
         assert _steam_search("Nope") == (None, None, None)
+
+
+def _http_status(code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "https://example.test")
+    response = httpx.Response(code, request=request)
+    return httpx.HTTPStatusError(str(code), request=request, response=response)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        _RateLimited("IGDB"),
+        httpx.TimeoutException("slow"),
+        httpx.ConnectError("down"),
+        _http_status(401),
+        _http_status(429),
+        _http_status(500),
+        _http_status(503),
+    ],
+)
+def test_lookup_kind_retries_transport_auth_and_5xx(exc):
+    from app.tasks.enrichment import _lookup_kind
+
+    assert _lookup_kind(exc) == "retry"
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        _http_status(400),
+        _http_status(404),
+        json.JSONDecodeError("bad", "doc", 0),
+    ],
+)
+def test_lookup_kind_unanswered_is_other_4xx_and_bad_json(exc):
+    from app.tasks.enrichment import _lookup_kind
+
+    assert _lookup_kind(exc) == "unanswered"
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [ValueError("shape"), KeyError("name"), TypeError("shape"), RuntimeError("bug")],
+)
+def test_lookup_kind_other_errors_are_unexpected(exc):
+    from app.tasks.enrichment import _lookup_kind
+
+    assert _lookup_kind(exc) == "unexpected"

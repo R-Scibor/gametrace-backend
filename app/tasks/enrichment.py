@@ -126,6 +126,7 @@ Reusing the global AsyncSessionLocal across multiple asyncio.run() calls causes
 fresh engine created inside it, sync HTTP calls via asyncio.to_thread().
 """
 import asyncio
+import json
 import logging
 
 import httpx
@@ -151,6 +152,35 @@ from app.services.game_matching import (
 from app.services.game_review import sync_review_preferences
 
 logger = logging.getLogger(__name__)
+
+
+class LookupRetryable(Exception):
+    """A lookup failed in a way the next attempt might survive."""
+
+    def __init__(self, source: str) -> None:
+        self.source = source
+        super().__init__(source)
+
+
+def _lookup_kind(exc: BaseException) -> str:
+    """Return ``retry``, ``unanswered``, or ``unexpected``.
+
+    ``json.JSONDecodeError`` is a ``ValueError``. It must be matched before
+    any broader ``ValueError`` branch. This function has no ``ValueError``
+    branch: a parse bug falls through to ``unexpected``.
+    """
+    if isinstance(exc, _RateLimited):
+        return "retry"
+    if isinstance(exc, httpx.TransportError):
+        return "retry"
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        if code in (401, 429) or code >= 500:
+            return "retry"
+        return "unanswered"
+    if isinstance(exc, json.JSONDecodeError):
+        return "unanswered"
+    return "unexpected"
 
 
 def _steam_search(name: str) -> tuple[int | None, str | None, str | None]:
