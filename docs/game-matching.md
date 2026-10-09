@@ -21,8 +21,10 @@ raw name from Discord
    ├── yes → ENRICHED (IGDB cover)
    └── no  → Steam exact-match fallback
                 ├── hit → ENRICHED (Steam cover)
-                └── miss → NEEDS_REVIEW
+                └── miss → NEEDS_REVIEW, unless the locked row is already ENRICHED
 ```
+
+A lookup failure does not change the status, and the IGDB attempt whose retry cap is spent may still apply a Steam hit.
 
 ## Step 1 — `_sanitize(s)`
 
@@ -242,7 +244,7 @@ Games enriched before this pipeline was added retain their original (possibly do
 docker compose exec worker celery -A app.core.celery_app call tasks.backfill_metadata --kwargs '{"full": true}'
 ```
 
-Without `full=true`, `backfill_metadata` only re-queues ENRICHED games that have an empty genres list. Passing `full=true` re-queues every ENRICHED game regardless of existing metadata. The existing IGDB rate-limit backoff and Redis dedup key (`enrich_game_{game_id}`) prevent duplicate queuing.
+Without `full=true`, `backfill_metadata` only re-queues ENRICHED games that have an empty genres list. Passing `full=true` re-queues every ENRICHED game regardless of existing metadata.
 
 ## Threshold and constants
 

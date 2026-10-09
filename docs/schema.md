@@ -68,7 +68,7 @@ Game catalog. Created as stubs by the bot, enriched asynchronously by the Celery
 | `external_api_id` | `VARCHAR(64)` | Optional. One id per row, `igdb:{id}` or `steam:{id}`, with decimal digits and id >= 1. Partial unique index `uq_games_external_api_id` where the column is not null (migration `0023`). Bare legacy values stay as stored and do not match a prefixed lookup. |
 | `cover_image_url` | `VARCHAR(512)` | Optional. |
 | `cover_source` | `ENUM('EXTERNAL', 'CUSTOM')` | If `CUSTOM`, the enrichment worker will not overwrite `cover_image_url`. Set by `PUT /api/v1/admin/games/{id}/cover` (admin-only). |
-| `enrichment_status` | `ENUM('PENDING', 'ENRICHED', 'NEEDS_REVIEW')` | `PENDING` on insert; `ENRICHED` when match confidence ≥ 85%; `NEEDS_REVIEW` when no source crossed the threshold. |
+| `enrichment_status` | `ENUM('PENDING', 'ENRICHED', 'NEEDS_REVIEW')` | `PENDING` on insert; `ENRICHED` when match confidence ≥ 85%; `NEEDS_REVIEW` when no source crossed the threshold. A failed lookup does not change the status. `NEEDS_REVIEW` means both sources returned a parsed non-hit. An `ENRICHED` row stays `ENRICHED`. |
 | `first_release_date` | `DATE` | Optional. IGDB `first_release_date` (Unix seconds → DATE). NULL when unknown or when matched only via Steam fallback (Steam doesn't expose this). |
 | `genres` | `JSONB` | Array of names from IGDB, e.g. `["RPG", "Adventure"]`. Defaults to `'[]'`. GIN-indexed. |
 | `themes` | `JSONB` | Array of names from IGDB. Defaults to `'[]'`. GIN-indexed. |

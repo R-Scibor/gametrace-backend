@@ -105,7 +105,10 @@ Step 5 — Pipeline decision
   Otherwise a Steam score >= 0.85:
     empty id → ENRICHED, external_api_id = steam:{app_id}, primary_name = Steam name
     id already set → leave the id, the title, and the metadata columns alone
-  Otherwise NEEDS_REVIEW.
+  Otherwise, when both lookups returned a parsed non-hit and the locked
+  row is not ENRICHED, NEEDS_REVIEW. A high score with no usable id is a
+  non-hit. A failure leaves the status unchanged, except a Steam hit,
+  including the hit on an exhausted IGDB outage.
 
   A unique violation on uq_games_external_api_id rolls that write back, logs
   enrich_game.external_id_taken, and returns. The row is not demoted.
@@ -114,7 +117,9 @@ Step 5 — Pipeline decision
 OPERATIONAL NOTES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Exponential backoff on HTTP 429: 2^retry * 60s countdown (max 5 retries).
-Redis deduplication: task_id="enrich_game_{game_id}" — one task per game queued at a time.
+task_id="enrich_game_{game_id}" is the Celery result key. It is not a lock.
+A retryable IGDB failure waits 2^retry * 60s, up to 5 retries. The attempt
+whose cap is already spent calls Steam once and does not schedule another wait.
 Custom covers: cover_image_url and cover_source stay when cover_source=CUSTOM.
 An IGDB hit still writes genres, themes, developers, publishers, and
 first_release_date on a CUSTOM row. A null IGDB cover does not clear a cover

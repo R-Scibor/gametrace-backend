@@ -178,7 +178,7 @@ Discord rich-presence is occasionally flaky: a single continuous play session ca
 
 ### Write-then-enrich
 
-The bot writes session and stub-game rows immediately, regardless of any user preference (`is_ignored` filtering happens at the API layer, not the bot). It then fires a Celery task `enrich_game_{game_id}` to fetch metadata. The task ID is stable so duplicate enrichments for the same game collapse in Redis. Enrichment failure never blocks session writes — the worst case is a `Game` row with `enrichment_status=PENDING` indefinitely, which is fine.
+The bot writes session and stub-game rows immediately, regardless of any user preference (`is_ignored` filtering happens at the API layer, not the bot). It then fires a Celery task `enrich_game_{game_id}` to fetch metadata. The task id `enrich_game_{game_id}` is the Celery result key. It does not collapse duplicate messages. Enrichment failure never blocks session writes — the worst case is a `Game` row with `enrichment_status=PENDING` indefinitely, which is fine.
 
 Game-name matching for enrichment is described in [game-matching.md](game-matching.md).
 
@@ -234,7 +234,7 @@ The 12h ceiling is intentionally generous — it's a backstop for "user fell asl
 |---|---|
 | Discord rate-limits the bot | `discord.py` handles backoff internally; presence events queue up and replay |
 | Database briefly unavailable | The handler raises and `discord.py` swallows it — the missed presence change is lost. Next restart's Self-Healing catches stuck `ONGOING` rows. |
-| Celery / Redis down at session start | Enrichment task fails to enqueue; the session is still written. The session stays written; the game stays `PENDING` until the next event that commits a session for that game while it is still `PENDING`. A stop does not enqueue. A startup keep does not enqueue. `ENRICHED` and `NEEDS_REVIEW` are not enqueued. The task id `enrich_game_{id}` collapses duplicates. |
+| Celery / Redis down at session start | Enrichment task fails to enqueue; the session is still written. The session stays written; the game stays `PENDING` until the next event that commits a session for that game while it is still `PENDING`. A stop does not enqueue. A startup keep does not enqueue. `ENRICHED` and `NEEDS_REVIEW` are not enqueued. The task id is the Celery result key and does not collapse duplicates. A failed lookup leaves the enrichment status unchanged. |
 | User leaves all guilds the bot is in | Their `ONGOING` session can no longer be reconciled; on next restart Self-Healing marks it `ERROR` with "user not found". |
 | Discord rich-presence flicker | Handled by stitch-resume + flicker suppression (see above). Short BOT sessions are flagged `is_flicker=true` at close; if the same game resumes within `SESSION_STITCH_WINDOW_SECONDS`, the session is reopened and the flag is cleared. |
 | `LINK_CODE_SECRET` unset | `/login` replies with an error message; `POST /auth/link` returns `503`. |
