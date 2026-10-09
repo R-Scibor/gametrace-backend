@@ -424,7 +424,7 @@ async def test_patch_over_duration_that_also_overlaps_is_422_not_409(authed_clie
     assert resp.json()["detail"] == "session duration exceeds 48 hours"
 
 
-async def test_patch_naive_iso_end_time_never_500(authed_client, db, user):
+async def test_patch_naive_iso_end_time_returns_422(authed_client, db, user):
     game = await make_game(db)
     session = await make_session(
         db, user.discord_id, game.id, dt(hours_ago=3), dt(hours_ago=1),
@@ -434,8 +434,10 @@ async def test_patch_naive_iso_end_time_never_500(authed_client, db, user):
         f"/api/v1/sessions/{session.id}",
         json={"end_time": naive_end.isoformat()},
     )
-    assert resp.status_code == 200
-    assert resp.json()["duration_seconds"] == 9000  # 2.5h
+    assert resp.status_code == 422
+    db.expire(session)
+    await db.refresh(session)
+    assert session.duration_seconds == 7200
 
 
 async def test_patch_trashed_over_duration_rejected(authed_client, db, user):

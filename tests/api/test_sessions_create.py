@@ -24,6 +24,45 @@ async def test_create_session_success(authed_client, db):
     assert data["duration_seconds"] == 3600
 
 
+async def test_create_session_rejects_naive_timestamps(authed_client, db):
+    game = await make_game(db)
+    start = dt(hours_ago=2)
+    end = dt(hours_ago=1)
+    naive_start = start.replace(tzinfo=None).isoformat()
+    naive_end = end.replace(tzinfo=None).isoformat()
+
+    missing_start = await authed_client.post(
+        "/api/v1/sessions",
+        json={"game_id": game.id, "start_time": naive_start, "end_time": end.isoformat()},
+    )
+    missing_end = await authed_client.post(
+        "/api/v1/sessions",
+        json={"game_id": game.id, "start_time": start.isoformat(), "end_time": naive_end},
+    )
+
+    assert missing_start.status_code == 422
+    assert missing_end.status_code == 422
+
+
+async def test_create_session_accepts_numeric_offset(authed_client, db):
+    game = await make_game(db)
+    warsaw = timezone(timedelta(hours=2))
+    start = dt(hours_ago=2).astimezone(warsaw)
+    end = dt(hours_ago=1).astimezone(warsaw)
+
+    resp = await authed_client.post(
+        "/api/v1/sessions",
+        json={
+            "game_id": game.id,
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+        },
+    )
+
+    assert resp.status_code == 201
+    assert resp.json()["duration_seconds"] == 3600
+
+
 async def test_create_session_game_not_found(authed_client):
     resp = await authed_client.post(
         "/api/v1/sessions",
@@ -290,8 +329,8 @@ async def test_create_session_mixed_naive_start_aware_end(authed_client, db):
             "end_time": end.isoformat(),
         },
     )
-    assert resp.status_code == 201
-    assert resp.json()["duration_seconds"] == 3600
+    assert resp.status_code == 422
+    assert isinstance(resp.json()["detail"], list)
 
 
 async def test_create_session_missing_game_with_over_duration_is_422(authed_client):
