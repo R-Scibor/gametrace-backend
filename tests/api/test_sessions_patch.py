@@ -26,6 +26,109 @@ async def test_fix_error_session(authed_client, db, user):
     assert data["duration_seconds"] == 7200
 
 
+async def test_fix_error_session_clears_restart_note(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=3), dt(hours_ago=1),
+        status=SessionStatus.ERROR,
+        notes="Self-healing: bot restarted while session was ONGOING",
+    )
+
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": dt(hours_ago=1).isoformat()},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == SessionStatus.COMPLETED
+    assert resp.json()["notes"] is None
+    later = await authed_client.get(f"/api/v1/sessions/{session.id}")
+    assert later.status_code == 200
+    assert later.json()["notes"] is None
+
+
+async def test_patch_that_stays_error_keeps_the_note(authed_client, db, user):
+    game = await make_game(db)
+    note = "Self-healing: bot restarted while session was ONGOING"
+    session = await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=3), dt(hours_ago=1),
+        status=SessionStatus.ERROR,
+        notes=note,
+    )
+
+    resp = await authed_client.patch(f"/api/v1/sessions/{session.id}", json={})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == SessionStatus.ERROR
+    assert resp.json()["notes"] == note
+
+
+async def test_patch_completed_session_keeps_existing_note(authed_client, db, user):
+    game = await make_game(db)
+    note = "kept"
+    session = await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=3), dt(hours_ago=1),
+        notes=note,
+    )
+
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": dt(hours_ago=0.5).isoformat()},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == SessionStatus.COMPLETED
+    assert resp.json()["notes"] == note
+
+
+async def test_patch_cannot_set_notes(authed_client, db, user):
+    game = await make_game(db)
+    note = "system owned"
+    session = await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=3), dt(hours_ago=1),
+        status=SessionStatus.ERROR,
+        notes=note,
+    )
+
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": dt(hours_ago=1).isoformat(), "notes": "user text"},
+    )
+
+    assert resp.status_code == 422
+    db.expire(session)
+    await db.refresh(session)
+    assert session.notes == note
+    assert session.status == SessionStatus.ERROR
+
+
+async def test_fix_trashed_error_clears_note_on_the_trash_list(authed_client, db, user):
+    game = await make_game(db)
+    session = await make_session(
+        db, user.discord_id, game.id,
+        dt(hours_ago=3), dt(hours_ago=1),
+        status=SessionStatus.ERROR,
+        notes="Self-healing: bot restarted while session was ONGOING",
+        deleted_at=datetime.now(UTC),
+    )
+
+    resp = await authed_client.patch(
+        f"/api/v1/sessions/{session.id}",
+        json={"end_time": dt(hours_ago=1).isoformat()},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["notes"] is None
+    trash = await authed_client.get("/api/v1/sessions/trash")
+    assert trash.status_code == 200
+    row = next(item for item in trash.json() if item["id"] == session.id)
+    assert row["notes"] is None
+
+
 async def test_fix_end_time_before_start_returns_422(authed_client, db, user):
     game = await make_game(db)
     session = await make_session(

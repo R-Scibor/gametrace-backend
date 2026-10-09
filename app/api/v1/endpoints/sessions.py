@@ -325,6 +325,17 @@ async def patch_session(
             else GameSession.deleted_at.is_not(None)
         )
         duration = int((end - start).total_seconds())
+        leaving_error = session.status == SessionStatus.ERROR
+        repaired = {
+            "end_time": end,
+            "duration_seconds": duration,
+            "status": SessionStatus.COMPLETED,
+            "source": SessionSource.MANUAL,
+        }
+        # The restart sentence is system-owned. It describes an unknown end,
+        # so it goes away in the same assignment that supplies one.
+        if leaving_error:
+            repaired["notes"] = None
         try:
             result = await db.execute(
                 update(GameSession)
@@ -334,12 +345,7 @@ async def patch_session(
                     GameSession.status.in_([SessionStatus.COMPLETED, SessionStatus.ERROR]),
                     deleted_match,
                 )
-                .values(
-                    end_time=end,
-                    duration_seconds=duration,
-                    status=SessionStatus.COMPLETED,
-                    source=SessionSource.MANUAL,
-                )
+                .values(**repaired)
                 .returning(GameSession.id),
                 execution_options={"synchronize_session": False},
             )
@@ -354,6 +360,8 @@ async def patch_session(
         session.duration_seconds = duration
         session.status = SessionStatus.COMPLETED
         session.source = SessionSource.MANUAL
+        if leaving_error:
+            session.notes = None
 
     await db.commit()
     await db.refresh(session)
