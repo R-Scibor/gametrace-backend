@@ -147,7 +147,7 @@ Per-user metadata layered on top of the global `games` catalog. Not all users ha
 | `is_accepted` | `BOOLEAN` | Nullable. Only meaningful for `NEEDS_REVIEW` games: `false` = Unrecognized inbox (hidden from main library/stats), `true` = user accepted the stub. `NULL` when not applicable (`ENRICHED`/`PENDING`). Auto-set to `false` when enrichment lands on `NEEDS_REVIEW`; cleared to `NULL` when the game later becomes `ENRICHED`. |
 | `custom_tag` | `VARCHAR(64)` | Optional user-supplied label. |
 
-Unique constraint on `(user_id, game_id)`. The merge endpoint (`POST /api/v1/admin/games/{id}/merge/{target_id}`, admin-only) reassigns these rows transactionally, dropping conflicts where the target already has a preference for the same user.
+Unique constraint on `(user_id, game_id)`. The merge endpoint (`POST /api/v1/admin/games/{id}/merge/{target_id}`, admin-only) reassigns these rows transactionally, dropping conflicts where the target already has a preference for the same user. When the survivor's `external_api_id` is null and the source's is set, the survivor takes that id and the source metadata before the source row is deleted. Two different non-null ids abort the merge.
 
 ### `reports`
 
