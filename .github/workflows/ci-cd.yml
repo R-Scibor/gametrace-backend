@@ -120,7 +120,9 @@ jobs:
       - name: Deploy
         run: |
           cd /home/endmin/homelab/gametrace-backend
-          git pull
+          git fetch origin main
+          git checkout main
+          git merge --ff-only origin/main
           export GIT_SHA=$(git rev-parse --short HEAD)
           export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           export APP_VERSION=$(git describe --tags --always --dirty)
