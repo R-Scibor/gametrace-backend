@@ -1,7 +1,7 @@
 import enum
 from datetime import date
 
-from sqlalchemy import Boolean, Date, ForeignKey, String, UniqueConstraint, text
+from sqlalchemy import Boolean, Date, ForeignKey, Index, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,6 +21,14 @@ class EnrichmentStatus(enum.StrEnum):
 
 class Game(Base):
     __tablename__ = "games"
+    __table_args__ = (
+        Index(
+            "uq_games_external_api_id",
+            "external_api_id",
+            unique=True,
+            postgresql_where=text("external_api_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     primary_name: Mapped[str] = mapped_column(String(256))
