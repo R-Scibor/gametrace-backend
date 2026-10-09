@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.models.game import CoverSource, EnrichmentStatus, Game
 from app.services.company_resolution import resolve_companies
+from app.services.external_ids import igdb_external_id
 from app.services.game_review import sync_review_preferences
 from app.tasks.igdb_auth import get_igdb_token, invalidate_igdb_token
 
@@ -97,20 +98,39 @@ async def apply_igdb_metadata(
     meta: IGDBResult,
     *,
     igdb_id: int,
+    replace_identity: bool,
+    clear_cover_on_null: bool,
 ) -> None:
-    """Apply IGDB lookup results to an existing Game row (no commit)."""
+    """Apply an IGDB hit to an existing row. Does not commit.
+
+    replace_identity stores igdb:{id} and sets primary_name. A false value
+    leaves both columns alone, including a bare legacy id.
+
+    clear_cover_on_null is the admin and POST path: a null URL clears a
+    non-custom cover. The worker passes False, so a null URL leaves the
+    stored cover. A CUSTOM row never changes cover_image_url or cover_source.
+    Metadata columns always write.
+    """
+    if isinstance(igdb_id, bool) or not isinstance(igdb_id, int) or igdb_id < 1:
+        raise ValueError("igdb_id must be an int >= 1")
+
     previous_status = game.enrichment_status
-    game.primary_name = canonical_name
-    game.external_api_id = str(igdb_id)
+    if replace_identity:
+        game.primary_name = canonical_name
+        game.external_api_id = igdb_external_id(igdb_id)
     game.enrichment_status = EnrichmentStatus.ENRICHED
+    game.genres = meta.genres
+    game.themes = meta.themes
+    game.developers = meta.developers
+    game.publishers = meta.publishers
+    game.first_release_date = meta.first_release_date
     if game.cover_source != CoverSource.CUSTOM:
-        game.cover_image_url = meta.cover_url
-        game.cover_source = CoverSource.EXTERNAL
-        game.genres = meta.genres
-        game.themes = meta.themes
-        game.developers = meta.developers
-        game.publishers = meta.publishers
-        game.first_release_date = meta.first_release_date
+        if clear_cover_on_null:
+            game.cover_image_url = meta.cover_url
+            game.cover_source = CoverSource.EXTERNAL
+        elif meta.cover_url is not None:
+            game.cover_image_url = meta.cover_url
+            game.cover_source = CoverSource.EXTERNAL
     await sync_review_preferences(
         db,
         game.id,

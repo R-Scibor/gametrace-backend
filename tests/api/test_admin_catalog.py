@@ -422,7 +422,7 @@ async def test_igdb_link_happy_path_enriches_existing_stub(admin_client, db, adm
     assert data["cover_image_url"] == _FETCH_RESULT[1].cover_url
 
     await db.refresh(game)
-    assert game.external_api_id == str(_IGDB_ID)
+    assert game.external_api_id == "igdb:1234"
     assert game.genres == ["Role-playing (RPG)"]
     assert game.developers == ["Supergiant Games"]
 
@@ -436,7 +436,7 @@ async def test_igdb_link_idempotent_same_game_same_igdb_id(admin_client, db, adm
         "Hades",
         enrichment_status=EnrichmentStatus.ENRICHED,
     )
-    game.external_api_id = str(_IGDB_ID)
+    game.external_api_id = "igdb:1234"
     game.cover_source = CoverSource.EXTERNAL
     await db.flush()
 
@@ -453,7 +453,7 @@ async def test_igdb_link_idempotent_same_game_same_igdb_id(admin_client, db, adm
 
 async def test_igdb_link_conflict_when_other_game_has_external_api_id(admin_client, db, admin_user):
     holder = await make_game(db, "Already Linked", enrichment_status=EnrichmentStatus.ENRICHED)
-    holder.external_api_id = str(_IGDB_ID)
+    holder.external_api_id = "igdb:1234"
     await db.flush()
     stub = await make_game(db, "Unlinked Stub", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
 
@@ -537,6 +537,132 @@ async def test_igdb_link_non_admin_returns_403(authed_client, db, user):
         )
 
     assert resp.status_code == 403
+
+
+async def test_igdb_link_replaces_a_steam_id_and_sets_the_title(admin_client, db, admin_user):
+    game = await make_game(db, "Counter-Strike", enrichment_status=EnrichmentStatus.ENRICHED)
+    game.external_api_id = "steam:730"
+    await db.flush()
+
+    with patch(IGDB_LINK_PATCH_TARGET, return_value=_FETCH_RESULT):
+        resp = await admin_client.post(
+            IGDB_LINK_URL.format(game_id=game.id),
+            json={"igdb_id": _IGDB_ID},
+        )
+
+    assert resp.status_code == 200
+    await db.refresh(game)
+    assert game.external_api_id == "igdb:1234"
+    assert game.primary_name == "Hades"
+
+
+async def test_igdb_link_bare_id_on_another_row_is_not_a_conflict(admin_client, db, admin_user):
+    holder = await make_game(db, "Bare Holder", enrichment_status=EnrichmentStatus.ENRICHED)
+    holder.external_api_id = "1234"
+    await db.flush()
+    stub = await make_game(db, "Unlinked Stub", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    with patch(IGDB_LINK_PATCH_TARGET, return_value=_FETCH_RESULT):
+        resp = await admin_client.post(
+            IGDB_LINK_URL.format(game_id=stub.id),
+            json={"igdb_id": _IGDB_ID},
+        )
+
+    assert resp.status_code == 200
+    await db.refresh(stub)
+    await db.refresh(holder)
+    assert stub.external_api_id == "igdb:1234"
+    assert holder.external_api_id == "1234"
+
+
+async def test_igdb_link_leaves_a_custom_cover_and_writes_metadata(admin_client, db, admin_user):
+    game = await make_game(db, "hades.exe", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    game.cover_source = CoverSource.CUSTOM
+    game.cover_image_url = "/covers/custom.jpg"
+    await db.flush()
+
+    with patch(IGDB_LINK_PATCH_TARGET, return_value=_FETCH_RESULT):
+        resp = await admin_client.post(
+            IGDB_LINK_URL.format(game_id=game.id),
+            json={"igdb_id": _IGDB_ID},
+        )
+
+    assert resp.status_code == 200
+    await db.refresh(game)
+    assert game.cover_image_url == "/covers/custom.jpg"
+    assert game.cover_source == CoverSource.CUSTOM
+    assert game.genres == ["Role-playing (RPG)"]
+    assert game.external_api_id == "igdb:1234"
+
+
+async def test_igdb_link_unique_violation_returns_409_with_the_holder(admin_client, db, admin_user):
+    """The fast select misses, then the unique index rejects the write."""
+    holder = await make_game(db, "Already Linked", enrichment_status=EnrichmentStatus.ENRICHED)
+    holder.external_api_id = "igdb:1234"
+    await db.flush()
+    stub = await make_game(db, "Unlinked Stub", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    calls = {"n": 0}
+    real_scalar = db.scalar
+
+    async def miss_once(stmt, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return await real_scalar(stmt, *args, **kwargs)
+
+    with patch(IGDB_LINK_PATCH_TARGET, return_value=_FETCH_RESULT), \
+         patch("app.api.v1.endpoints.admin.catalog.log_admin_action") as mock_log, \
+         patch.object(db, "scalar", miss_once):
+        resp = await admin_client.post(
+            IGDB_LINK_URL.format(game_id=stub.id),
+            json={"igdb_id": _IGDB_ID},
+        )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "message": "IGDB id already linked to another game",
+        "conflicting_game_id": holder.id,
+    }
+    mock_log.assert_not_called()
+    await db.refresh(stub)
+    assert stub.primary_name == "Unlinked Stub"
+    assert stub.external_api_id is None
+
+
+class _UniqueOrig(Exception):
+    def __init__(self):
+        super().__init__("duplicate key")
+        self.sqlstate = "23505"
+        self.constraint_name = "uq_games_external_api_id"
+
+
+async def test_igdb_link_unique_violation_without_a_readable_winner_omits_the_id(
+    admin_client, db, admin_user,
+):
+    from sqlalchemy.exc import IntegrityError
+
+    game = await make_game(db, "Unlinked Stub", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+
+    async def boom(*args, **kwargs):
+        raise IntegrityError("UPDATE games", {}, _UniqueOrig())
+
+    with patch(IGDB_LINK_PATCH_TARGET, return_value=_FETCH_RESULT), \
+         patch("app.api.v1.endpoints.admin.catalog.log_admin_action") as mock_log, \
+         patch.object(db, "flush", boom):
+        resp = await admin_client.post(
+            IGDB_LINK_URL.format(game_id=game.id),
+            json={"igdb_id": _IGDB_ID},
+        )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "message": "IGDB id already linked to another game",
+    }
+    assert "conflicting_game_id" not in resp.json()["detail"]
+    mock_log.assert_not_called()
+    await db.refresh(game)
+    assert game.primary_name == "Unlinked Stub"
+    assert game.external_api_id is None
 
 
 # ── POST /games/{id}/aliases ─────────────────────────────────────────────────

@@ -7,6 +7,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import aggregate_order_by
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -26,6 +27,7 @@ from app.schemas.admin import (
 )
 from app.schemas.game import GameMatchRequest, GameResponse, IGDBCandidateOut
 from app.services.enrichment_dispatch import queue_enrichment
+from app.services.external_ids import igdb_external_id, is_external_id_conflict
 from app.services.game_aliases import AliasResult, add_alias
 from app.services.game_matching import (
     _igdb_fetch_by_id,
@@ -213,6 +215,9 @@ def _igdb_link_audit_snapshot(game: Game) -> str:
     )
 
 
+_IGDB_TAKEN = "IGDB id already linked to another game"
+
+
 @router.post("/games/{game_id}/igdb-link", response_model=GameResponse)
 async def igdb_link_game(
     game_id: int,
@@ -225,19 +230,17 @@ async def igdb_link_game(
     if game is None:
         raise HTTPException(status_code=404, detail=f"Game {game_id} not found.")
 
+    external_id = igdb_external_id(body.igdb_id)
     other = await db.scalar(
         select(Game.id).where(
-            Game.external_api_id == str(body.igdb_id),
+            Game.external_api_id == external_id,
             Game.id != game_id,
         )
     )
     if other is not None:
         raise HTTPException(
             status_code=409,
-            detail={
-                "message": "IGDB id already linked to another game",
-                "conflicting_game_id": other,
-            },
+            detail={"message": _IGDB_TAKEN, "conflicting_game_id": other},
         )
 
     try:
@@ -252,18 +255,35 @@ async def igdb_link_game(
         raise HTTPException(status_code=404, detail="IGDB game not found")
 
     canonical_name, meta = fetched
-
     before = _igdb_link_audit_snapshot(game)
-    await apply_igdb_metadata(
-        db,
-        game,
-        canonical_name,
-        meta,
-        igdb_id=body.igdb_id,
-    )
+    try:
+        async with db.begin_nested():
+            await apply_igdb_metadata(
+                db,
+                game,
+                canonical_name,
+                meta,
+                igdb_id=body.igdb_id,
+                replace_identity=True,
+                clear_cover_on_null=True,
+            )
+            await db.flush()
+    except IntegrityError as exc:
+        if not is_external_id_conflict(exc):
+            raise
+        winner = await db.scalar(
+            select(Game.id).where(
+                Game.external_api_id == external_id,
+                Game.id != game_id,
+            )
+        )
+        detail = {"message": _IGDB_TAKEN}
+        if winner is not None:
+            detail["conflicting_game_id"] = winner
+        raise HTTPException(status_code=409, detail=detail) from exc
+
     await db.commit()
     await db.refresh(game)
-
     log_admin_action(
         user.discord_id,
         "igdb_link",
@@ -271,7 +291,6 @@ async def igdb_link_game(
         before=before,
         after=_igdb_link_audit_snapshot(game),
     )
-
     return game
 
 
