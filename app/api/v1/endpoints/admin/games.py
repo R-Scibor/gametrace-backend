@@ -55,6 +55,24 @@ async def merge_game(
     if target is None:
         raise HTTPException(status_code=404, detail=f"Game {target_id} not found.")
 
+    copied_id: str | None = None
+    if target.external_api_id is None and source.external_api_id is not None:
+        copied_id = source.external_api_id
+        async with db.begin_nested():
+            source.external_api_id = None
+            await db.flush()
+            target.primary_name = source.primary_name
+            target.enrichment_status = source.enrichment_status
+            target.genres = list(source.genres)
+            target.themes = list(source.themes)
+            target.developers = list(source.developers)
+            target.publishers = list(source.publishers)
+            target.first_release_date = source.first_release_date
+            target.cover_image_url = source.cover_image_url
+            target.cover_source = source.cover_source
+            target.external_api_id = copied_id
+            await db.flush()
+
     # ── All operations in a single transaction ─────────────────────────────
     # 1. Reassign aliases (unique on discord_process_name — no conflicts possible)
     await db.execute(
@@ -119,7 +137,11 @@ async def merge_game(
     await db.commit()
 
     log_admin_action(
-        user.discord_id, "merge_game", f"game:{game_id}", after=f"target:{target_id}"
+        user.discord_id,
+        "merge_game",
+        f"game:{game_id}",
+        after=f"target:{target_id}",
+        detail=copied_id,
     )
 
 

@@ -1,9 +1,10 @@
 import base64
 import logging
+from datetime import date
 
 from sqlalchemy import select
 
-from app.models.game import CoverSource, Game, UserGamePreference
+from app.models.game import CoverSource, EnrichmentStatus, Game, UserGamePreference
 from tests.factories import (
     dt,
     make_alias,
@@ -328,3 +329,143 @@ async def test_cover_upload_non_image_bytes_returns_422(admin_client, db, admin_
     )
 
     assert resp.status_code == 422
+
+
+async def test_merge_copies_igdb_identity_onto_null_survivor(
+    admin_client, db, admin_user, caplog,
+):
+    survivor = await make_game(db, "lords.exe")
+    source = await make_game(
+        db,
+        "Lords of the Fallen",
+        enrichment_status=EnrichmentStatus.ENRICHED,
+        genres=["RPG"],
+        themes=["Fantasy"],
+        developers=["Hexworks"],
+        publishers=["CI Games"],
+        first_release_date=date(2023, 10, 13),
+    )
+    source.external_api_id = "igdb:123"
+    source.cover_image_url = "https://images.igdb.com/igdb/image/upload/t_cover_big/co72u9.jpg"
+    source.cover_source = CoverSource.EXTERNAL
+    await db.flush()
+    assert survivor.id < source.id
+    session = await make_session(
+        db, admin_user.discord_id, source.id, dt(hours_ago=3), dt(hours_ago=2),
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.core.observability"):
+        resp = await admin_client.post(
+            f"/api/v1/admin/games/{source.id}/merge/{survivor.id}"
+        )
+
+    assert resp.status_code == 204
+    assert await db.get(Game, source.id) is None
+    await db.refresh(survivor)
+    await db.refresh(session)
+    assert survivor.external_api_id == "igdb:123"
+    assert survivor.primary_name == "Lords of the Fallen"
+    assert survivor.enrichment_status == EnrichmentStatus.ENRICHED
+    assert survivor.genres == ["RPG"]
+    assert survivor.themes == ["Fantasy"]
+    assert survivor.developers == ["Hexworks"]
+    assert survivor.publishers == ["CI Games"]
+    assert survivor.first_release_date == date(2023, 10, 13)
+    assert survivor.cover_image_url == (
+        "https://images.igdb.com/igdb/image/upload/t_cover_big/co72u9.jpg"
+    )
+    assert survivor.cover_source == CoverSource.EXTERNAL
+    assert session.game_id == survivor.id
+    [record] = [r for r in caplog.records if r.getMessage() == "admin_action"]
+    assert record.after == f"target:{survivor.id}"
+    assert record.detail == "igdb:123"
+
+
+async def test_merge_copies_steam_id_verbatim(admin_client, db, admin_user):
+    survivor = await make_game(db, "csgo.exe")
+    source = await make_game(db, "Counter-Strike 2", enrichment_status=EnrichmentStatus.ENRICHED)
+    source.external_api_id = "steam:730"
+    await db.flush()
+    assert survivor.id < source.id
+
+    resp = await admin_client.post(
+        f"/api/v1/admin/games/{source.id}/merge/{survivor.id}"
+    )
+
+    assert resp.status_code == 204
+    await db.refresh(survivor)
+    assert survivor.external_api_id == "steam:730"
+    assert survivor.primary_name == "Counter-Strike 2"
+
+
+async def test_merge_copies_bare_legacy_id_verbatim(admin_client, db, admin_user):
+    survivor = await make_game(db, "stub")
+    source = await make_game(db, "Bare Game", enrichment_status=EnrichmentStatus.ENRICHED)
+    source.external_api_id = "21593"
+    await db.flush()
+    assert survivor.id < source.id
+
+    resp = await admin_client.post(
+        f"/api/v1/admin/games/{source.id}/merge/{survivor.id}"
+    )
+
+    assert resp.status_code == 204
+    await db.refresh(survivor)
+    assert survivor.external_api_id == "21593"
+
+
+async def test_merge_null_source_cover_clears_non_custom_survivor_cover(
+    admin_client, db, admin_user,
+):
+    survivor = await make_game(db, "stub")
+    source = await make_game(db, "Canonical", enrichment_status=EnrichmentStatus.ENRICHED)
+    survivor.cover_image_url = "https://old.example/cover.jpg"
+    survivor.cover_source = CoverSource.EXTERNAL
+    source.external_api_id = "igdb:123"
+    source.cover_image_url = None
+    source.cover_source = CoverSource.EXTERNAL
+    await db.flush()
+    assert survivor.id < source.id
+
+    resp = await admin_client.post(
+        f"/api/v1/admin/games/{source.id}/merge/{survivor.id}"
+    )
+
+    assert resp.status_code == 204
+    await db.refresh(survivor)
+    assert survivor.cover_image_url is None
+    assert survivor.cover_source == CoverSource.EXTERNAL
+    assert survivor.external_api_id == "igdb:123"
+
+
+async def test_merge_into_identified_survivor_keeps_its_metadata(
+    admin_client, db, admin_user,
+):
+    """Regression: a survivor that already has an id does not take the stub's metadata."""
+    survivor = await make_game(
+        db, "Kept Name", enrichment_status=EnrichmentStatus.ENRICHED, genres=["RPG"],
+    )
+    source = await make_game(db, "Stub Name", genres=["Other"])
+    survivor.external_api_id = "igdb:9"
+    survivor.cover_image_url = "https://kept.example/cover.jpg"
+    survivor.cover_source = CoverSource.EXTERNAL
+    source.cover_image_url = "https://stub.example/cover.jpg"
+    await db.flush()
+    session = await make_session(
+        db, admin_user.discord_id, source.id, dt(hours_ago=3), dt(hours_ago=2),
+    )
+
+    resp = await admin_client.post(
+        f"/api/v1/admin/games/{source.id}/merge/{survivor.id}"
+    )
+
+    assert resp.status_code == 204
+    assert await db.get(Game, source.id) is None
+    await db.refresh(survivor)
+    await db.refresh(session)
+    assert survivor.external_api_id == "igdb:9"
+    assert survivor.primary_name == "Kept Name"
+    assert survivor.enrichment_status == EnrichmentStatus.ENRICHED
+    assert survivor.genres == ["RPG"]
+    assert survivor.cover_image_url == "https://kept.example/cover.jpg"
+    assert session.game_id == survivor.id
