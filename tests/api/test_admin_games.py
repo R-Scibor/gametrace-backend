@@ -1,8 +1,10 @@
 import base64
 import logging
 from datetime import date
+from unittest.mock import patch
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.models.game import CoverSource, EnrichmentStatus, Game, UserGamePreference
 from tests.factories import (
@@ -625,3 +627,78 @@ async def test_merge_bare_and_prefixed_ids_conflict(admin_client, db, admin_user
     assert await db.get(Game, source.id) is not None
     await db.refresh(survivor)
     assert survivor.external_api_id == "21593"
+
+
+class _UniqueOrig(Exception):
+    def __init__(self):
+        super().__init__("duplicate key")
+        self.sqlstate = "23505"
+        self.constraint_name = "uq_games_external_api_id"
+
+
+async def test_merge_unique_violation_returns_409_and_keeps_the_session(
+    admin_client, db, admin_user, caplog,
+):
+    survivor = await make_game(db, "stub")
+    source = await make_game(db, "Canonical", enrichment_status=EnrichmentStatus.ENRICHED)
+    source.external_api_id = "igdb:123"
+    await db.flush()
+    assert survivor.id < source.id
+    session = await make_session(
+        db, admin_user.discord_id, source.id, dt(hours_ago=3), dt(hours_ago=2),
+    )
+
+    async def boom(*args, **kwargs):
+        raise IntegrityError("UPDATE games", {}, _UniqueOrig())
+
+    with caplog.at_level(logging.INFO, logger="app.core.observability"), \
+         patch.object(db, "flush", boom):
+        resp = await admin_client.post(
+            f"/api/v1/admin/games/{source.id}/merge/{survivor.id}"
+        )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "message": "Games have different external ids",
+        "conflicting_game_id": source.id,
+    }
+    await db.refresh(source)
+    await db.refresh(survivor)
+    await db.refresh(session)
+    assert source.external_api_id == "igdb:123"
+    assert survivor.external_api_id is None
+    assert survivor.primary_name == "stub"
+    assert session.game_id == source.id
+    assert [r for r in caplog.records if r.getMessage() == "admin_action"] == []
+
+
+async def test_merge_unique_violation_omits_conflicting_id_when_holder_is_missing(
+    admin_client, db, admin_user, caplog,
+):
+    survivor = await make_game(db, "stub")
+    source = await make_game(db, "Canonical", enrichment_status=EnrichmentStatus.ENRICHED)
+    source.external_api_id = "igdb:123"
+    await db.flush()
+    session = await make_session(
+        db, admin_user.discord_id, source.id, dt(hours_ago=3), dt(hours_ago=2),
+    )
+
+    async def boom(*args, **kwargs):
+        raise IntegrityError("UPDATE games", {}, _UniqueOrig())
+
+    async def no_holder(*args, **kwargs):
+        return None
+
+    with caplog.at_level(logging.INFO, logger="app.core.observability"), \
+         patch.object(db, "flush", boom), \
+         patch.object(db, "scalar", no_holder):
+        resp = await admin_client.post(
+            f"/api/v1/admin/games/{source.id}/merge/{survivor.id}"
+        )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {"message": "Games have different external ids"}
+    assert "conflicting_game_id" not in resp.json()["detail"]
+    await db.refresh(session)
+    assert session.game_id == source.id
+    assert [r for r in caplog.records if r.getMessage() == "admin_action"] == []

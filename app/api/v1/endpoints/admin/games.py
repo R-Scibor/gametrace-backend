@@ -4,6 +4,7 @@ import os
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.auth import require_admin
@@ -14,6 +15,7 @@ from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, User
 from app.models.session import GameSession
 from app.models.user import User
 from app.schemas.game import CoverUpload, GameResponse
+from app.services.external_ids import is_external_id_conflict
 from app.services.game_review import sync_review_preferences
 from app.services.upload_validation import sniff_image_extension
 
@@ -79,21 +81,39 @@ async def merge_game(
     previous_status = EnrichmentStatus(target.enrichment_status)
     if target.external_api_id is None and source.external_api_id is not None:
         copied_id = source.external_api_id
-        async with db.begin_nested():
-            source.external_api_id = None
-            await db.flush()
-            target.primary_name = source.primary_name
-            target.enrichment_status = source.enrichment_status
-            target.genres = list(source.genres)
-            target.themes = list(source.themes)
-            target.developers = list(source.developers)
-            target.publishers = list(source.publishers)
-            target.first_release_date = source.first_release_date
-            if CoverSource(target.cover_source) != CoverSource.CUSTOM:
-                target.cover_image_url = source.cover_image_url
-                target.cover_source = source.cover_source
-            target.external_api_id = copied_id
-            await db.flush()
+        try:
+            async with db.begin_nested():
+                source.external_api_id = None
+                await db.flush()
+                target.primary_name = source.primary_name
+                target.enrichment_status = source.enrichment_status
+                target.genres = list(source.genres)
+                target.themes = list(source.themes)
+                target.developers = list(source.developers)
+                target.publishers = list(source.publishers)
+                target.first_release_date = source.first_release_date
+                if CoverSource(target.cover_source) != CoverSource.CUSTOM:
+                    target.cover_image_url = source.cover_image_url
+                    target.cover_source = source.cover_source
+                target.external_api_id = copied_id
+                await db.flush()
+        except IntegrityError as exc:
+            if not is_external_id_conflict(exc):
+                raise
+            # Savepoint rollback expires dirty instances. An expired attribute
+            # load is sync and raises MissingGreenlet in this async handler.
+            await db.refresh(source)
+            await db.refresh(target)
+            holder = await db.scalar(
+                select(Game.id).where(
+                    Game.external_api_id == copied_id,
+                    Game.id != target.id,
+                )
+            )
+            detail: dict[str, str | int] = {"message": _MERGE_ID_CONFLICT}
+            if holder is not None:
+                detail["conflicting_game_id"] = holder
+            raise HTTPException(status_code=409, detail=detail) from exc
 
     # ── All operations in a single transaction ─────────────────────────────
     # 1. Reassign aliases (unique on discord_process_name — no conflicts possible)
