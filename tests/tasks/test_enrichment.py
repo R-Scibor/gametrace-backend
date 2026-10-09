@@ -478,6 +478,62 @@ def test_steam_rate_limited_triggers_retry():
     enrich_game.request.retries = 0
 
 
+def test_task_retries_lookup_retryable_with_the_existing_countdown():
+    resolved = enrich_game._get_current_object()
+    enrich_game.request.retries = 0
+    with patch.object(resolved, "retry", side_effect=Retry()) as mock_retry, \
+         patch("app.tasks.enrichment._run_enrichment",
+               new_callable=AsyncMock, side_effect=LookupRetryable("igdb")):
+        with pytest.raises(Retry):
+            enrich_game.run(1)
+    mock_retry.assert_called_once()
+    assert mock_retry.call_args.kwargs["countdown"] == 60
+    enrich_game.request.retries = 0
+
+
+def test_task_does_not_retry_when_the_cap_is_spent():
+    resolved = enrich_game._get_current_object()
+    enrich_game.request.retries = 5
+    with patch.object(resolved, "retry", side_effect=Retry()) as mock_retry, \
+         patch("app.tasks.enrichment._run_enrichment",
+               new_callable=AsyncMock, side_effect=LookupRetryable("steam")):
+        enrich_game.run(1)
+    mock_retry.assert_not_called()
+    enrich_game.request.retries = 0
+
+
+def test_task_passes_the_celery_retry_count():
+    resolved = enrich_game._get_current_object()
+    enrich_game.request.retries = 5
+    game = _enriched_game()
+    p_engine, p_sm, _ = _db_patches(game)
+    with patch.object(resolved, "retry") as mock_retry, p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search",
+               side_effect=httpx.TimeoutException("slow")), \
+         patch("app.tasks.enrichment._steam_search",
+               return_value=(None, None, None)) as steam:
+        enrich_game.run(1)
+    mock_retry.assert_not_called()
+    steam.assert_called_once()
+    _assert_unchanged(game)
+    enrich_game.request.retries = 0
+
+
+def test_task_unexpected_error_propagates():
+    resolved = enrich_game._get_current_object()
+    enrich_game.request.retries = 0
+    game = _enriched_game()
+    p_engine, p_sm, _ = _db_patches(game)
+    with p_engine, p_sm, \
+         patch("app.tasks.enrichment._igdb_search", side_effect=RuntimeError("bug")), \
+         patch("app.tasks.enrichment._steam_search") as steam:
+        with pytest.raises(RuntimeError, match="bug"):
+            enrich_game.run(1)
+    steam.assert_not_called()
+    _assert_unchanged(game)
+    enrich_game.request.retries = 0
+
+
 # ── backfill_metadata ─────────────────────────────────────────────────────────
 
 def _backfill_session_mock(execute_results: list[list[int]]) -> tuple[MagicMock, AsyncMock]:

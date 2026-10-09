@@ -130,7 +130,6 @@ import json
 import logging
 
 import httpx
-from celery.exceptions import MaxRetriesExceededError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -448,61 +447,31 @@ async def _run_enrichment(
         await engine.dispose()
 
 
-async def _save_needs_review(game_id: int) -> None:
-    """Fallback write used by error/retry handlers."""
-    engine = create_async_engine(settings.database_url, echo=False)
-    SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
-    try:
-        async with SessionLocal() as db:
-            await _apply(db, game_id, EnrichmentStatus.NEEDS_REVIEW, None, None)
-    finally:
-        await engine.dispose()
-
-
-async def _apply(
-    db: AsyncSession,
-    game_id: int,
-    status: EnrichmentStatus,
-    cover_url: str | None,
-    external_api_id: str | None,
-    *,
-    metadata: IGDBResult | None = None,
-) -> None:
-    game = await db.get(Game, game_id)
-    if game is None:
-        return
-    previous_status = game.enrichment_status
-    game.enrichment_status = status
-    if external_api_id is not None:
-        game.external_api_id = external_api_id
-    if game.cover_source != CoverSource.CUSTOM:
-        if cover_url is not None:
-            game.cover_image_url = cover_url
-        if metadata is not None:
-            game.genres = metadata.genres
-            game.themes = metadata.themes
-            game.developers = metadata.developers
-            game.publishers = metadata.publishers
-            game.first_release_date = metadata.first_release_date
-    await sync_review_preferences(
-        db,
-        game_id,
-        previous_status=previous_status,
-        new_status=status,
-    )
-    await db.commit()
-
-
 # ---------------------------------------------------------------------------
 # Celery task
 # ---------------------------------------------------------------------------
+
+def _retry_source(exc: BaseException) -> str:
+    source = getattr(exc, "source", None)
+    if source in ("igdb", "steam"):
+        return source
+    if "steam" in str(exc).lower():
+        return "steam"
+    return "igdb"
+
 
 # rate_limit is per-worker process — fine for a single container, but must be
 # revisited (e.g. Redis-based token bucket) if multiple worker instances are added.
 @celery_app.task(name="tasks.enrich_game", bind=True, max_retries=5, rate_limit="1/s")
 def enrich_game(self, game_id: int) -> None:
     try:
-        status, cover_url, ext_id = asyncio.run(_run_enrichment(game_id))
+        status, cover_url, ext_id = asyncio.run(
+            _run_enrichment(
+                game_id,
+                retries=self.request.retries,
+                max_retries=self.max_retries,
+            )
+        )
         logger.info(
             "enrich_game: game_id=%d → %s (cover=%s, ext_id=%s)",
             game_id, status, cover_url, ext_id,
@@ -511,21 +480,27 @@ def enrich_game(self, game_id: int) -> None:
     except LookupError:
         logger.warning("enrich_game.not_found", extra={"game_id": game_id})
 
-    except _RateLimited as exc:
+    except (_RateLimited, LookupRetryable) as exc:
+        if self.request.retries >= self.max_retries:
+            logger.error(
+                "enrich_game.retries_exhausted",
+                extra={"game_id": game_id, "source": _retry_source(exc)},
+            )
+            return
         countdown = (2 ** self.request.retries) * 60
         logger.warning(
-            "enrich_game.rate_limited_retry",
-            extra={"game_id": game_id, "countdown": countdown},
+            "enrich_game.lookup_retry",
+            extra={
+                "game_id": game_id,
+                "source": _retry_source(exc),
+                "countdown": countdown,
+            },
         )
         raise self.retry(exc=exc, countdown=countdown) from exc
 
-    except MaxRetriesExceededError:
-        logger.error("enrich_game.max_retries_exceeded", extra={"game_id": game_id})
-        asyncio.run(_save_needs_review(game_id))
-
     except Exception:
         logger.exception("enrich_game.unexpected_error", extra={"game_id": game_id})
-        asyncio.run(_save_needs_review(game_id))
+        raise
 
 
 # ---------------------------------------------------------------------------
