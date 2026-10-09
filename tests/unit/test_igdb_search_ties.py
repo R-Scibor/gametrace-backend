@@ -89,6 +89,31 @@ def test_tie_below_the_threshold_keeps_the_first_row():
     assert 0 < result.confidence < 0.85
 
 
+def test_a_later_higher_score_replaces_an_earlier_pair():
+    result = _search("Lords of the Fallen", [
+        {"id": 1, "name": "Hades II"},
+        {"id": 2, "name": "Hades II"},
+        {"id": 21593, "name": "Lords of the Fallen"},
+    ])
+    assert result.ambiguous is False
+    assert result.igdb_id == 21593
+    assert result.name == "Lords of the Fallen"
+
+
+def test_a_row_without_an_id_does_not_tie():
+    result = _search("Lords of the Fallen", [
+        {"name": "Lords of the Fallen", "cover": {"url": "//images.igdb.com/t_thumb/old.jpg"}},
+        {
+            "id": 21593,
+            "name": "Lords of the Fallen",
+            "cover": {"url": "https://images.igdb.com/t_thumb/new.jpg"},
+        },
+    ])
+    assert result.ambiguous is False
+    assert result.igdb_id == 21593
+    assert result.cover_url == "https://images.igdb.com/t_cover_big/new.jpg"
+
+
 def test_alternative_name_on_one_id_is_not_a_tie():
     result = _search("Lords of the Fallen", [
         {
