@@ -1,10 +1,11 @@
 import asyncio
 import logging
 from datetime import date
-from typing import Literal
+from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import Integer, and_, case, exists, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
@@ -12,7 +13,7 @@ from app.api.v1.endpoints.auth import get_current_or_bot_user, get_current_user
 from app.core.database import get_db
 from app.core.rate_limit import check_hourly_quota
 from app.core.sql_search import ilike_contains
-from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, UserGamePreference
+from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession, SessionStatus
 from app.models.user import User
 from app.schemas.game import (
@@ -28,12 +29,14 @@ from app.schemas.game import (
 from app.schemas.session import SessionResponse
 from app.schemas.stats import GameStatsResponse
 from app.services.demo import DEMO_DISCORD_ID
+from app.services.external_ids import igdb_external_id, is_external_id_conflict
 from app.services.game_aliases import add_alias
 from app.services.game_matching import (
     _confidence,
     _igdb_fetch_by_id,
     _igdb_search_candidates,
     _RateLimited,
+    apply_igdb_metadata,
 )
 from app.services.library_visibility import (
     ignored_only_filter,
@@ -241,6 +244,14 @@ async def list_games(
 # POST /games  (create or link)
 # ---------------------------------------------------------------------------
 
+async def _game_by_external_id(db: AsyncSession, external_id: str) -> Game | None:
+    # AsyncSession.scalar is typed as Any. The select is a single Game row.
+    return cast(
+        Game | None,
+        await db.scalar(select(Game).where(Game.external_api_id == external_id)),
+    )
+
+
 @router.post("", response_model=GameResponse, status_code=201)
 async def create_or_link_game(
     body: GameCreateRequest,
@@ -276,20 +287,16 @@ async def create_or_link_game(
         )
 
     if body.igdb_id is not None:
-        # ── igdb_id mode ────────────────────────────────────────────────────
-        # 1. Dedupe BEFORE any IGDB call
-        existing = (
-            await db.execute(
-                select(Game).where(Game.external_api_id == str(body.igdb_id))
-            )
-        ).scalar_one_or_none()
+        igdb_id = body.igdb_id
+        assert isinstance(igdb_id, int)
+        external_id = igdb_external_id(igdb_id)
+        existing = await _game_by_external_id(db, external_id)
         if existing is not None:
             response.status_code = 200
             return _game_response(existing, None)
 
-        # 2. Fetch from IGDB
         try:
-            fetched = await asyncio.to_thread(_igdb_fetch_by_id, body.igdb_id)
+            fetched = await asyncio.to_thread(_igdb_fetch_by_id, igdb_id)
         except _RateLimited as exc:
             raise HTTPException(
                 status_code=503,
@@ -301,27 +308,51 @@ async def create_or_link_game(
 
         canonical_name, meta = fetched
 
-        # 3. Insert enriched game row
-        game = Game(
-            primary_name=canonical_name,
-            external_api_id=str(body.igdb_id),
-            cover_image_url=meta.cover_url,
-            cover_source=CoverSource.EXTERNAL,
-            enrichment_status=EnrichmentStatus.ENRICHED,
-            genres=meta.genres,
-            themes=meta.themes,
-            developers=meta.developers,
-            publishers=meta.publishers,
-            first_release_date=meta.first_release_date,
-        )
-        db.add(game)
-        await db.flush()
+        async def insert_enriched() -> Game:
+            game = Game(
+                primary_name=canonical_name,
+                enrichment_status=EnrichmentStatus.PENDING,
+            )
+            db.add(game)
+            await db.flush()
+            await apply_igdb_metadata(
+                db,
+                game,
+                canonical_name,
+                meta,
+                igdb_id=igdb_id,
+                replace_identity=True,
+                clear_cover_on_null=True,
+            )
+            await db.flush()
+            if body.query and user.discord_id != DEMO_DISCORD_ID:
+                await _add_alias_if_absent(db, game.id, body.query)
+            return game
 
-        # 4. Optional query alias — skipped for the shared demo account, which
-        # must never claim an unclaimed process name in the global alias table.
-        # query is trimmed to None when blank by GameCreateRequest.
-        if body.query and user.discord_id != DEMO_DISCORD_ID:
-            await _add_alias_if_absent(db, game.id, body.query)
+        created = False
+        try:
+            async with db.begin_nested():
+                game = await insert_enriched()
+            created = True
+        except IntegrityError as exc:
+            if not is_external_id_conflict(exc):
+                raise
+            found = await _game_by_external_id(db, external_id)
+            if found is None:
+                try:
+                    async with db.begin_nested():
+                        game = await insert_enriched()
+                    created = True
+                except IntegrityError as exc2:
+                    if not is_external_id_conflict(exc2):
+                        raise
+                    found = await _game_by_external_id(db, external_id)
+                    if found is None:
+                        raise
+            if not created:
+                assert found is not None
+                response.status_code = 200
+                return _game_response(found, None)
 
     else:
         # ── unrecognized mode ────────────────────────────────────────────────

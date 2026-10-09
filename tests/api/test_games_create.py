@@ -45,17 +45,21 @@ async def test_igdb_new_creates_enriched(authed_client, db):
     assert data["enrichment_status"] == "ENRICHED"
 
     game = (
-        await db.execute(select(Game).where(Game.external_api_id == "1942"))
+        await db.execute(select(Game).where(Game.external_api_id == "igdb:1942"))
     ).scalar_one()
     assert game.genres == ["Role-playing (RPG)", "Adventure"]
     assert game.cover_image_url is not None
     assert game.first_release_date == date(2015, 5, 19)
+    bare = (
+        await db.execute(select(func.count()).where(Game.external_api_id == "1942"))
+    ).scalar_one()
+    assert bare == 0
 
 
 async def test_igdb_existing_links_no_duplicate(authed_client, db):
     """Pre-existing row with that external_api_id → 200, same game_id, no new row."""
     g = await make_game(db, "The Witcher 3", enrichment_status=EnrichmentStatus.ENRICHED)
-    g.external_api_id = "1942"
+    g.external_api_id = "igdb:1942"
     await db.flush()
 
     with patch(PATCH_TARGET) as mock_fetch:
@@ -67,7 +71,7 @@ async def test_igdb_existing_links_no_duplicate(authed_client, db):
 
     count = (
         await db.execute(
-            select(func.count()).where(Game.external_api_id == "1942")
+            select(func.count()).where(Game.external_api_id == "igdb:1942")
         )
     ).scalar_one()
     assert count == 1
@@ -352,6 +356,134 @@ async def test_query_alias_is_trimmed(authed_client, db):
         await db.execute(select(GameAlias).where(GameAlias.discord_process_name == "kh 1.5"))
     ).scalar_one()
     assert alias.discord_process_name == "kh 1.5"
+
+
+async def test_bare_external_id_does_not_dedupe(authed_client, db):
+    """A stored bare number is a different key from igdb:{id}."""
+    bare = await make_game(db, "Bare Witcher", enrichment_status=EnrichmentStatus.ENRICHED)
+    bare.external_api_id = "1942"
+    await db.flush()
+
+    with patch(PATCH_TARGET, return_value=("The Witcher 3", _META)) as fetch:
+        resp = await authed_client.post(URL, json={"igdb_id": 1942})
+
+    assert resp.status_code == 201
+    fetch.assert_called_once_with(1942)
+    assert resp.json()["id"] != bare.id
+    created = await db.get(Game, resp.json()["id"])
+    assert created.external_api_id == "igdb:1942"
+    await db.refresh(bare)
+    assert bare.external_api_id == "1942"
+
+
+async def test_existing_prefixed_id_does_not_store_query(authed_client, db):
+    g = await make_game(db, "The Witcher 3", enrichment_status=EnrichmentStatus.ENRICHED)
+    g.external_api_id = "igdb:1942"
+    await db.flush()
+
+    with patch(PATCH_TARGET) as fetch:
+        resp = await authed_client.post(
+            URL, json={"igdb_id": 1942, "query": "kh 1.5"}
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["id"] == g.id
+    fetch.assert_not_called()
+    alias_count = (
+        await db.execute(
+            select(func.count()).where(GameAlias.discord_process_name == "kh 1.5")
+        )
+    ).scalar_one()
+    assert alias_count == 0
+
+
+async def test_unique_violation_returns_the_winner_without_an_alias(authed_client, db):
+    """Fast select misses. The insert then hits the unique index."""
+    winner = await make_game(db, "The Witcher 3", enrichment_status=EnrichmentStatus.ENRICHED)
+    winner.external_api_id = "igdb:1942"
+    await db.flush()
+    calls = {"n": 0}
+    real_scalar = db.scalar
+
+    async def miss_once(stmt, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return await real_scalar(stmt, *args, **kwargs)
+
+    with patch(PATCH_TARGET, return_value=("The Witcher 3", _META)), \
+         patch.object(db, "scalar", miss_once):
+        resp = await authed_client.post(
+            URL, json={"igdb_id": 1942, "query": "kh 1.5"}
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["id"] == winner.id
+    alias_count = (
+        await db.execute(
+            select(func.count()).where(GameAlias.discord_process_name == "kh 1.5")
+        )
+    ).scalar_one()
+    assert alias_count == 0
+    stored = (
+        await db.execute(select(func.count()).where(Game.external_api_id == "igdb:1942"))
+    ).scalar_one()
+    assert stored == 1
+
+
+class _UniqueOrig(Exception):
+    def __init__(self):
+        super().__init__("duplicate key")
+        self.sqlstate = "23505"
+        self.constraint_name = "uq_games_external_api_id"
+
+
+async def test_unique_violation_with_no_winner_retries_the_insert_once(authed_client, db):
+    """The conflicting row is gone by the time we re-select, so insert once more."""
+    from sqlalchemy.exc import IntegrityError
+
+    flushes = {"n": 0}
+    real_flush = db.flush
+
+    async def fail_the_first_flush(*args, **kwargs):
+        flushes["n"] += 1
+        if flushes["n"] == 1:
+            raise IntegrityError("INSERT", {}, _UniqueOrig())
+        return await real_flush(*args, **kwargs)
+
+    with patch(PATCH_TARGET, return_value=("The Witcher 3", _META)), \
+         patch.object(db, "flush", fail_the_first_flush):
+        resp = await authed_client.post(
+            URL, json={"igdb_id": 1942, "query": "kh 1.5"}
+        )
+
+    assert resp.status_code == 201
+    alias = (
+        await db.execute(
+            select(GameAlias).where(GameAlias.discord_process_name == "kh 1.5")
+        )
+    ).scalar_one()
+    assert alias.game_id == resp.json()["id"]
+
+
+async def test_unique_violation_with_no_winner_after_the_retry_raises(authed_client, db):
+    """The test client re-raises app exceptions. A live client gets the API's 500 handler."""
+    from sqlalchemy.exc import IntegrityError
+
+    async def always_fail(*args, **kwargs):
+        raise IntegrityError("INSERT", {}, _UniqueOrig())
+
+    with patch(PATCH_TARGET, return_value=("The Witcher 3", _META)), \
+         patch.object(db, "flush", always_fail):
+        with pytest.raises(IntegrityError):
+            await authed_client.post(URL, json={"igdb_id": 1942, "query": "kh 1.5"})
+
+    alias_count = (
+        await db.execute(
+            select(func.count()).where(GameAlias.discord_process_name == "kh 1.5")
+        )
+    ).scalar_one()
+    assert alias_count == 0
 
 
 async def test_whitespace_only_query_writes_no_alias(authed_client, db):
