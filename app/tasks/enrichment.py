@@ -459,7 +459,7 @@ async def _run_enrichment(
 
 def _retry_source(exc: BaseException) -> str:
     source = getattr(exc, "source", None)
-    if source in ("igdb", "steam"):
+    if isinstance(source, str) and source in ("igdb", "steam"):
         return source
     if "steam" in str(exc).lower():
         return "steam"

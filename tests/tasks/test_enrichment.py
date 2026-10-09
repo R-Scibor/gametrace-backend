@@ -520,7 +520,6 @@ def test_task_passes_the_celery_retry_count():
 
 
 def test_task_unexpected_error_propagates():
-    resolved = enrich_game._get_current_object()
     enrich_game.request.retries = 0
     game = _enriched_game()
     p_engine, p_sm, _ = _db_patches(game)
