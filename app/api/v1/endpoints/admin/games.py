@@ -21,6 +21,8 @@ router = APIRouter()
 
 ALLOWED_COVER_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 
+_MERGE_ID_CONFLICT = "Games have different external ids"
+
 
 # ---------------------------------------------------------------------------
 # POST /games/{game_id}/merge/{target_id}
@@ -35,16 +37,20 @@ async def merge_game(
 ):
     """
     Merge game_id into target_id (ACID transaction):
-    1. Reassign all game_aliases → target_id
-    2. Reassign all game_sessions → target_id
-    3. Merge user_game_preferences (drop conflicts, reassign rest)
-    4. Reassign all demo_seed_sessions → target_id
-    5. Reassign all demo_seed_preferences → target_id
-    6. Delete source game record
+    1. When target.external_api_id is null and source.external_api_id is set,
+       copy that id and the source metadata onto the target. A CUSTOM cover
+       on the target stays.
+    2. Reassign all game_aliases → target_id
+    3. Reassign all game_sessions → target_id
+    4. Merge user_game_preferences (drop conflicts, reassign rest)
+    5. Reassign all demo_seed_sessions → target_id
+    6. Reassign all demo_seed_preferences → target_id
+    7. Delete source game record
 
     Returns 204 No Content on success.
     Returns 404 if either game does not exist.
     Returns 400 if game_id == target_id.
+    Returns 409 if both external ids are set and different.
     """
     if game_id == target_id:
         raise HTTPException(status_code=400, detail="Cannot merge a game into itself.")
@@ -55,6 +61,19 @@ async def merge_game(
         raise HTTPException(status_code=404, detail=f"Game {game_id} not found.")
     if target is None:
         raise HTTPException(status_code=404, detail=f"Game {target_id} not found.")
+
+    if (
+        source.external_api_id is not None
+        and target.external_api_id is not None
+        and source.external_api_id != target.external_api_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": _MERGE_ID_CONFLICT,
+                "conflicting_game_id": source.id,
+            },
+        )
 
     copied_id: str | None = None
     previous_status = EnrichmentStatus(target.enrichment_status)

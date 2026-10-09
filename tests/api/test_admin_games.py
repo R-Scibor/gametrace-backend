@@ -577,3 +577,51 @@ async def test_merge_clears_inbox_row_that_existed_only_on_the_source(
     )
     assert pref is not None
     assert pref.is_accepted is None
+
+
+async def test_merge_different_external_ids_returns_409(admin_client, db, admin_user, caplog):
+    survivor = await make_game(db, "Survivor")
+    source = await make_game(db, "Source")
+    survivor.external_api_id = "igdb:1"
+    source.external_api_id = "igdb:2"
+    await db.flush()
+    session = await make_session(
+        db, admin_user.discord_id, source.id, dt(hours_ago=3), dt(hours_ago=2),
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.core.observability"):
+        resp = await admin_client.post(
+            f"/api/v1/admin/games/{source.id}/merge/{survivor.id}"
+        )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "message": "Games have different external ids",
+        "conflicting_game_id": source.id,
+    }
+    assert await db.get(Game, source.id) is not None
+    await db.refresh(survivor)
+    await db.refresh(source)
+    await db.refresh(session)
+    assert survivor.external_api_id == "igdb:1"
+    assert source.external_api_id == "igdb:2"
+    assert session.game_id == source.id
+    assert [r for r in caplog.records if r.getMessage() == "admin_action"] == []
+
+
+async def test_merge_bare_and_prefixed_ids_conflict(admin_client, db, admin_user):
+    survivor = await make_game(db, "Survivor")
+    source = await make_game(db, "Source")
+    survivor.external_api_id = "21593"
+    source.external_api_id = "igdb:21593"
+    await db.flush()
+
+    resp = await admin_client.post(
+        f"/api/v1/admin/games/{source.id}/merge/{survivor.id}"
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["conflicting_game_id"] == source.id
+    assert await db.get(Game, source.id) is not None
+    await db.refresh(survivor)
+    assert survivor.external_api_id == "21593"
