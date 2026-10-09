@@ -64,8 +64,8 @@ Game catalog. Created as stubs by the bot, enriched asynchronously by the Celery
 | Column | Type | Notes |
 |---|---|---|
 | `id` | `INTEGER` | Primary key |
-| `primary_name` | `VARCHAR(256)` | The canonical name. For new stubs this is just the Discord process name; enrichment overwrites it with the IGDB/Steam canonical name. |
-| `external_api_id` | `VARCHAR(64)` | Optional — IGDB game ID or Steam AppID, prefixed by source. |
+| `primary_name` | `VARCHAR(256)` | The canonical name. A new stub stores the Discord process name. The worker replaces it with the IGDB or Steam title only while `external_api_id` is null. Admin `POST /admin/games/{id}/igdb-link` always sets it. |
+| `external_api_id` | `VARCHAR(64)` | Optional. One id per row, `igdb:{id}` or `steam:{id}`, with decimal digits and id >= 1. Partial unique index `uq_games_external_api_id` where the column is not null (migration `0023`). Bare legacy values stay as stored and do not match a prefixed lookup. |
 | `cover_image_url` | `VARCHAR(512)` | Optional. |
 | `cover_source` | `ENUM('EXTERNAL', 'CUSTOM')` | If `CUSTOM`, the enrichment worker will not overwrite `cover_image_url`. Set by `PUT /api/v1/admin/games/{id}/cover` (admin-only). |
 | `enrichment_status` | `ENUM('PENDING', 'ENRICHED', 'NEEDS_REVIEW')` | `PENDING` on insert; `ENRICHED` when match confidence ≥ 85%; `NEEDS_REVIEW` when no source crossed the threshold. |
@@ -75,7 +75,7 @@ Game catalog. Created as stubs by the bot, enriched asynchronously by the Celery
 | `developers` | `JSONB` | Array of company names where IGDB `involved_companies.developer = true`. A company can also appear in `publishers`. Defaults to `'[]'`. GIN-indexed. |
 | `publishers` | `JSONB` | Array of company names where IGDB `involved_companies.publisher = true`. Defaults to `'[]'`. GIN-indexed. |
 
-Metadata fields (`genres`, `themes`, `developers`, `publishers`, `first_release_date`) are populated by the IGDB enrichment path only. Steam fallback leaves them at defaults. The `cover_source=CUSTOM` rule applies: the enrichment worker will not overwrite metadata on a CUSTOM-cover game (treats the row as user-owned). Existing ENRICHED rows can be re-queued via the manual `tasks.backfill_metadata` Celery task (not on Beat schedule):
+Metadata fields (`genres`, `themes`, `developers`, `publishers`, `first_release_date`) are populated by the IGDB enrichment path only, including when `cover_source` is `CUSTOM`. Steam fallback leaves them at defaults. A `CUSTOM` row keeps its cover URL and `cover_source`. Existing ENRICHED rows can be re-queued via the manual `tasks.backfill_metadata` Celery task (not on Beat schedule):
 
 ```bash
 docker compose exec worker celery -A app.core.celery_app call tasks.backfill_metadata
@@ -132,7 +132,7 @@ The core table. State machine described in the [README](../README.md#session-sta
 - `ONGOING` sessions cannot be soft-deleted directly — only the bot owns those rows.
 - `is_flicker=true` rows are excluded at every SELECT layer (sessions, stats, games, resolve, voice context, overlap validation) — they never surface to the user or cause 409s.
 - Config invariant enforced at startup: `SESSION_FLICKER_GC_MARGIN_SECONDS` must exceed `SESSION_STITCH_WINDOW_SECONDS`. This guarantees the GC never removes a flicker row that is still eligible to be a stitch target.
-- `cover_source=CUSTOM` — the enrichment worker skips `cover_image_url` and metadata overwrites on those games (user-owned row).
+- `cover_source=CUSTOM` — the enrichment worker does not change `cover_image_url` or `cover_source` on those games. It still writes genres, themes, developers, publishers, and `first_release_date`.
 
 ### `user_game_preferences`
 

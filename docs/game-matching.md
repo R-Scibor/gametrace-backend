@@ -166,7 +166,7 @@ Cover URLs are normalized: `//…` → `https://…`, `/t_thumb/` → `/t_cover_
 
 ## Step 5 — Steam fallback
 
-If IGDB confidence is below 0.85, the Steam Store Search API is queried with the **sanitized** name (same `_sanitize()` as IGDB). Each returned result is scored with `_confidence()`; the best candidate must reach `CONFIDENCE_THRESHOLD` (0.85). On a hit: `ENRICHED` with `external_api_id = Steam AppID` and cover `library_600x900.jpg`.
+If IGDB confidence is below 0.85, the Steam Store Search API is queried with the **sanitized** name (same `_sanitize()` as IGDB). Each returned result is scored with `_confidence()`; the best candidate must reach `CONFIDENCE_THRESHOLD` (0.85). That threshold is what the enrichment module calls a Steam exact match. It is not string equality. An item with a missing id or an id below 1 is skipped. On a hit while `external_api_id` is null: `ENRICHED`, `external_api_id = steam:{app_id}`, and `primary_name` set to the Steam title. Cover `library_600x900.jpg` is written only when `cover_source` is not `CUSTOM` and the URL is not null. A row that already has an id, including a bare legacy value, keeps that id and title. A non-custom cover may still refresh. Steam does not write genres, themes, companies, or `first_release_date`.
 
 ## Company canonicalization
 
