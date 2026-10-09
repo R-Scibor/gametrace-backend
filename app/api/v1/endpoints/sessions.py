@@ -1,5 +1,5 @@
 from datetime import UTC, datetime, timedelta
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, or_, select, update
@@ -88,7 +88,7 @@ def _writer_conflict(current: GameSession) -> HTTPException:
     return _session_conflict(_WRITER_CONFLICT, current)
 
 
-_CONFLICT_RESPONSE = {409: {"model": ConflictEnvelope}}
+_CONFLICT_RESPONSE: dict[int | str, dict[str, Any]] = {409: {"model": ConflictEnvelope}}
 
 
 async def _check_overlap(
