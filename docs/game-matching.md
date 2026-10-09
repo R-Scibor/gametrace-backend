@@ -42,6 +42,7 @@ Applied to **both** sides of every comparison before any scoring. This lets the 
 | `&` → `and` | `"Banjo & Kazooie"` → `"banjo and kazooie"` |
 | Structural separators (`: - _`) → space | `"Dark Souls: Remastered"` → `"dark souls  remastered"` |
 | Strip remaining non-alphanumeric | `"Assassin's Creed"` → `"assassins creed"` |
+| Drop a bare `demo` or `playtest` token when another alphabetic word of 4 or more letters remains | `"Keep It Up! Demo"` → `"keep it up"`. `"The Demo"` and `"Demo 2"` stay unchanged. `"Democracy 4"` stays unchanged |
 | Roman numerals → arabic digits (i–xv, standalone tokens) | `"Diablo IV"` → `"diablo 4"` |
 | Collapse whitespace | `"dark souls  remastered"` → `"dark souls remastered"` |
 
@@ -50,6 +51,7 @@ Words stay space-separated. The whitespace strip needed for substring scoring (e
 ### Known limitations
 
 - **Parenthesis content is dropped entirely.** `"Dark Souls (Remastered)"` loses the word `"Remastered"`. The score usually still clears the threshold via WRatio partial matching, but information is gone.
+- **A bare `demo` or `playtest` token is dropped when a real word remains.** IGDB search requires every token, and the commercial record omits the qualifier, so `"keep it up demo"` returns nothing. The token stays when the leftover has no alphabetic word of 4 or more letters (`"The Demo"`, `"Demo 2"`, `"Demo VIII"`), because that leftover would be the query `"the"`, `"2"`, or `"8"`. Dropping the qualifier can make distinct same-name releases tie: `"Keep It Up! Demo"` matches three different IGDB games named Keep It Up at 1.0, and the worker leaves a new stub `NEEDS_REVIEW`.
 - **Standalone `i` and `v` are treated as roman numerals.** A game title containing these as words (e.g. `"I Am Alive"`) gets digits injected (`"1 am alive"`). Same-game comparisons are unaffected since both sides transform identically, but cross-game comparisons involving such titles may produce unexpected number sets.
 - **Non-ASCII characters are stripped.** `"Pokémon"` → `"pokmon"`. Because the same transformation applies to both sides, the match still works for the same title; it only fails if the two sides use different encodings of the same accented character (rare in practice).
 - **Identical titles across distinct releases (reboots / remakes).** When two or more IGDB ids share the top score and that score is at least 0.85, the worker does not pick one. The search result is ambiguous: no id, name, cover, or metadata is applied, and Steam is not called. A stub that is not already `ENRICHED` becomes `NEEDS_REVIEW`. An `ENRICHED` row stays `ENRICHED`.

@@ -20,14 +20,20 @@ Step 1 — _sanitize(s)
     5. & → "and"
     6. structural separators (: - _) → space
     7. strip remaining non-alphanumeric chars (apostrophes, accents…)
-    8. map standalone roman numeral tokens i–xv to arabic digits
+    8. drop a bare "demo" / "playtest" token when another alphabetic word
+       of 4+ letters remains. "Keep It Up! Demo" → "keep it up".
+       "Democracy 4" is unchanged. "The Demo" and "Demo 2" keep the
+       qualifier: the leftover would be the search query "the" or "2".
+       A same-name IGDB tie (three "Keep It Up!" rows) still goes to
+       NEEDS_REVIEW. See docs/game-matching.md.
+    9. map standalone roman numeral tokens i–xv to arabic digits
        "Diablo IV" → "diablo 4",  "Final Fantasy XV" → "final fantasy 15"
        ⚠ standalone "i" and "v" are caught by this map — game titles
          containing these as words (e.g. "I Am Alive") get digits injected.
          Cross-game comparisons involving such titles may produce unexpected
          number sets; same-game comparisons are unaffected (both sides transform
          identically).
-    9. collapse whitespace, strip → words remain space-separated
+   10. collapse whitespace, strip → words remain space-separated
 
   ⚠ _sanitize keeps word boundaries. Earlier versions glued tokens into a
     single string ("the witcher 3 wild hunt" → "thewitcher3wildhunt"); that

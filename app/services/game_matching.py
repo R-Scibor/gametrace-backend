@@ -56,7 +56,15 @@ def _sanitize(s: str) -> str:
     s = s.replace('&', 'and')                      # & → and
     s = re.sub(r'[:\-_]', ' ', s)                 # structural separators → space
     s = re.sub(r'[^a-z0-9\s]', '', s)             # strip remaining non-alphanumeric
-    tokens = [_ROMAN_MAP.get(t, t) for t in s.split()]
+    tokens = s.split()
+    # IGDB search requires every token. Commercial titles omit a bare
+    # "demo" / "playtest", so those queries return nothing. Drop them only
+    # when another real word remains. A leftover shorter than 4 letters, or
+    # only a digit / roman numeral, would search "the" / "2" / "8".
+    kept = [t for t in tokens if t not in {"demo", "playtest"}]
+    if any(len(t) >= 4 and t.isalpha() and t not in _ROMAN_MAP for t in kept):
+        tokens = kept
+    tokens = [_ROMAN_MAP.get(t, t) for t in tokens]
     # Words stay space-separated. The space-collapse trick (for substring
     # alignment of exe-style names) lives inside _confidence — gluing here
     # would break IGDB / Steam search recall on multi-word titles.

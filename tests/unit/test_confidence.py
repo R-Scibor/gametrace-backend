@@ -25,6 +25,47 @@ def test_sanitize_preserves_word_boundaries():
     assert _sanitize("Europa Universalis V") == "europa universalis 5"
 
 
+# ── _sanitize: standalone demo / playtest qualifiers ─────────────────────────
+
+def test_sanitize_strips_demo_and_playtest_qualifiers():
+    # IGDB full-text search ANDs every token. "Demo" / "Playtest" are absent
+    # from the commercial title, so the query returns nothing.
+    assert _sanitize("Keep It Up! Demo") == "keep it up"
+    assert _sanitize("Friendly Steps Demo") == "friendly steps"
+    assert _sanitize("Delta Force Playtest") == "delta force"
+    assert _sanitize("BOMBANANA! Demo") == "bombanana"
+    assert _sanitize("Hades II Demo") == "hades 2"
+    assert _sanitize("Frostpunk 2 Playtest") == "frostpunk 2"
+    assert _sanitize("Game (Demo)") == "game"
+    assert _sanitize("game_demo.exe") == "game"
+
+
+def test_sanitize_keeps_demo_inside_a_longer_word():
+    assert _sanitize("Democracy 4") == "democracy 4"
+    assert _sanitize("Demon's Souls") == "demons souls"
+    assert _sanitize("Pandemonium") == "pandemonium"
+
+
+def test_sanitize_keeps_qualifier_when_no_real_word_remains():
+    # A leftover shorter than 4 letters, or only a digit / roman numeral,
+    # is a bad search query ("the", "2", "8") and can clear 0.85 against
+    # an unrelated title. The bare qualifier stays.
+    assert _sanitize("Demo") == "demo"
+    assert _sanitize("Playtest") == "playtest"
+    assert _sanitize("The Demo") == "the demo"
+    assert _sanitize("Demo 2") == "demo 2"
+    assert _sanitize("Demo VIII") == "demo 8"
+
+
+def test_confidence_demo_qualifier_matches_base_game():
+    assert _confidence("Keep It Up! Demo", "Keep it up!") == 1.0
+    assert _confidence("Friendly Steps Demo", "Friendly Steps") == 1.0
+    assert _confidence("BOMBANANA! Demo", "Bombanana!") == 1.0
+    assert _confidence("Frostpunk 2 Playtest", "Frostpunk 2") == 1.0
+    assert _confidence("Frostpunk 2 Playtest", "Frostpunk") < THRESHOLD
+    assert _confidence("Hades Demo", "Hades II") < THRESHOLD
+
+
 # ── Exact / case ────────────────────────────────────────────────────────────
 
 def test_exact_match():
