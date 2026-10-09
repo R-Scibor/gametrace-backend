@@ -570,20 +570,14 @@ async def test_backfill_only_queues_empty_genre_games():
     p_engine, p_sm = _backfill_engine_patches(factory)
 
     with p_engine, p_sm, \
-         patch("app.tasks.enrichment.enrich_game.apply_async") as mock_apply:
+         patch("app.tasks.enrichment.queue_enrichment") as mock_queue:
 
         queued = await _run_backfill(batch_size=500)
 
     assert queued == 2
-    assert mock_apply.call_count == 2
-    assert mock_apply.call_args_list[0].kwargs == {
-        "args": [10],
-        "task_id": "enrich_game_10",
-    }
-    assert mock_apply.call_args_list[1].kwargs == {
-        "args": [20],
-        "task_id": "enrich_game_20",
-    }
+    assert mock_queue.call_count == 2
+    mock_queue.assert_any_call(10)
+    mock_queue.assert_any_call(20)
 
 
 async def test_backfill_chunks_correctly():
@@ -592,13 +586,13 @@ async def test_backfill_chunks_correctly():
     p_engine, p_sm = _backfill_engine_patches(factory)
 
     with p_engine, p_sm, \
-         patch("app.tasks.enrichment.enrich_game.apply_async") as mock_apply:
+         patch("app.tasks.enrichment.queue_enrichment") as mock_queue:
 
         queued = await _run_backfill(batch_size=3)
 
     assert queued == 3
     assert session.execute.call_count == 2
-    assert mock_apply.call_count == 3
+    assert mock_queue.call_count == 3
 
 
 async def test_backfill_full_omits_genre_predicate():
@@ -607,7 +601,7 @@ async def test_backfill_full_omits_genre_predicate():
     p_engine, p_sm = _backfill_engine_patches(factory)
 
     with p_engine, p_sm, \
-         patch("app.tasks.enrichment.enrich_game.apply_async"):
+         patch("app.tasks.enrichment.queue_enrichment"):
 
         await _run_backfill(batch_size=500, full=True)
 
@@ -621,7 +615,7 @@ async def test_backfill_default_keeps_genre_predicate():
     p_engine, p_sm = _backfill_engine_patches(factory)
 
     with p_engine, p_sm, \
-         patch("app.tasks.enrichment.enrich_game.apply_async"):
+         patch("app.tasks.enrichment.queue_enrichment"):
 
         await _run_backfill(batch_size=500)
 

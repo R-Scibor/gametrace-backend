@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 from app.models.game import CoverSource, EnrichmentStatus, Game
-from app.tasks.enrichment import enrich_game
+from app.services.enrichment_dispatch import queue_enrichment
 
 
 async def main() -> None:
@@ -42,10 +42,7 @@ async def main() -> None:
 
     print(f"Reset {len(game_ids)} games to PENDING. Enqueuing enrichment tasks...")
     for game_id in game_ids:
-        enrich_game.apply_async(
-            args=[game_id],
-            task_id=f"enrich_game_{game_id}",
-        )
+        queue_enrichment(game_id)
 
     print("Done.")
 

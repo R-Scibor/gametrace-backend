@@ -137,6 +137,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.celery_app import celery_app
 from app.core.config import settings
 from app.models.game import CoverSource, EnrichmentStatus, Game
+from app.services.enrichment_dispatch import queue_enrichment
 from app.services.external_ids import is_external_id_conflict, steam_external_id
 from app.services.game_matching import (
     CONFIDENCE_THRESHOLD,
@@ -542,10 +543,7 @@ async def _run_backfill(batch_size: int, full: bool = False) -> int:
                 break
 
             for game_id in rows:
-                enrich_game.apply_async(
-                    args=[game_id],
-                    task_id=f"enrich_game_{game_id}",
-                )
+                queue_enrichment(game_id)
                 queued += 1
 
             last_id = rows[-1]
@@ -565,8 +563,7 @@ def backfill_metadata(batch_size: int = 500, full: bool = False) -> int:
     queued.  Pass ``full=True`` to re-fetch every ENRICHED game regardless of
     genre data.
 
-    Returns the number of games queued. Idempotent (re-queueing relies on the
-    enrich_game dedup key task_id=enrich_game_{game_id}).
+    Returns the number of games queued.
     """
     queued = asyncio.run(_run_backfill(batch_size, full=full))
     logger.info("backfill_metadata: queued %d games for re-enrichment", queued)
