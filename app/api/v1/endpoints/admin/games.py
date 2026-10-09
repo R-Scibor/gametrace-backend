@@ -10,10 +10,11 @@ from app.api.v1.endpoints.auth import require_admin
 from app.core.database import get_db
 from app.core.observability import log_admin_action
 from app.models.demo_seed import DemoSeedPreference, DemoSeedSession
-from app.models.game import CoverSource, Game, GameAlias, UserGamePreference
+from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession
 from app.models.user import User
 from app.schemas.game import CoverUpload, GameResponse
+from app.services.game_review import sync_review_preferences
 from app.services.upload_validation import sniff_image_extension
 
 router = APIRouter()
@@ -56,6 +57,7 @@ async def merge_game(
         raise HTTPException(status_code=404, detail=f"Game {target_id} not found.")
 
     copied_id: str | None = None
+    previous_status = EnrichmentStatus(target.enrichment_status)
     if target.external_api_id is None and source.external_api_id is not None:
         copied_id = source.external_api_id
         async with db.begin_nested():
@@ -131,6 +133,14 @@ async def merge_game(
             update(DemoSeedPreference)
             .where(DemoSeedPreference.game_id == game_id)
             .values(game_id=target_id)
+        )
+
+    if copied_id is not None:
+        await sync_review_preferences(
+            db,
+            target.id,
+            previous_status=previous_status,
+            new_status=EnrichmentStatus(target.enrichment_status),
         )
 
     # 6. Delete the source game record

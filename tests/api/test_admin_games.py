@@ -499,3 +499,81 @@ async def test_merge_keeps_custom_survivor_cover(admin_client, db, admin_user):
     assert survivor.primary_name == "Canonical"
     assert survivor.enrichment_status == EnrichmentStatus.ENRICHED
     assert survivor.genres == ["RPG"]
+
+
+async def test_merge_clears_inbox_on_needs_review_survivor(
+    admin_client, db, admin_user,
+):
+    survivor = await make_game(db, "stub", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    source = await make_game(db, "Canonical", enrichment_status=EnrichmentStatus.ENRICHED)
+    source.external_api_id = "igdb:123"
+    await db.flush()
+    assert survivor.id < source.id
+    await make_pref(
+        db, admin_user.discord_id, survivor.id, is_ignored=True, is_accepted=False,
+    )
+
+    resp = await admin_client.post(
+        f"/api/v1/admin/games/{source.id}/merge/{survivor.id}"
+    )
+
+    assert resp.status_code == 204
+    pref = await db.scalar(
+        select(UserGamePreference).where(UserGamePreference.game_id == survivor.id)
+    )
+    assert pref is not None
+    assert pref.is_accepted is None
+    assert pref.is_ignored is True
+
+
+async def test_merge_needs_review_source_inboxes_source_only_session_owner(
+    admin_client, db, admin_user,
+):
+    survivor = await make_game(db, "stub")
+    source = await make_game(db, "Canonical", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    source.external_api_id = "igdb:55"
+    await db.flush()
+    assert survivor.id < source.id
+    await make_session(
+        db, admin_user.discord_id, source.id, dt(hours_ago=3), dt(hours_ago=2),
+    )
+
+    resp = await admin_client.post(
+        f"/api/v1/admin/games/{source.id}/merge/{survivor.id}"
+    )
+
+    assert resp.status_code == 204
+    await db.refresh(survivor)
+    assert survivor.enrichment_status == EnrichmentStatus.NEEDS_REVIEW
+    pref = await db.scalar(
+        select(UserGamePreference).where(
+            UserGamePreference.game_id == survivor.id,
+            UserGamePreference.user_id == admin_user.discord_id,
+        )
+    )
+    assert pref is not None
+    assert pref.is_accepted is False
+
+
+async def test_merge_clears_inbox_row_that_existed_only_on_the_source(
+    admin_client, db, admin_user,
+):
+    # previous status must be NEEDS_REVIEW. clear_review_on_enriched does not run
+    # for PENDING → ENRICHED, so a default survivor would leave is_accepted false.
+    survivor = await make_game(db, "stub", enrichment_status=EnrichmentStatus.NEEDS_REVIEW)
+    source = await make_game(db, "Canonical", enrichment_status=EnrichmentStatus.ENRICHED)
+    source.external_api_id = "igdb:123"
+    await db.flush()
+    assert survivor.id < source.id
+    await make_pref(db, admin_user.discord_id, source.id, is_accepted=False)
+
+    resp = await admin_client.post(
+        f"/api/v1/admin/games/{source.id}/merge/{survivor.id}"
+    )
+
+    assert resp.status_code == 204
+    pref = await db.scalar(
+        select(UserGamePreference).where(UserGamePreference.game_id == survivor.id)
+    )
+    assert pref is not None
+    assert pref.is_accepted is None
