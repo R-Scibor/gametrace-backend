@@ -9,6 +9,7 @@ Strategy:
 - Requires: CREATE DATABASE gametrace_test OWNER gametrace_user;  (run once)
 """
 import asyncio
+import os
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -26,7 +27,7 @@ from app.core.database import Base, get_db  # noqa: E402  # must follow the sent
 from app.main import app  # noqa: E402  # imports init_sentry() at module load
 from tests.factories import make_token, make_user  # noqa: E402
 
-TEST_DB_URL = settings.database_url.replace("/gametrace_db", "/gametrace_test")
+TEST_DB_URL = os.getenv("TEST_DATABASE_URL") or settings.database_url.replace("/gametrace_db", "/gametrace_test")
 
 
 # ── One-time DDL setup (runs before pytest's event loops are created) ─────────

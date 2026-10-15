@@ -22,6 +22,7 @@ from app.bot.session_manager import (
 )
 from app.models.game import EnrichmentStatus, Game, GameAlias, UserGamePreference
 from app.models.session import GameSession, SessionSource, SessionStatus
+from tests.conftest import TEST_DB_URL
 from tests.factories import dt, make_alias, make_game, make_session, make_user
 
 # ── get_user_if_tracked ───────────────────────────────────────────────────────
@@ -572,11 +573,8 @@ async def test_concurrent_get_or_create_shares_one_row():
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.pool import NullPool
 
-    from app.core.config import settings
-
     name = f"race-{uuid4()}"
-    url = settings.database_url.replace("/gametrace_db", "/gametrace_test")
-    engine = create_async_engine(url, poolclass=NullPool)
+    engine = create_async_engine(TEST_DB_URL, poolclass=NullPool)
 
     async def once() -> int:
         async with AsyncSession(engine, expire_on_commit=False) as session:
