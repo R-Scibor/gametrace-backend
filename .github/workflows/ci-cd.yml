@@ -1,5 +1,8 @@
 name: CI/CD
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -28,13 +31,13 @@ on:
 
 jobs:
   test:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     services:
       postgres:
         image: postgres:15-alpine
         env:
-          POSTGRES_DB: gametrace_db
+          POSTGRES_DB: gametrace_test
           POSTGRES_USER: gametrace_user
           POSTGRES_PASSWORD: gametrace_pass
         ports:
@@ -49,9 +52,14 @@ jobs:
         image: redis:7-alpine
         ports:
           - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     env:
-      DATABASE_URL: postgresql+asyncpg://gametrace_user:gametrace_pass@localhost:5432/gametrace_db
+      DATABASE_URL: postgresql+asyncpg://gametrace_user:gametrace_pass@localhost:5432/gametrace_test
       REDIS_URL: redis://localhost:6379/0
       COVERS_DIR: /tmp/gametrace_covers
 
@@ -70,63 +78,100 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
-
-      - name: Create test database
-        run: |
-          PGPASSWORD=gametrace_pass psql -h localhost -U gametrace_user -d gametrace_db \
-            -c "CREATE DATABASE gametrace_test OWNER gametrace_user;"
-
-      - name: Run tests
-        run: pytest
-
+      
       - name: Lint (ruff)
         run: ruff check app tests alembic scripts
 
       - name: Type check (mypy)
         run: mypy app tests alembic scripts
 
-      - name: Notify failure
-        if: failure()
-        run: |
-          if [ -x /home/endmin/homelab/ntfy/notify.sh ]; then
-            /home/endmin/homelab/ntfy/notify.sh --fail --title "CI fail gametrace-backend" "Job 'test' failed on ${{ github.ref_name }}" --click "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
-            python3 /home/endmin/homelab/ntfy/hooks/watch.py --mark-seen R-Scibor/gametrace-backend "${{ github.run_id }}" || true
-          fi
+      - name: Run tests
+        run: pytest
 
-  build:
+  build-and-publish:
     needs: test
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
 
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout code
+        uses: actions/checkout@v6 
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract Dynamic Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build Docker image
-        run: docker build -t gametrace-backend:ci .
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          load: true
+          tags: gametrace-backend:local-scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            APP_VERSION=${{ steps.meta.outputs.version || 'prod' }}
+      
+      - name: Run Trivy Vulnerability Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: gametrace-backend:local-scan
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+      
+      - name: Build and Push Image to GHCR
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            APP_VERSION=${{ steps.meta.outputs.version || 'prod' }}
 
-      - name: Notify failure
-        if: failure()
-        run: |
-          if [ -x /home/endmin/homelab/ntfy/notify.sh ]; then
-            /home/endmin/homelab/ntfy/notify.sh --fail --title "CI fail gametrace-backend" "Job 'build' failed on ${{ github.ref_name }}" --click "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
-            python3 /home/endmin/homelab/ntfy/hooks/watch.py --mark-seen R-Scibor/gametrace-backend "${{ github.run_id }}" || true
-          fi
 
   deploy:
-    needs: build
-    if: github.ref == 'refs/heads/main'
+    name: Deploy to Homelab
+    needs: build-and-publish
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: self-hosted
 
     steps:
-      - name: Deploy
+      - name: Pull Latest Image and Restart Stack
         run: |
           cd /home/endmin/homelab/gametrace-backend
-          git fetch origin main
-          git checkout main
-          git merge --ff-only origin/main
-          export GIT_SHA=$(git rev-parse --short HEAD)
-          export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          export APP_VERSION=$(git describe --tags --always --dirty)
-          docker compose up --build -d
+          docker compose pull
+          docker compose up -d --remove-orphans
 
       - name: Notify failure
         if: failure()

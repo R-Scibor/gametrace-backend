@@ -3,6 +3,7 @@
 # arrives via env_file and the read-only credential mounts in docker-compose.yml.
 .env
 .env.*
+.venv
 credentials/
 .git/
 .gitignore
