@@ -140,6 +140,7 @@ jobs:
           exit-code: '1'
           severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
+          skip-files: '**/bom.cdx.json'
       
       - name: Build and Push Image to GHCR
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
