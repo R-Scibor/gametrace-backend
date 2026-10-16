@@ -28,12 +28,20 @@ from app.services.demo import DEMO_DISCORD_ID, DEMO_MAX_TOKENS, is_demo_code
 
 logger = logging.getLogger(__name__)
 
+class HTTPBearer403(HTTPBearer):
+    def make_not_authenticated_error(self) -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authenticated",
+        )
+
+
 router = APIRouter()
-bearer_scheme = HTTPBearer()
+bearer_scheme = HTTPBearer403()
 # auto_error=False so a missing Authorization header falls through to the bot
 # credential check in get_current_or_bot_user, instead of HTTPBearer raising
 # 403 on its own before that check ever runs.
-_bearer_scheme_optional = HTTPBearer(auto_error=False)
+_bearer_scheme_optional = HTTPBearer403(auto_error=False)
 
 
 def _token_expiry() -> datetime:

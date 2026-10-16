@@ -15,7 +15,7 @@ def test_docs_routes_absent_when_flag_off(monkeypatch):
     monkeypatch.setattr(settings, "enable_api_docs", False)
     try:
         reloaded = importlib.reload(main_module)
-        paths = {route.path for route in reloaded.app.routes}
+        paths = {route.path for route in reloaded.app.routes if hasattr(route, "path")}
         assert not (paths & DOC_PATHS)
     finally:
         # Restore the docs-enabled app for any module importing app.main later.
