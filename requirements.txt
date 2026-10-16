@@ -42,3 +42,8 @@ fakeredis==2.36.2
 # Quality gates
 ruff==0.16.3
 mypy==2.3.1
+
+# Security overrides for transitive dependencies
+msgpack>=1.2.1
+urllib3>=2.8.0
+setuptools>=78.1.1
