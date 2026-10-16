@@ -74,7 +74,7 @@ async def test_trend_buckets_contiguous_and_chronological(authed_client):
 
 async def test_trend_daily_session_today(authed_client, db, user):
     game = await make_game(db)
-    start = datetime.now(UTC) - timedelta(hours=1)
+    start = _local_midnight_utc("UTC") + timedelta(minutes=5)
     await make_session(
         db, user.discord_id, game.id, start, start + timedelta(seconds=3600)
     )

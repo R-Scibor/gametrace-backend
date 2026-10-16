@@ -1,3 +1,6 @@
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from app.models.game import EnrichmentStatus
 from app.models.session import SessionStatus
 from tests.factories import dt, make_game, make_pref, make_session
@@ -124,12 +127,19 @@ async def test_dashboard_active_session_includes_game_id_and_cover(
 
 async def test_dashboard_total_seconds_today_field_present(authed_client, db, user):
     game = await make_game(db)
-    await make_session(db, user.discord_id, game.id, dt(hours_ago=2), dt(hours_ago=1))
+    try:
+        user_tz = ZoneInfo(user.timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        user_tz = UTC
+    today_midnight = datetime.now(user_tz).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).astimezone(UTC)
+    start = today_midnight + timedelta(minutes=5)
+    await make_session(db, user.discord_id, game.id, start, start + timedelta(seconds=3600))
 
     resp = await authed_client.get("/api/v1/stats/dashboard")
 
     assert resp.status_code == 200
     data = resp.json()
     assert "total_seconds_today" in data
-    # Session in the last 2h is always after local midnight regardless of tz.
     assert data["total_seconds_today"] == 3600
