@@ -21,6 +21,7 @@ async def make_user(
     is_admin: bool = False,
     deletion_requested_at: datetime | None = None,
     purge_at: datetime | None = None,
+    created_at: datetime | None = None,
 ) -> User:
     user = User(
         discord_id=discord_id,
@@ -30,6 +31,8 @@ async def make_user(
         deletion_requested_at=deletion_requested_at,
         purge_at=purge_at,
     )
+    if created_at is not None:
+        user.created_at = created_at
     db.add(user)
     await db.flush()
     return user

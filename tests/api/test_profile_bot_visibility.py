@@ -21,12 +21,19 @@ async def r(monkeypatch):
     return client
 
 
-async def _bot_alive(r, *, heartbeat_age=0, started_ago=100, synced_ago=50):
+@pytest.fixture
+async def user(db):
+    # Created well before the last full scan, so a complete snapshot covers it.
+    return await make_user(db, created_at=datetime.now(UTC) - timedelta(days=1))
+
+
+async def _bot_alive(r, *, heartbeat_age=0, started_ago=100, synced_ago=50, complete="1"):
     now = int(time.time())
     await r.set("bot:heartbeat", now - heartbeat_age)
     await r.set("bot:started_at", now - started_ago)
     if synced_ago is not None:
         await r.set("bot:membership_synced_at", now - synced_ago)
+    await r.set("bot:membership_complete", complete)
 
 
 async def test_visible_user_is_true(authed_client, user, r):
@@ -42,6 +49,21 @@ async def test_invisible_user_is_false(authed_client, r):
     await r.sadd("bot:visible_users", "999")
 
     assert (await authed_client.get(ME)).json()["bot_can_see_user"] is False
+
+
+async def test_partial_snapshot_is_unknown_not_false(authed_client, r):
+    await _bot_alive(r, complete="0")
+    assert (await authed_client.get(ME)).json()["bot_can_see_user"] is None
+
+
+async def test_account_created_after_scan_is_unknown(db, client, r):
+    # e.g. a Discord OAuth signup the bot has not scanned yet.
+    fresh = await make_user(db, discord_id="555555555555555555", username="oauth")
+    token = await make_token(db, fresh.discord_id)
+    await _bot_alive(r)
+
+    resp = await client.get(ME, headers={"Authorization": f"Bearer {token}"})
+    assert resp.json()["bot_can_see_user"] is None
 
 
 async def test_no_heartbeat_is_unknown(authed_client, user, r):

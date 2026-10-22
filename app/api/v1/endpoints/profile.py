@@ -32,7 +32,9 @@ async def _to_response(user: User) -> ProfileResponse:
         weekly_report_enabled=user.weekly_report_enabled,
         push_enabled=user.push_enabled,
         is_admin=user.is_admin,
-        bot_can_see_user=await get_bot_visibility(get_redis(), user.discord_id),
+        bot_can_see_user=await get_bot_visibility(
+            get_redis(), user.discord_id, user.created_at
+        ),
         bot_visibility_reminders_enabled=user.bot_visibility_reminders_enabled,
         bot_visibility_reminder_snoozed_until=user.bot_visibility_reminder_snoozed_until,
     )
