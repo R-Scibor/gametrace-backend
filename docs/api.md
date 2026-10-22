@@ -35,14 +35,14 @@ All three issue `LoginResponse.pending_deletion` — `null` for a normal account
 
 ### Discord OAuth2 setup
 
-`POST /auth/discord` exchanges an authorization code (with PKCE) for a session token. The mobile app supplies `redirect_uri` in the request body; the backend allowlists it against `DISCORD_OAUTH_REDIRECT_URIS` before calling Discord's token endpoint. **The same URI must be registered in two places** — missing either causes `400 redirect_uri not allowed`:
+`POST /auth/discord` exchanges an authorization code (with PKCE) for a session token. The client supplies `redirect_uri` in the request body; the backend allowlists it against `DISCORD_OAUTH_REDIRECT_URIS` before calling Discord's token endpoint. **The same URI must be registered in two places** — missing either causes `400 redirect_uri not allowed`:
 
 | Where | What to set |
 |---|---|
-| `.env` | `DISCORD_OAUTH_REDIRECT_URIS` — comma-separated allowlist (e.g. `gametrace://oauth`). See `example.env`. |
-| Discord Developer Portal → OAuth2 → Redirects | Add every URI from the allowlist verbatim. Custom schemes such as `gametrace://oauth` are valid app deep links. |
+| `.env` | `DISCORD_OAUTH_REDIRECT_URIS` — comma-separated allowlist (e.g. `gametrace://oauth`). The web app sends `${origin}/auth/discord/callback`, so each deployed origin is its own entry. See `example.env`. |
+| Discord Developer Portal → OAuth2 → Redirects | Add every URI from the allowlist verbatim. Custom schemes such as `gametrace://oauth` are valid app deep links. `http://` is only accepted for `localhost` and `127.0.0.1`. |
 
-Also required in `.env`: `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET` (OAuth2 tab, same application as the bot), and `DISCORD_GUILD_IDS` (comma-separated guild ids for `needs_server_join`). The mobile client must use the **same** `redirect_uri` when opening the Discord authorize URL and when posting to `/auth/discord`.
+Also required in `.env`: `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET` (OAuth2 tab, same application as the bot), and `DISCORD_GUILD_IDS` (comma-separated guild ids for `needs_server_join`). The client must use the **same** `redirect_uri` when opening the Discord authorize URL and when posting to `/auth/discord`. The web client id is the same public `DISCORD_CLIENT_ID`, passed to the SPA as `VITE_DISCORD_CLIENT_ID`.
 
 | Method | Path | Description |
 |---|---|---|
