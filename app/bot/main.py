@@ -12,7 +12,7 @@ import structlog
 from discord import app_commands
 from discord.ext import tasks
 
-from app.bot import layout, replies
+from app.bot import layout, membership, replies
 from app.bot.activity import activity_name
 from app.bot.panel import PERSISTENT_VIEWS, PanelView
 from app.core.bot_heartbeat import (
@@ -27,6 +27,9 @@ from app.core.observability import init_sentry
 from app.core.redis import get_redis
 
 logger = logging.getLogger(__name__)
+
+# Periodic full rebuild of the bot-visibility snapshot (see _membership_rebuild_loop).
+MEMBERSHIP_REBUILD_SECONDS = 300
 
 @tasks.loop(seconds=30)
 async def _heartbeat_loop() -> None:
@@ -102,8 +105,54 @@ async def on_ready():
         logger.warning("Failed to write bot:started_at to Redis", exc_info=True)
     if not _heartbeat_loop.is_running():
         _heartbeat_loop.start()
+    # Every on_ready (reconnects included): events may have been missed while
+    # disconnected, and started_at was just bumped, so the old snapshot is
+    # untrusted until this rebuild stamps a newer synced_at.
+    await _rebuild_membership()
+    if not _membership_rebuild_loop.is_running():
+        _membership_rebuild_loop.start()
     async with AsyncSessionLocal() as db:
         await run_startup_reconciliation(db, bot.guilds)
+
+
+@tasks.loop(seconds=MEMBERSHIP_REBUILD_SECONDS)
+async def _membership_rebuild_loop() -> None:
+    # Safety net: retries a failed on_ready rebuild, picks up users created
+    # by the API (Discord OAuth login never reaches the bot), and repairs any
+    # missed member event. Skips while the gateway is not ready.
+    if bot.is_ready():
+        await _rebuild_membership()
+
+
+async def _rebuild_membership() -> None:
+    try:
+        async with AsyncSessionLocal() as db:
+            await membership.rebuild_snapshot(db, get_redis(), bot.guilds)
+    except Exception:
+        logger.warning("Bot membership snapshot rebuild failed", exc_info=True)
+
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    async with AsyncSessionLocal() as db:
+        await membership.on_member_join(db, get_redis(), member)
+
+
+@bot.event
+async def on_member_remove(member: discord.Member):
+    await membership.on_member_remove(get_redis(), bot.guilds, member)
+
+
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    # Guilds joined at runtime are not always chunked; see membership.on_guild_join.
+    await membership.on_guild_join(guild, _rebuild_membership)
+
+
+@bot.event
+async def on_guild_remove(guild: discord.Guild):
+    # bot.guilds no longer contains the guild here.
+    await _rebuild_membership()
 
 
 @tree.command(name="register", description="Zarejestruj się w GameTrace")
@@ -115,6 +164,7 @@ async def register_command(interaction: discord.Interaction) -> None:
         from app.bot.commands import register_user
 
         msg = await register_user(db, discord_id, username)
+    await membership.refresh_user(get_redis(), bot, discord_id)
 
     await interaction.response.send_message(
         view=layout.reply_view("Rejestracja", msg, layout.accent_for(msg)), ephemeral=True
@@ -130,6 +180,7 @@ async def login_command(interaction: discord.Interaction) -> None:
         from app.bot.commands import issue_login_code
 
         msg = await issue_login_code(db, get_redis(), discord_id, username)
+    await membership.refresh_user(get_redis(), bot, discord_id)
 
     await interaction.response.send_message(
         view=layout.reply_view("Kod logowania", msg, layout.accent_for(msg)), ephemeral=True

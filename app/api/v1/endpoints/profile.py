@@ -4,8 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.auth import get_current_user, get_current_user_allow_pending
+from app.core.bot_membership import get_bot_visibility
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.redis import get_redis
 from app.models.user import User
 from app.schemas.deletion import AccountDeletionState, DeletionStatusResponse
 from app.schemas.profile import ProfileResponse, ProfileSettingsUpdate
@@ -21,7 +23,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _to_response(user: User) -> ProfileResponse:
+async def _to_response(user: User) -> ProfileResponse:
     return ProfileResponse(
         discord_id=user.discord_id,
         username=user.username,
@@ -30,12 +32,17 @@ def _to_response(user: User) -> ProfileResponse:
         weekly_report_enabled=user.weekly_report_enabled,
         push_enabled=user.push_enabled,
         is_admin=user.is_admin,
+        bot_can_see_user=await get_bot_visibility(
+            get_redis(), user.discord_id, user.created_at
+        ),
+        bot_visibility_reminders_enabled=user.bot_visibility_reminders_enabled,
+        bot_visibility_reminder_snoozed_until=user.bot_visibility_reminder_snoozed_until,
     )
 
 
 @router.get("/me", response_model=ProfileResponse)
 async def get_me(user: User = Depends(get_current_user)):
-    return _to_response(user)
+    return await _to_response(user)
 
 
 @router.put("/settings", response_model=ProfileResponse)
@@ -48,7 +55,7 @@ async def update_settings(
         setattr(user, field, getattr(payload, field))
     await db.commit()
     await db.refresh(user)
-    return _to_response(user)
+    return await _to_response(user)
 
 
 @router.post(
