@@ -23,6 +23,7 @@ def _interaction(*, user_id: int = 4242, username: str = "zyraf"):
             edit_message=AsyncMock(),
         ),
         followup=SimpleNamespace(send=AsyncMock()),
+        client=SimpleNamespace(guilds=[]),
     )
 
 

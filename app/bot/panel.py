@@ -27,7 +27,7 @@ from __future__ import annotations
 import discord
 from discord.ui import ActionRow, Container, LayoutView
 
-from app.bot import commands, layout, replies
+from app.bot import commands, layout, membership, replies
 from app.core.database import AsyncSessionLocal
 from app.core.redis import get_redis
 from app.models.user import User
@@ -154,6 +154,7 @@ class _NewUserRow(ActionRow):
 
         async with AsyncSessionLocal() as db:
             await commands.register_user(db, discord_id, username)
+        await membership.refresh_user(get_redis(), interaction.client, discord_id)
 
         # `edit_message` IS the interaction response, so this path must not
         # defer. The disclosure becomes the member menu in place — one
@@ -183,6 +184,7 @@ class _MemberRow(ActionRow):
 
         async with AsyncSessionLocal() as db:
             body = await commands.issue_login_code(db, get_redis(), discord_id, username)
+        await membership.refresh_user(get_redis(), interaction.client, discord_id)
 
         await _send_reply(interaction, "Kod logowania", body)
 
