@@ -16,7 +16,6 @@ snapshot key and the reader would union them.
 
 import logging
 import time
-import uuid
 from collections.abc import Iterable
 
 from app.core.bot_heartbeat import (
@@ -38,36 +37,38 @@ async def get_bot_visibility(redis, discord_id: str) -> bool | None:
     if discord_id == DEMO_DISCORD_ID:
         return None
     try:
-        heartbeat, started_at, synced_at = await redis.mget(
-            BOT_HEARTBEAT_KEY, BOT_STARTED_AT_KEY, MEMBERSHIP_SYNCED_AT_KEY
-        )
+        # One round trip, so the freshness keys and the membership answer
+        # come from the same moment.
+        async with redis.pipeline(transaction=True) as pipe:
+            pipe.mget(BOT_HEARTBEAT_KEY, BOT_STARTED_AT_KEY, MEMBERSHIP_SYNCED_AT_KEY)
+            pipe.sismember(VISIBLE_USERS_KEY, discord_id)
+            (heartbeat, started_at, synced_at), is_member = await pipe.execute()
         if heartbeat is None or started_at is None or synced_at is None:
             return None
         if int(time.time()) - int(heartbeat) > HEARTBEAT_WINDOW_SECONDS:
             return None
         if int(synced_at) < int(started_at):
             return None
-        return bool(await redis.sismember(VISIBLE_USERS_KEY, discord_id))
+        return bool(is_member)
     except Exception:
         logger.warning("bot_visibility.redis_read_failed", exc_info=True)
         return None
 
 
 async def write_snapshot(redis, ids: Iterable[str]) -> None:
-    """Atomically replace the snapshot, then stamp ``synced_at``."""
+    """Atomically replace the snapshot and stamp ``synced_at`` (MULTI/EXEC).
+
+    The whole replacement is queued client-side and sent in one await, so no
+    incremental add/remove from another bot task can interleave between the
+    caller's cache scan and the swap, and no temp key can leak on a crash.
+    """
     ids = list(ids)
-    if ids:
-        tmp = f"{VISIBLE_USERS_KEY}:tmp:{uuid.uuid4().hex}"
-        try:
-            for i in range(0, len(ids), _SADD_CHUNK):
-                await redis.sadd(tmp, *ids[i : i + _SADD_CHUNK])
-            await redis.rename(tmp, VISIBLE_USERS_KEY)
-        except Exception:
-            await redis.delete(tmp)
-            raise
-    else:
-        await redis.delete(VISIBLE_USERS_KEY)
-    await redis.set(MEMBERSHIP_SYNCED_AT_KEY, int(time.time()))
+    async with redis.pipeline(transaction=True) as pipe:
+        pipe.delete(VISIBLE_USERS_KEY)
+        for i in range(0, len(ids), _SADD_CHUNK):
+            pipe.sadd(VISIBLE_USERS_KEY, *ids[i : i + _SADD_CHUNK])
+        pipe.set(MEMBERSHIP_SYNCED_AT_KEY, int(time.time()))
+        await pipe.execute()
 
 
 async def add_visible(redis, discord_id: str) -> None:

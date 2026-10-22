@@ -20,6 +20,19 @@ async def test_write_snapshot_replaces_and_stamps(r):
     assert [k async for k in r.scan_iter(f"{bm.VISIBLE_USERS_KEY}:tmp:*")] == []
 
 
+async def test_write_snapshot_is_one_transaction(r, monkeypatch):
+    calls = []
+    real = r.pipeline
+
+    def spy(*a, **kw):
+        calls.append(kw.get("transaction"))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(r, "pipeline", spy)
+    await bm.write_snapshot(r, {"1"})
+    assert calls == [True]
+
+
 async def test_write_snapshot_chunks_large_sets(r, monkeypatch):
     monkeypatch.setattr(bm, "_SADD_CHUNK", 2)
     await bm.write_snapshot(r, [str(i) for i in range(5)])

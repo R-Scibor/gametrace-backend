@@ -28,6 +28,9 @@ from app.core.redis import get_redis
 
 logger = logging.getLogger(__name__)
 
+# Periodic full rebuild of the bot-visibility snapshot (see _membership_rebuild_loop).
+MEMBERSHIP_REBUILD_SECONDS = 300
+
 @tasks.loop(seconds=30)
 async def _heartbeat_loop() -> None:
     try:
@@ -106,8 +109,19 @@ async def on_ready():
     # disconnected, and started_at was just bumped, so the old snapshot is
     # untrusted until this rebuild stamps a newer synced_at.
     await _rebuild_membership()
+    if not _membership_rebuild_loop.is_running():
+        _membership_rebuild_loop.start()
     async with AsyncSessionLocal() as db:
         await run_startup_reconciliation(db, bot.guilds)
+
+
+@tasks.loop(seconds=MEMBERSHIP_REBUILD_SECONDS)
+async def _membership_rebuild_loop() -> None:
+    # Safety net: retries a failed on_ready rebuild, picks up users created
+    # by the API (Discord OAuth login never reaches the bot), and repairs any
+    # missed member event. Skips while the gateway is not ready.
+    if bot.is_ready():
+        await _rebuild_membership()
 
 
 async def _rebuild_membership() -> None:
@@ -126,20 +140,13 @@ async def on_member_join(member: discord.Member):
 
 @bot.event
 async def on_member_remove(member: discord.Member):
-    async with AsyncSessionLocal() as db:
-        await membership.on_member_remove(db, get_redis(), bot.guilds, member)
+    await membership.on_member_remove(get_redis(), bot.guilds, member)
 
 
 @bot.event
 async def on_guild_join(guild: discord.Guild):
-    # Guilds joined at runtime are not always chunked; without the full member
-    # list the rebuild would miss registered users in this guild.
-    if not guild.chunked:
-        try:
-            await guild.chunk()
-        except Exception:
-            logger.warning("Chunking new guild %s failed", guild.id, exc_info=True)
-    await _rebuild_membership()
+    # Guilds joined at runtime are not always chunked; see membership.on_guild_join.
+    await membership.on_guild_join(guild, _rebuild_membership)
 
 
 @bot.event

@@ -1,5 +1,6 @@
 """Bot-side maintenance of the Redis visibility snapshot."""
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import fakeredis.aioredis
 import pytest
@@ -12,9 +13,14 @@ from tests.factories import make_user
 A, B, C = "100000000000000001", "100000000000000002", "100000000000000003"
 
 
-def _guild(gid, member_ids):
+def _guild(gid, member_ids, *, chunked=True, unavailable=False):
     ids = {int(m) for m in member_ids}
-    return SimpleNamespace(id=gid, get_member=lambda uid: object() if uid in ids else None)
+    return SimpleNamespace(
+        id=gid,
+        chunked=chunked,
+        unavailable=unavailable,
+        get_member=lambda uid: object() if uid in ids else None,
+    )
 
 
 def _member(uid, guild):
@@ -51,29 +57,68 @@ async def test_member_join_unregistered_ignored(db, r):
     assert await r.scard(VISIBLE_USERS_KEY) == 0
 
 
-async def test_member_remove_kept_when_in_other_guild(db, r):
-    await make_user(db, discord_id=A, username="a")
+async def test_member_remove_kept_when_in_other_guild(r):
     await r.sadd(VISIBLE_USERS_KEY, A)
     left, other = _guild(1, [A]), _guild(2, [A])
 
-    await membership.on_member_remove(db, r, [left, other], _member(A, left))
+    await membership.on_member_remove(r, [left, other], _member(A, left))
     assert await r.sismember(VISIBLE_USERS_KEY, A)
 
 
-async def test_member_remove_dropped_when_no_other_guild(db, r):
-    await make_user(db, discord_id=A, username="a")
+async def test_member_remove_dropped_when_no_other_guild(r):
     await r.sadd(VISIBLE_USERS_KEY, A)
     left = _guild(1, [A])  # discord.py may still return the member in the cache
 
-    await membership.on_member_remove(db, r, [left, _guild(2, [])], _member(A, left))
+    await membership.on_member_remove(r, [left, _guild(2, [])], _member(A, left))
     assert not await r.sismember(VISIBLE_USERS_KEY, A)
 
 
-async def test_member_remove_unregistered_ignored(db, r):
-    await r.sadd(VISIBLE_USERS_KEY, B)
+async def test_member_remove_unregistered_is_noop(r):
+    await r.sadd(VISIBLE_USERS_KEY, A)
     g = _guild(1, [])
-    await membership.on_member_remove(db, r, [g], _member(B, g))
-    assert await r.sismember(VISIBLE_USERS_KEY, B)  # untouched
+    await membership.on_member_remove(r, [g], _member(B, g))
+    assert await r.smembers(VISIBLE_USERS_KEY) == {A}
+
+
+async def test_rebuild_drops_users_that_left_when_cache_complete(db, r):
+    await make_user(db, discord_id=A, username="a")
+    await r.sadd(VISIBLE_USERS_KEY, A)
+    await membership.rebuild_snapshot(db, r, [_guild(1, [])])
+    assert await r.scard(VISIBLE_USERS_KEY) == 0
+
+
+@pytest.mark.parametrize("flags", [{"chunked": False}, {"unavailable": True}])
+async def test_rebuild_with_incomplete_cache_keeps_previous(db, r, flags):
+    for uid in (A, B):
+        await make_user(db, discord_id=uid, username=uid)
+    await r.sadd(VISIBLE_USERS_KEY, A, "999")  # 999: no longer a registered user
+    guilds = [_guild(1, [], **flags), _guild(2, [B])]
+
+    await membership.rebuild_snapshot(db, r, guilds)
+    assert await r.smembers(VISIBLE_USERS_KEY) == {A, B}
+
+
+async def test_guild_join_chunks_then_rebuilds():
+    guild = SimpleNamespace(id=1, chunked=False, chunk=AsyncMock())
+    rebuild = AsyncMock()
+    await membership.on_guild_join(guild, rebuild)
+    guild.chunk.assert_awaited_once()
+    rebuild.assert_awaited_once()
+
+
+async def test_guild_join_chunk_failure_skips_rebuild():
+    guild = SimpleNamespace(id=1, chunked=False, chunk=AsyncMock(side_effect=TimeoutError))
+    rebuild = AsyncMock()
+    await membership.on_guild_join(guild, rebuild)
+    rebuild.assert_not_awaited()
+
+
+async def test_guild_join_already_chunked_skips_chunk():
+    guild = SimpleNamespace(id=1, chunked=True, chunk=AsyncMock())
+    rebuild = AsyncMock()
+    await membership.on_guild_join(guild, rebuild)
+    guild.chunk.assert_not_awaited()
+    rebuild.assert_awaited_once()
 
 
 async def test_refresh_user_add_and_remove(r):
