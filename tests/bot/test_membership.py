@@ -206,3 +206,7 @@ async def test_refresh_user_skips_demo(r):
     client = SimpleNamespace(guilds=[_guild(1, [DEMO_DISCORD_ID])])
     await membership.refresh_user(r, client, DEMO_DISCORD_ID)
     assert await r.scard(VISIBLE_USERS_KEY) == 0
+
+
+def test_is_visible_rejects_non_numeric_id():
+    assert membership.is_visible([_guild(1, [A])], "not-a-snowflake") is False

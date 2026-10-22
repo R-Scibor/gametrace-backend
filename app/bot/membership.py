@@ -40,6 +40,8 @@ def _guild_complete(g) -> bool:
 def is_visible(
     guilds: Sequence[discord.Guild], discord_id: str, *, exclude_guild_id: int | None = None
 ) -> bool:
+    if not discord_id.isdigit():
+        return False
     uid = int(discord_id)
     return any(
         g.get_member(uid) is not None for g in guilds if g.id != exclude_guild_id
@@ -64,13 +66,13 @@ async def rebuild_snapshot(db: AsyncSession, redis, guilds: Sequence[discord.Gui
         result = await db.execute(
             select(User.discord_id).where(User.discord_id != DEMO_DISCORD_ID)
         )
-        user_ids = list(result.scalars())
+        registered_ids = set(result.scalars())
         guilds = list(guilds)
         # No guilds at all cannot prove anything (e.g. cache not populated).
         complete = bool(guilds) and all(_guild_complete(g) for g in guilds)
         previous: set[str] = set() if complete else set(await redis.smembers(VISIBLE_USERS_KEY))
-        visible = {uid for uid in user_ids if uid.isdigit() and is_visible(guilds, uid)}
-        visible |= previous & set(user_ids)
+        visible = {uid for uid in registered_ids if is_visible(guilds, uid)}
+        visible |= previous & registered_ids
         await write_snapshot(redis, visible, complete=complete, scan_started_at=scan_started_at)
     logger.info(
         "bot_membership.snapshot_rebuilt visible=%d guilds=%d complete=%s",
