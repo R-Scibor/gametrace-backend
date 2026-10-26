@@ -183,15 +183,14 @@ async def test_logout_invalid_token_returns_401(client):
     assert resp.status_code == 401
 
 
-async def test_protected_endpoint_no_credentials_returns_403(client):
-    # HTTPBearer returns 403 when the Authorization header is missing entirely.
-    # /stats/summary no longer demonstrates this: it also accepts a bot-service
-    # credential (see test_bot_auth_endpoints.py), so a missing Authorization
-    # header there now falls through to a 401. /stats/heatmap is untouched and
-    # still uses plain get_current_user, so it still exhibits bare-HTTPBearer 403.
+async def test_protected_endpoint_no_credentials_returns_401(client):
+    # A missing Authorization header is 401, same as an invalid token.
+    # /stats/summary also accepts a bot-service credential (see
+    # test_bot_auth_endpoints.py), so this uses /stats/heatmap, which only
+    # has get_current_user.
     resp = await client.get("/api/v1/stats/heatmap")
 
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 async def test_protected_endpoint_bad_token_returns_401(client):

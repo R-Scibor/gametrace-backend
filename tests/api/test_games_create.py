@@ -178,9 +178,9 @@ async def test_unrecognized_without_name_422(authed_client):
 # ── auth ──────────────────────────────────────────────────────────────────────
 
 async def test_requires_auth(client):
-    """`client` has no Bearer token — expect 403."""
+    """`client` has no Bearer token — expect 401."""
     resp = await client.post(URL, json={"igdb_id": 1942})
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 # ── rate limiting ─────────────────────────────────────────────────────────────

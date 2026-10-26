@@ -53,14 +53,14 @@ async def test_invalid_token_on_admin_merge_url_returns_401(client, db):
     assert resp.status_code == 401
 
 
-async def test_missing_auth_header_on_admin_merge_url_returns_403(client, db):
-    """No header at all is `HTTPBearer`'s 403, not `get_current_user`'s 401."""
+async def test_missing_auth_header_on_admin_merge_url_returns_401(client, db):
+    """No header at all is 401, the same code as an invalid bearer token."""
     source = await make_game(db, "Source Game")
     target = await make_game(db, "Target Game")
 
     resp = await client.post(f"/api/v1/admin/games/{source.id}/merge/{target.id}")
 
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 async def test_old_public_cover_url_gone(authed_client, db, user):

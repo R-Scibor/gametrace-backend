@@ -142,7 +142,7 @@ async def test_alias_for_game_user_never_played_does_not_resolve(authed_client, 
 async def test_requires_auth(client, db, user):
     """`client` is the unauthenticated httpx fixture."""
     resp = await client.get("/api/v1/games/resolve", params={"name": "anything"})
-    assert resp.status_code == 403  # HTTPBearer raises 403 when no creds supplied
+    assert resp.status_code == 401
 
 
 async def test_missing_name_param_is_422(authed_client):

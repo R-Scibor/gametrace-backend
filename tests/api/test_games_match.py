@@ -102,12 +102,12 @@ async def test_other_exception_returns_502(authed_client):
 # ── auth + validation ─────────────────────────────────────────────────────────
 
 async def test_requires_auth(client):
-    """`client` has no Bearer token — expect 403."""
+    """`client` has no Bearer token — expect 401."""
     resp = await client.post(
         "/api/v1/games/match",
         json={"query": "hades"},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 async def test_empty_query_is_422(authed_client):

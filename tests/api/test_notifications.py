@@ -116,4 +116,4 @@ async def test_register_requires_auth(client):
         json={"fcm_token": "nope", "device_type": "android"},
     )
 
-    assert resp.status_code == 403
+    assert resp.status_code == 401

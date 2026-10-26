@@ -123,7 +123,7 @@ async def test_put_requires_auth(client, db):
         json={"is_ignored": True},
     )
 
-    assert resp.status_code == 403  # HTTPBearer raises 403 when no creds
+    assert resp.status_code == 401
 
 
 async def test_put_ignored_hides_game_from_summary(authed_client, db, user):

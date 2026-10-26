@@ -376,4 +376,4 @@ async def test_get_deletion_reflects_a_cancel(db, client):
 async def test_get_deletion_requires_a_token(client):
     resp = await client.get("/api/v1/profile/me/deletion")
 
-    assert resp.status_code == 403
+    assert resp.status_code == 401

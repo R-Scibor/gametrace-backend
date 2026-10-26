@@ -73,4 +73,4 @@ async def test_create_report_requires_auth(client):
         "/api/v1/reports",
         json={"message": "no token", "context": VALID_CONTEXT},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 401

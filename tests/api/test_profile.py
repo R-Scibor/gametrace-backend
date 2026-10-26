@@ -145,7 +145,7 @@ async def test_put_settings_requires_auth(client):
         json={"timezone": "Europe/Warsaw"},
     )
 
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 async def test_me_reflects_settings_update(authed_client):

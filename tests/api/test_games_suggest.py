@@ -252,9 +252,9 @@ async def test_regex_metacharacters_in_q_are_escaped(authed_client, db, user):
 # ── auth + validation ─────────────────────────────────────────────────────────
 
 async def test_requires_auth(client, db, user):
-    """`client` has no Bearer token — expect 403."""
+    """`client` has no Bearer token — expect 401."""
     resp = await client.get("/api/v1/games/suggest", params={"q": "anything"})
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 async def test_empty_q_is_422(authed_client):
