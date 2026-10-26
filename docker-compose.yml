@@ -119,7 +119,9 @@ services:
         APP_VERSION: ${APP_VERSION:-dev}
     container_name: gametrace_celery_beat
     restart: always
-    command: celery -A app.core.celery_app beat
+    # /app is root-owned in the image. The schedule file is local state, so it
+    # lives on the world-writable /tmp instead of the working directory.
+    command: celery -A app.core.celery_app beat --schedule /tmp/celerybeat-schedule
     environment:
       LOG_COMPONENT: beat
     volumes:

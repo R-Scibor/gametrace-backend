@@ -36,6 +36,10 @@ celery_app.conf.update(
     enable_utc=True,
     broker_connection_retry_on_startup=True,
     worker_hijack_root_logger=False,
+    # /app is root-owned in the image. Beat's shelve file is local state, so it
+    # stays on the world-writable /tmp. The prod compose command does not pass
+    # --schedule, and deploy does not refresh that file from git.
+    beat_schedule_filename="/tmp/celerybeat-schedule",
     beat_schedule={
         "weekly_report": {
             "task": "tasks.weekly_report",

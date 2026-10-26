@@ -18,3 +18,4 @@ def test_celery_does_not_hijack_root_logger():
     from app.core.celery_app import celery_app
 
     assert celery_app.conf.worker_hijack_root_logger is False
+    assert celery_app.conf.beat_schedule_filename == "/tmp/celerybeat-schedule"
