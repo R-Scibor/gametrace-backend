@@ -118,12 +118,17 @@ async def test_relative_spacing_between_sessions_preserved(db):
     ).scalars().all()
     assert len(sessions) == 2
 
-    original_gap = later - earlier
-    restored_gap = sessions[1].start_time - sessions[0].start_time
-    assert restored_gap == original_gap
+    demo_tz = ZoneInfo(DEMO_TIMEZONE)
 
-    # Time-of-day is preserved too (whole-day delta only).
-    assert sessions[0].start_time.astimezone(UTC).time() == earlier.time()
+    def _local_naive(moment: datetime) -> datetime:
+        return moment.astimezone(demo_tz).replace(tzinfo=None)
+
+    # Spacing and clock time are preserved in the demo timezone. A UTC gap
+    # changes by an hour when the restored window crosses a DST transition.
+    assert _local_naive(sessions[1].start_time) - _local_naive(sessions[0].start_time) == (
+        _local_naive(later) - _local_naive(earlier)
+    )
+    assert _local_naive(sessions[0].start_time).time() == _local_naive(earlier).time()
 
 
 async def test_restored_session_never_lands_in_the_future(db):

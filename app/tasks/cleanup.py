@@ -35,6 +35,19 @@ logger = logging.getLogger(__name__)
 DEVICE_STALE_DAYS = 30 * 6
 
 
+def _shift_local_days(moment: datetime, days: int, tz: ZoneInfo) -> datetime:
+    """Move a timestamp by calendar days in `tz`, keeping the local clock time.
+
+    `timedelta(days=n)` is `n` times 24 hours. Across a DST change that is not
+    a calendar day, so a session at 00:00 the day before the autumn fallback
+    lands at 23:00 the day before the target date.
+    """
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    local = moment.astimezone(tz).replace(tzinfo=None) + timedelta(days=days)
+    return local.replace(tzinfo=tz).astimezone(UTC)
+
+
 async def _run_cleanup(db: AsyncSession) -> tuple[int, int]:
     now = datetime.now(UTC)
     session_cutoff = now - timedelta(days=settings.trash_retention_days)
@@ -206,38 +219,42 @@ async def _run_demo_reset(db: AsyncSession) -> int:
 
         seed_sessions = (await db.execute(select(DemoSeedSession))).scalars().all()
 
-        delta = timedelta(0)
+        day_delta = 0
+        demo_tz = ZoneInfo(DEMO_TIMEZONE)
         if seed_sessions:
             latest_start = max(s.start_time for s in seed_sessions)
-            demo_tz = ZoneInfo(DEMO_TIMEZONE)
             latest_date = latest_start.astimezone(demo_tz).date()
             today = datetime.now(demo_tz).date()
-            delta = timedelta(days=(today - latest_date).days)
+            day_delta = (today - latest_date).days
 
-            # A whole-day delta preserves time-of-day, so a session that
-            # started late in the evening (e.g. 22:00) can still land in the
-            # future: the task runs at 03:00 UTC, well before 22:00 in any
-            # timezone that day. A manual session created for that evening
-            # would then 409 against a restored session that "hasn't
-            # happened yet". Clamp by reducing the single shared delta a
-            # whole day at a time — never rebase rows individually, since
-            # preserving relative spacing is the entire point of one delta.
+            # The same calendar-day shift keeps local time-of-day, so a
+            # session that started late in the evening (e.g. 22:00) can still
+            # land in the future: the task runs at 03:00 UTC, well before
+            # 22:00 in any timezone that day. A manual session created for
+            # that evening would then 409 against a restored session that
+            # hasn't happened yet. Clamp by reducing the single shared day
+            # count — never rebase rows individually, since preserving
+            # relative spacing is the entire point of one shift.
             now = datetime.now(UTC)
             latest_moment = max(
                 (s.end_time if s.end_time is not None else s.start_time)
                 for s in seed_sessions
             )
             latest_moment = max(latest_moment, latest_start)
-            while latest_moment + delta > now:
-                delta -= timedelta(days=1)
+            while _shift_local_days(latest_moment, day_delta, demo_tz) > now:
+                day_delta -= 1
 
         for seed in seed_sessions:
             db.add(
                 GameSession(
                     user_id=DEMO_DISCORD_ID,
                     game_id=seed.game_id,
-                    start_time=seed.start_time + delta,
-                    end_time=(seed.end_time + delta) if seed.end_time is not None else None,
+                    start_time=_shift_local_days(seed.start_time, day_delta, demo_tz),
+                    end_time=(
+                        _shift_local_days(seed.end_time, day_delta, demo_tz)
+                        if seed.end_time is not None
+                        else None
+                    ),
                     duration_seconds=seed.duration_seconds,
                     status=seed.status,
                     source=seed.source,
@@ -271,7 +288,7 @@ async def _run_demo_reset(db: AsyncSession) -> int:
         raise
 
     restored = len(seed_sessions)
-    logger.info("reset_demo_account: restored=%d delta_days=%d", restored, delta.days)
+    logger.info("reset_demo_account: restored=%d delta_days=%d", restored, day_delta)
     return restored
 
 
