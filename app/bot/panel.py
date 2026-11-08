@@ -17,12 +17,14 @@ Two rules hold this module together:
   a `MemberView`, never by copying the button onto `NewUserView`.
 * **Views are stateless.** A persistent view is instantiated once at startup
   and shared by every clicker, so per-user data is only ever read from
-  `interaction`. The optional title/body arguments below are page copy, not
-  user state, and every class still constructs with no arguments.
+  `interaction`. `MemberView`'s optional card is page copy, not user state,
+  and every class still constructs with no arguments.
 
 All copy comes from `app/bot/replies.py`; only button labels live here.
 """
 from __future__ import annotations
+
+import logging
 
 import discord
 from discord.ui import ActionRow, Container, LayoutView
@@ -31,6 +33,8 @@ from app.bot import commands, layout, membership, replies
 from app.core.database import AsyncSessionLocal
 from app.core.redis import get_redis
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 
 # Plain product name, used for every ephemeral screen that is not about one
 # specific action — the member menu and the help reply. Matches the title
@@ -56,14 +60,6 @@ def _panel_container(title: str, body: str, row: ActionRow) -> Container:
     return container
 
 
-async def _send_reply(interaction: discord.Interaction, title: str, body: str) -> None:
-    """Ephemeral V2 followup. Never pass `content=` next to a V2 view —
-    discord.py sets the v2 flag and Discord rejects the message with a 400."""
-    await _send_view(
-        interaction, layout.reply_view(title, body, layout.accent_for(body))
-    )
-
-
 async def _send_view(interaction: discord.Interaction, view: discord.ui.LayoutView) -> None:
     """Send a view as an ephemeral followup, always asking for the message back.
 
@@ -81,6 +77,46 @@ async def _send_view(interaction: discord.Interaction, view: discord.ui.LayoutVi
     unused — only the ID that reaches `ViewStore` matters.
     """
     await interaction.followup.send(view=view, ephemeral=True, wait=True)
+
+
+# Message ids whose menu click is between the loading edit and the result edit.
+# The interaction guard (a later task) reads this; this task only tracks it.
+_menu_inflight: set[int] = set()
+
+
+def _menu_card_view(card: replies.MenuCard, *, disabled: bool) -> discord.ui.LayoutView:
+    # Fresh row every time: card_view sets child.disabled in place.
+    return layout.card_view(
+        title=card.title,
+        caption=card.caption,
+        body=card.body,
+        accent=layout.accent_for(card.accent_body) if card.accent_body else layout.Accent.BRAND,
+        row=_MemberRow(),
+        buttons_disabled=disabled,
+    )
+
+
+async def _run_menu(interaction, title: str, work) -> None:
+    message_id = getattr(getattr(interaction, "message", None), "id", None)
+    await interaction.response.edit_message(
+        view=_menu_card_view(replies.menu_loading(title), disabled=True)
+    )
+    if message_id is not None:
+        _menu_inflight.add(message_id)
+    try:
+        card = await work()
+        await interaction.edit_original_response(view=_menu_card_view(card, disabled=False))
+    except Exception:
+        logger.exception("menu action failed")
+        try:
+            await interaction.edit_original_response(
+                view=_menu_card_view(replies.menu_failed(title), disabled=False)
+            )
+        except Exception:
+            logger.exception("menu failure edit failed")
+    finally:
+        if message_id is not None:
+            _menu_inflight.discard(message_id)
 
 
 class _PanelRow(ActionRow):
@@ -161,8 +197,12 @@ class _NewUserRow(ActionRow):
         # message transformed, not a second one sent.
         await interaction.response.edit_message(
             view=MemberView(
-                title=REGISTERED_TITLE,
-                body=replies.panel_register_confirmation(),
+                card=replies.MenuCard(
+                    title=REGISTERED_TITLE,
+                    caption=None,
+                    body=replies.panel_register_confirmation(),
+                    accent_body="",
+                )
             )
         )
 
@@ -176,17 +216,22 @@ class _MemberRow(ActionRow):
         style=discord.ButtonStyle.primary,
     )
     async def code(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        # `thinking=True`: component interactions ignore `ephemeral` on a bare
-        # defer and get no loading indicator (see `_PanelRow.start`).
-        await interaction.response.defer(ephemeral=True, thinking=True)
         discord_id = str(interaction.user.id)
         username = interaction.user.name
 
-        async with AsyncSessionLocal() as db:
-            body = await commands.issue_login_code(db, get_redis(), discord_id, username)
-        await membership.refresh_user(get_redis(), interaction.client, discord_id)
+        async def work() -> replies.MenuCard:
+            async with AsyncSessionLocal() as db:
+                facts = await commands.issue_login_code_facts(
+                    db, get_redis(), discord_id, username
+                )
+            if facts.unconfigured:
+                return replies.menu_text(
+                    title="Kod logowania", body=replies.LINK_CODES_UNCONFIGURED
+                )
+            await membership.refresh_user(get_redis(), interaction.client, discord_id)
+            return replies.menu_code(code=facts.code, created=facts.created)
 
-        await _send_reply(interaction, "Kod logowania", body)
+        await _run_menu(interaction, "Kod logowania", work)
 
     @discord.ui.button(
         label="📊 Statystyki",
@@ -194,15 +239,21 @@ class _MemberRow(ActionRow):
         style=discord.ButtonStyle.secondary,
     )
     async def stats(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        # `thinking=True`: component interactions ignore `ephemeral` on a bare
-        # defer and get no loading indicator (see `_PanelRow.start`).
-        await interaction.response.defer(ephemeral=True, thinking=True)
         discord_id = str(interaction.user.id)
 
-        async with AsyncSessionLocal() as db:
-            body = await commands.stats_command(db, discord_id)
+        async def work() -> replies.MenuCard:
+            async with AsyncSessionLocal() as db:
+                facts = await commands.stats_facts(db, discord_id)
+            if facts.raw_failure:
+                return replies.menu_text(title="Statystyki", body=facts.raw_failure)
+            return replies.menu_stats(
+                total_seconds=facts.total_seconds,
+                per_game=facts.per_game,
+                pending_errors_count=facts.pending_errors_count,
+                review_count=facts.review_count,
+            )
 
-        await _send_reply(interaction, "Statystyki", body)
+        await _run_menu(interaction, "Statystyki", work)
 
     @discord.ui.button(
         label="🕒 Ostatnie",
@@ -210,15 +261,16 @@ class _MemberRow(ActionRow):
         style=discord.ButtonStyle.secondary,
     )
     async def recent(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        # `thinking=True`: component interactions ignore `ephemeral` on a bare
-        # defer and get no loading indicator (see `_PanelRow.start`).
-        await interaction.response.defer(ephemeral=True, thinking=True)
         discord_id = str(interaction.user.id)
 
-        async with AsyncSessionLocal() as db:
-            body = await commands.recent_command(db, discord_id)
+        async def work() -> replies.MenuCard:
+            async with AsyncSessionLocal() as db:
+                facts = await commands.recent_facts(db, discord_id)
+            if facts.raw_failure:
+                return replies.menu_text(title="Ostatnie sesje", body=facts.raw_failure)
+            return replies.menu_recent(sessions=facts.sessions, user_timezone=facts.user_timezone)
 
-        await _send_reply(interaction, "Ostatnie sesje", body)
+        await _run_menu(interaction, "Ostatnie sesje", work)
 
     @discord.ui.button(
         label="🚪 Wyloguj",
@@ -226,15 +278,16 @@ class _MemberRow(ActionRow):
         style=discord.ButtonStyle.danger,
     )
     async def logout(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        # `thinking=True`: component interactions ignore `ephemeral` on a bare
-        # defer and get no loading indicator (see `_PanelRow.start`).
-        await interaction.response.defer(ephemeral=True, thinking=True)
         discord_id = str(interaction.user.id)
 
-        async with AsyncSessionLocal() as db:
-            body = await commands.logout_user(db, get_redis(), discord_id)
+        async def work() -> replies.MenuCard:
+            async with AsyncSessionLocal() as db:
+                facts = await commands.logout_user_facts(db, get_redis(), discord_id)
+            if facts.unregistered:
+                return replies.menu_logout_unregistered()
+            return replies.menu_logout(count=facts.count)
 
-        await _send_reply(interaction, "Wylogowano", body)
+        await _run_menu(interaction, "Wylogowano", work)
 
 
 class PanelView(LayoutView):
@@ -260,20 +313,30 @@ class NewUserView(LayoutView):
 class MemberView(LayoutView):
     """Ephemeral menu for a registered user.
 
-    `title`/`body` vary by entry point (fresh registration vs. reopening the
-    menu) — never by user — so the zero-arg default still registers cleanly
-    as a persistent view.
+    `card` varies by entry point (fresh registration vs. reopening the menu)
+    — never by user — so the zero-arg default still registers cleanly as a
+    persistent view. Built from a `card_view` container moved onto this
+    subclass; `card_view` itself returns a plain `LayoutView`.
     """
 
-    def __init__(self, *, title: str | None = None, body: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        card: replies.MenuCard | None = None,
+        buttons_disabled: bool = False,
+    ) -> None:
         super().__init__(timeout=None)
-        self.add_item(
-            _panel_container(
-                title or BRAND_TITLE,
-                body if body is not None else replies.panel_member_menu(),
-                _MemberRow(),
+        if card is None:
+            card = replies.MenuCard(
+                title=BRAND_TITLE,
+                caption="Konto połączone",
+                body=replies.panel_member_menu(),
+                accent_body="",
             )
-        )
+        rendered = _menu_card_view(card, disabled=buttons_disabled)
+        container = rendered.children[0]
+        rendered.remove_item(container)
+        self.add_item(container)
 
 
 # Registered on startup by `on_ready` in `app/bot/main.py`:

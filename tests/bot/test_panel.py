@@ -11,18 +11,35 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.bot import panel, replies
+from app.bot import commands, panel, replies
+
+
+class _TextList(list):
+    """Membership is a substring check.
+
+    `card_view` puts `### title` and `-# caption` in one TextDisplay, while
+    these tests assert the title line and the caption words on their own.
+    """
+
+    def __contains__(self, item: object) -> bool:
+        return any(
+            item == content or (isinstance(item, str) and isinstance(content, str) and item in content)
+            for content in self
+        )
 
 
 def _interaction(*, user_id: int = 4242, username: str = "zyraf"):
     return SimpleNamespace(
         user=SimpleNamespace(id=user_id, name=username),
+        message=SimpleNamespace(id=77),
         response=SimpleNamespace(
             defer=AsyncMock(),
             send_message=AsyncMock(),
             edit_message=AsyncMock(),
+            is_done=MagicMock(return_value=False),
         ),
         followup=SimpleNamespace(send=AsyncMock()),
+        edit_original_response=AsyncMock(),
         client=SimpleNamespace(guilds=[]),
     )
 
@@ -42,11 +59,11 @@ def _callback(view, custom_id):
 
 
 def _texts(view) -> list[str]:
-    return [
+    return _TextList(
         item.content
         for item in view.walk_children()
         if hasattr(item, "content") and isinstance(item.content, str)
-    ]
+    )
 
 
 def _sent_view(mock) -> object:
@@ -123,6 +140,7 @@ def test_member_menu_greets_a_connected_user_instead_of_repeating_the_help_text(
     account, which is what the info screens say."""
     texts = _texts(panel.MemberView())
     assert replies.panel_member_menu() in texts
+    assert "Konto połączone" in texts
     assert replies.panel_info_pl() not in texts
     assert replies.panel_info_en() not in texts
 
@@ -206,37 +224,74 @@ async def test_accept_does_not_defer_because_edit_message_is_the_response():
 @pytest.mark.parametrize(
     "custom_id,handler,title",
     [
-        ("gt:menu:code", "issue_login_code", "Kod logowania"),
-        ("gt:menu:stats", "stats_command", "Statystyki"),
-        ("gt:menu:recent", "recent_command", "Ostatnie sesje"),
-        ("gt:menu:logout", "logout_user", "Wylogowano"),
+        ("gt:menu:code", "issue_login_code_facts", "Kod logowania"),
+        ("gt:menu:stats", "stats_facts", "Statystyki"),
+        ("gt:menu:recent", "recent_facts", "Ostatnie sesje"),
+        ("gt:menu:logout", "logout_user_facts", "Wylogowano"),
     ],
 )
-async def test_menu_button_defers_then_delegates_and_renders_the_reply(
-    custom_id, handler, title
-):
+async def test_menu_button_edits_loading_then_the_result(custom_id, handler, title):
     interaction = _interaction()
     db = AsyncMock()
-    deferred_before_handler = {}
+    edited_before_handler = {}
 
     async def fake_handler(*args, **kwargs):
-        deferred_before_handler["value"] = interaction.response.defer.await_count
-        return "odpowiedź"
+        edited_before_handler["value"] = interaction.response.edit_message.await_count
+        if handler == "issue_login_code_facts":
+            return commands.LoginCodeFacts(unconfigured=False, created=False, code="482 913")
+        if handler == "logout_user_facts":
+            return commands.LogoutFacts(unregistered=False, count=2)
+        if handler == "stats_facts":
+            return commands.StatsFacts(
+                slash_body="ok",
+                total_seconds=3600,
+                per_game=[{"game_name": "Hades II", "total_seconds": 3600}],
+            )
+        return commands.RecentFacts(slash_body="ok", sessions=[], user_timezone="UTC")
 
     with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
          patch.object(panel, "get_redis", return_value="redis"), \
-         patch.object(panel.commands, handler, new=AsyncMock(side_effect=fake_handler)) as func:
+         patch.object(panel.commands, handler, new=AsyncMock(side_effect=fake_handler)):
         await _callback(panel.MemberView(), custom_id)(interaction)
 
-    func.assert_awaited_once()
-    assert db in func.await_args.args
-    assert "4242" in func.await_args.args
-    assert deferred_before_handler["value"] == 1, "handler ran before defer()"
+    assert edited_before_handler["value"] == 1
+    loading = _sent_view(interaction.response.edit_message)
+    assert "Pobieram…" in _texts(loading)
+    assert f"### {title}" in _texts(loading)
+    interaction.followup.send.assert_not_awaited()
+    interaction.response.defer.assert_not_awaited()
+    result = interaction.edit_original_response.await_args.kwargs["view"]
+    assert f"### {title}" in _texts(result)
+    assert "Pobieram…" not in _texts(result)
 
-    view = _sent_view(interaction.followup.send)
-    assert f"### {title}" in _texts(view)
-    assert "odpowiedź" in _texts(view)
-    assert interaction.followup.send.await_args.kwargs["ephemeral"] is True
+
+async def test_menu_failure_reenables_after_the_handler_raises():
+    interaction = _interaction()
+    db = AsyncMock()
+    with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
+         patch.object(panel, "get_redis", return_value="redis"), \
+         patch.object(panel.commands, "stats_facts", new=AsyncMock(side_effect=RuntimeError("db"))):
+        await _callback(panel.MemberView(), "gt:menu:stats")(interaction)
+
+    failure = interaction.edit_original_response.await_args.kwargs["view"]
+    assert replies.MENU_ACTION_FAILED in _texts(failure)
+    buttons = [item for item in failure.walk_children() if getattr(item, "custom_id", None) == "gt:menu:stats"]
+    assert buttons[0].disabled is False
+
+
+async def test_menu_result_does_not_use_followup_send():
+    interaction = _interaction()
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=object())
+    with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
+         patch.object(panel, "get_redis", return_value="redis"), \
+         patch.object(panel.commands, "issue_login_code_facts", new=AsyncMock(
+             return_value=commands.LoginCodeFacts(False, False, "111 222")
+         )):
+        await _callback(panel.MemberView(), "gt:menu:code")(interaction)
+    interaction.followup.send.assert_not_awaited()
+    assert panel.PanelView().timeout is None
+    assert _callback(panel.PanelView(), "gt:panel:start")
 
 
 async def test_code_button_passes_the_redis_handle_and_username():
@@ -245,7 +300,9 @@ async def test_code_button_passes_the_redis_handle_and_username():
 
     with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
          patch.object(panel, "get_redis", return_value="redis-handle"), \
-         patch.object(panel.commands, "issue_login_code", new=AsyncMock(return_value="kod")) as func:
+         patch.object(panel.commands, "issue_login_code_facts", new=AsyncMock(
+             return_value=commands.LoginCodeFacts(False, False, "111 222")
+         )) as func:
         await _callback(panel.MemberView(), "gt:menu:code")(interaction)
 
     func.assert_awaited_once_with(db, "redis-handle", "9", "bob")
@@ -256,10 +313,6 @@ async def test_code_button_passes_the_redis_handle_and_username():
 
 _VIEW_CARRYING_FOLLOWUP_BUTTONS = [
     ("gt:panel:start", "PanelView"),
-    ("gt:menu:code", "MemberView"),
-    ("gt:menu:stats", "MemberView"),
-    ("gt:menu:recent", "MemberView"),
-    ("gt:menu:logout", "MemberView"),
 ]
 
 
@@ -280,12 +333,7 @@ async def test_ephemeral_followups_carrying_a_view_ask_for_the_message_back(
     db = AsyncMock()
     db.get = AsyncMock(return_value=None)
 
-    with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
-         patch.object(panel, "get_redis", return_value="redis"), \
-         patch.object(panel.commands, "issue_login_code", new=AsyncMock(return_value="x")), \
-         patch.object(panel.commands, "stats_command", new=AsyncMock(return_value="x")), \
-         patch.object(panel.commands, "recent_command", new=AsyncMock(return_value="x")), \
-         patch.object(panel.commands, "logout_user", new=AsyncMock(return_value="x")):
+    with patch.object(panel, "AsyncSessionLocal", _session_factory(db)):
         await _callback(getattr(panel, view_name)(), custom_id)(interaction)
 
     kwargs = interaction.followup.send.await_args.kwargs
@@ -297,10 +345,6 @@ async def test_ephemeral_followups_carrying_a_view_ask_for_the_message_back(
     "custom_id,view_name",
     [
         ("gt:panel:start", "PanelView"),
-        ("gt:menu:code", "MemberView"),
-        ("gt:menu:stats", "MemberView"),
-        ("gt:menu:recent", "MemberView"),
-        ("gt:menu:logout", "MemberView"),
     ],
 )
 async def test_button_defers_are_thinking_defers(custom_id, view_name):
@@ -314,12 +358,7 @@ async def test_button_defers_are_thinking_defers(custom_id, view_name):
     db = AsyncMock()
     db.get = AsyncMock(return_value=None)
 
-    with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
-         patch.object(panel, "get_redis", return_value="redis"), \
-         patch.object(panel.commands, "issue_login_code", new=AsyncMock(return_value="x")), \
-         patch.object(panel.commands, "stats_command", new=AsyncMock(return_value="x")), \
-         patch.object(panel.commands, "recent_command", new=AsyncMock(return_value="x")), \
-         patch.object(panel.commands, "logout_user", new=AsyncMock(return_value="x")):
+    with patch.object(panel, "AsyncSessionLocal", _session_factory(db)):
         await _callback(getattr(panel, view_name)(), custom_id)(interaction)
 
     interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
