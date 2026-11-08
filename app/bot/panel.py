@@ -159,22 +159,11 @@ def _info_body(lang: str, card: str, web: bool) -> str:
     return replies.info_commands_en()
 
 
-def _info_callback(lang: str, card: str):
-    async def callback(interaction: discord.Interaction) -> None:
-        await _edit_info(interaction, lang, card)
+class _InfoButton(discord.ui.Button):
+    """Info-card button. The callback is a method so mypy does not see an assignment onto `Button.callback`."""
 
-    return callback
-
-
-def _info_row(lang: str, card: str, web: bool) -> ActionRow:
-    subjects = [subject for subject in _INFO_SUBJECTS if subject != "app" or web]
-    if card == "what":
-        order = subjects
-    else:
-        order = ["what", *[subject for subject in subjects if subject != card]]
-    row = ActionRow()
-    for subject in order:
-        button = discord.ui.Button(
+    def __init__(self, *, lang: str, subject: str, web: bool) -> None:
+        super().__init__(
             label=_INFO_LABELS[(lang, subject)],
             custom_id=_info_custom_id(lang, subject, web),
             style=(
@@ -183,8 +172,22 @@ def _info_row(lang: str, card: str, web: bool) -> ActionRow:
                 else discord.ButtonStyle.secondary
             ),
         )
-        button.callback = _info_callback(lang, subject)
-        row.add_item(button)
+        self._lang = lang
+        self._subject = subject
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _edit_info(interaction, self._lang, self._subject)
+
+
+def _info_row(lang: str, card: str, web: bool) -> ActionRow:
+    subjects = [subject for subject in _INFO_SUBJECTS if subject != "app" or web]
+    if card == "what":
+        order = subjects
+    else:
+        order = ["what", *[subject for subject in subjects if subject != card]]
+    row: ActionRow = ActionRow()
+    for subject in order:
+        row.add_item(_InfoButton(lang=lang, subject=subject, web=web))
     return row
 
 
