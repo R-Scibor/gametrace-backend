@@ -4,6 +4,7 @@ Kept separate from command handlers (app/bot/commands.py) so tone and
 wording can be reviewed in one place, independent of the API-calling logic
 around them. Every string here ends up as an ephemeral Discord reply.
 """
+from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -609,3 +610,151 @@ PANEL_CHANNEL_UNAVAILABLE = (
 PANEL_REFUSED_NOT_ADMIN = (
     "Ta komenda wymaga uprawnienia **Zarządzaj serwerem** (Manage Server)."
 )
+
+
+# --- Panel menu cards -----------------------------------------------------
+#
+# Ephemeral cards opened from the onboarding panel. Kept separate from the
+# slash replies above: the view paints `accent_body` (red) on its own, so
+# these builders must not be derived by parsing those sentences.
+
+
+@dataclass(frozen=True)
+class MenuCard:
+    title: str
+    caption: str | None
+    body: str
+    accent_body: str
+
+
+def menu_text(title: str, body: str) -> MenuCard:
+    return MenuCard(title=title, caption=None, body=body, accent_body=body)
+
+
+def menu_loading(title: str) -> MenuCard:
+    return MenuCard(title=title, caption="Chwila", body="Pobieram…", accent_body="")
+
+
+def menu_failed(title: str) -> MenuCard:
+    return MenuCard(
+        title=title,
+        caption=None,
+        body=MENU_ACTION_FAILED,
+        accent_body=MENU_ACTION_FAILED,
+    )
+
+
+def menu_code(code: str, created: bool) -> MenuCard:
+    lines = [f"# {code}", "-# Wpisz go w aplikacji."]
+    if settings.gametrace_web_url:
+        lines.append(settings.gametrace_web_url)
+    if created:
+        lines.append("")
+        lines.append("Witaj w GameTrace! Jeszcze nie miałeś konta, więc właśnie je założyłem.")
+        lines.append("")
+        lines.append("**Co dalej**")
+        lines.append("1. Wpisz kod w aplikacji lub na stronie, żeby połączyć konto.")
+        lines.append(
+            "2. Graj jak zwykle na Discordzie — sesje zaczną się zapisywać automatycznie."
+        )
+        if settings.gametrace_web_url:
+            lines.append("")
+            lines.append(
+                f"👉 Aplikacja: {settings.gametrace_web_url}/welcome — kreator "
+                f"przeprowadzi Cię krok po kroku."
+            )
+    return MenuCard(
+        title="Kod logowania",
+        caption="Ważny 5 minut",
+        body="\n".join(lines),
+        accent_body="",
+    )
+
+
+def menu_stats(
+    total_seconds: int,
+    per_game: list[dict],
+    pending_errors_count: int,
+    review_count: int,
+) -> MenuCard:
+    quiet = total_seconds <= 0 or not per_game
+    if quiet:
+        parts = [stats_empty()]
+    else:
+        game_lines = [
+            f"- {entry['game_name']} — {_format_duration(entry['total_seconds'])}"
+            for entry in per_game[:3]
+        ]
+        parts = [
+            f"# {_format_duration(total_seconds)}\n-# Łącznie\n\n**Najwięcej grane**\n"
+            + "\n".join(game_lines)
+        ]
+
+    if pending_errors_count > 0:
+        if quiet:
+            parts.append(
+                f"Poza tym masz {pending_errors_count} sesje wymagające poprawy — "
+                f"popraw je w aplikacji.{_web_hint()}"
+            )
+        else:
+            parts.append(
+                f"Masz {pending_errors_count} sesje wymagające poprawy — "
+                f"popraw je w aplikacji.{_web_hint()}"
+            )
+
+    if review_count > 0:
+        if quiet:
+            parts.append(
+                f"{review_count} gier czeka na potwierdzenie w aplikacji — "
+                f"stąd też się nie liczą.{_web_hint()}"
+            )
+        else:
+            parts.append(
+                f"{review_count} gier czeka na potwierdzenie w aplikacji.{_web_hint()}"
+            )
+
+    return MenuCard(
+        title="Statystyki",
+        caption="Ostatnie 7 dni",
+        body="\n\n".join(parts),
+        accent_body="",
+    )
+
+
+def menu_recent(sessions: list[dict], user_timezone: str | None) -> MenuCard:
+    visible = [entry for entry in sessions if entry.get("status") != "ONGOING"]
+    if not visible:
+        body = recent_empty()
+    else:
+        tz = _resolve_tz(user_timezone)
+        lines = [_format_session_line(entry, tz) for entry in visible[:5]]
+        lines.append("")
+        lines.append(f"Zobacz więcej w aplikacji.{_web_hint()}")
+        body = "\n".join(lines)
+    return MenuCard(
+        title="Ostatnie sesje",
+        caption="Pięć ostatnich",
+        body=body,
+        accent_body="",
+    )
+
+
+def menu_logout(count: int) -> MenuCard:
+    return MenuCard(
+        title="Wylogowano",
+        caption="Aplikacja odłączona",
+        body=(
+            "Tokeny logowania w aplikacji zostały unieważnione.\n"
+            f"-# {count} tokenów"
+        ),
+        accent_body="",
+    )
+
+
+def menu_logout_unregistered() -> MenuCard:
+    return MenuCard(
+        title="Wylogowano",
+        caption=None,
+        body="Nie jesteś zarejestrowany.",
+        accent_body="",
+    )
