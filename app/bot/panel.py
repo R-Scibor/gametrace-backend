@@ -18,7 +18,8 @@ Two rules hold this module together:
 * **Views are stateless.** A persistent view is instantiated once at startup
   and shared by every clicker, so per-user data is only ever read from
   `interaction`. `MemberView`'s optional card is page copy, not user state,
-  and every class still constructs with no arguments.
+  and every persistent class still constructs with no arguments. Info cards
+  are not persistent: each message gets a fresh `InfoCardView`.
 
 All copy comes from `app/bot/replies.py`; only button labels live here.
 """
@@ -82,6 +83,138 @@ async def _send_view(interaction: discord.Interaction, view: discord.ui.LayoutVi
 # Message ids whose menu click is between the loading edit and the result edit.
 # The interaction guard (a later task) reads this; this task only tracks it.
 _menu_inflight: set[int] = set()
+
+# Ephemeral info message id -> the view last put on it. The next card stops
+# that instance before `edit_message` stores the replacement. Not the
+# persistent `message_id=None` bucket: a missing id means `stop()` and drop it.
+_info_views: dict[int, discord.ui.LayoutView] = {}
+
+_INFO_TIMEOUT = 15 * 60
+
+_INFO_LABELS: dict[tuple[str, str], str] = {
+    ("pl", "what"): "Co to jest?",
+    ("pl", "start"): "Jak zacząć",
+    ("pl", "app"): "Aplikacja",
+    ("pl", "commands"): "Komendy",
+    ("en", "what"): "What is it?",
+    ("en", "start"): "Get started",
+    ("en", "app"): "App",
+    ("en", "commands"): "Commands",
+}
+_INFO_SUBJECTS = ("start", "app", "commands")
+
+
+def _sent_message_id(sent: object) -> int | None:
+    """discord.py 2.7 `send_message` returns `InteractionCallbackResponse`.
+
+    The ephemeral id is `message_id` (may be missing). Do not treat any other
+    attribute as an id.
+    """
+    message_id = getattr(sent, "message_id", None)
+    if isinstance(message_id, int):
+        return message_id
+    return None
+
+
+def _remember_info_view(message_id: int | None, view: discord.ui.LayoutView) -> None:
+    if not isinstance(message_id, int):
+        view.stop()
+        return
+    _info_views[message_id] = view
+
+
+def _info_web_set() -> bool:
+    return bool(replies.settings.gametrace_web_url)
+
+
+def _info_custom_id(lang: str, card: str, web: bool) -> str:
+    suffix = "" if web else ":noweb"
+    return f"gt:info:{lang}:{card}{suffix}"
+
+
+def _info_body(lang: str, card: str, web: bool) -> str:
+    if lang == "pl":
+        if card == "what":
+            return replies.info_what_pl(web)
+        if card == "start":
+            return replies.info_start_pl(web)
+        if card == "app":
+            return replies.info_apps_pl()
+        return replies.info_commands_pl()
+    if card == "what":
+        return replies.info_what_en(web)
+    if card == "start":
+        return replies.info_start_en(web)
+    if card == "app":
+        return replies.info_apps_en()
+    return replies.info_commands_en()
+
+
+def _info_callback(lang: str, card: str):
+    async def callback(interaction: discord.Interaction) -> None:
+        await _edit_info(interaction, lang, card)
+
+    return callback
+
+
+def _info_row(lang: str, card: str, web: bool) -> ActionRow:
+    subjects = [subject for subject in _INFO_SUBJECTS if subject != "app" or web]
+    if card == "what":
+        order = subjects
+    else:
+        order = ["what", *[subject for subject in subjects if subject != card]]
+    row = ActionRow()
+    for subject in order:
+        button = discord.ui.Button(
+            label=_INFO_LABELS[(lang, subject)],
+            custom_id=_info_custom_id(lang, subject, web),
+            style=(
+                discord.ButtonStyle.primary
+                if subject == "start"
+                else discord.ButtonStyle.secondary
+            ),
+        )
+        button.callback = _info_callback(lang, subject)
+        row.add_item(button)
+    return row
+
+
+class InfoCardView(LayoutView):
+    """One ephemeral info card. Built fresh per message, so language is not
+    state on a shared persistent instance. Not registered in `PERSISTENT_VIEWS`.
+    """
+
+    def __init__(self, lang: str, card: str) -> None:
+        super().__init__(timeout=_INFO_TIMEOUT)
+        web = _info_web_set()
+        rendered = layout.card_view(
+            title=_INFO_LABELS[(lang, card)],
+            body=_info_body(lang, card, web),
+            accent=layout.Accent.BRAND,
+            row=_info_row(lang, card, web),
+        )
+        container = rendered.children[0]
+        rendered.remove_item(container)
+        self.add_item(container)
+
+
+async def _open_info(interaction: discord.Interaction, lang: str) -> None:
+    view = InfoCardView(lang, "what")
+    sent = await interaction.response.send_message(view=view, ephemeral=True)
+    _remember_info_view(_sent_message_id(sent), view)
+
+
+async def _edit_info(interaction: discord.Interaction, lang: str, card: str) -> None:
+    message = getattr(interaction, "message", None)
+    message_id = getattr(message, "id", None)
+    if isinstance(message_id, int):
+        previous = _info_views.pop(message_id, None)
+        if previous is not None:
+            previous.stop()
+    view = InfoCardView(lang, card)
+    await interaction.response.edit_message(view=view)
+    if isinstance(message_id, int):
+        _info_views[message_id] = view
 
 
 def _menu_card_view(card: replies.MenuCard, *, disabled: bool) -> discord.ui.LayoutView:
@@ -148,19 +281,14 @@ class _PanelRow(ActionRow):
         style=discord.ButtonStyle.secondary,
     )
     async def help(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        # No I/O, so no defer. Uses the panel's button-oriented help copy
-        # rather than `commands.help_command()`, whose "type /login" wording
-        # is unusable in the very channel this panel exists for.
+        # No I/O, so no defer. Opens the Polish "Co to jest?" card, not the
+        # whole `panel_info_pl()` wall and not `commands.help_command()`.
         #
         # `gt:panel:help` is kept (not renamed) even though this is now the
         # Polish-only screen: panels already posted to the live server carry
         # a button with this exact custom_id, and renaming it would leave
         # those buttons dispatching nowhere.
-        body = replies.panel_info_pl()
-        await interaction.response.send_message(
-            view=layout.reply_view(BRAND_TITLE, body, layout.accent_for(body)),
-            ephemeral=True,
-        )
+        await _open_info(interaction, "pl")
 
     @discord.ui.button(
         label="🇬🇧 What is it?",
@@ -169,11 +297,7 @@ class _PanelRow(ActionRow):
     )
     async def help_en(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         # English mirror of `help` above — no I/O, so no defer.
-        body = replies.panel_info_en()
-        await interaction.response.send_message(
-            view=layout.reply_view(BRAND_TITLE, body, layout.accent_for(body)),
-            ephemeral=True,
-        )
+        await _open_info(interaction, "en")
 
 
 class _NewUserRow(ActionRow):
@@ -291,13 +415,24 @@ class _MemberRow(ActionRow):
 
 
 class PanelView(LayoutView):
-    """The public, permanent panel message posted by `/panel`."""
+    """The public, permanent panel message posted by `/panel`.
+
+    Uses `card_view` (soft gap, then a hard gap above the buttons) rather
+    than `_panel_container`. The container is moved onto this subclass so
+    `bot.add_view(PanelView())` still gets a `LayoutView` with `timeout=None`.
+    """
 
     def __init__(self) -> None:
         super().__init__(timeout=None)
-        self.add_item(
-            _panel_container(replies.PANEL_TITLE, replies.panel_body(), _PanelRow())
+        rendered = layout.card_view(
+            title=replies.PANEL_TITLE,
+            body=replies.panel_body(),
+            accent=layout.Accent.BRAND,
+            row=_PanelRow(),
         )
+        container = rendered.children[0]
+        rendered.remove_item(container)
+        self.add_item(container)
 
 
 class NewUserView(LayoutView):

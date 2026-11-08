@@ -436,47 +436,52 @@ def panel_member_menu() -> str:
     return "Cześć. Co chcesz zrobić?"
 
 
-def panel_info_pl() -> str:
-    """Full Polish info screen, opened ephemerally from the **🇵🇱 Co to
-    jest?** button. Gets its own 4000-char Components V2 budget, so unlike
-    `panel_body()` this can afford the full walkthrough.
+# The two "Ważne" / "Important" sentences are split so each info card can
+# show one of them. `panel_info_pl()` / `panel_info_en()` join them back
+# under the same heading; do not rewrite either sentence.
+_PL_SERVER_CHANNELS = "Komendy slash działają tylko na kanałach serwera, nie na priv. (DM)."
+_PL_EXPIRED_CODE = (
+    "Jeśli kod wygasł, kliknij **🔑 Weź kod** ponownie i użyj nowego w ciągu 5 minut."
+)
+_EN_SERVER_CHANNELS = "Slash commands only work on server channels, not in DMs."
+_EN_EXPIRED_CODE = (
+    "If the code expired, click **🔑 Weź kod** again and use the new one within 5 minutes."
+)
 
-    Step 3 of "Jak zacząć" is the buttons (**▶ START**, **🔑 Weź kod**) —
-    never "type /login" — because this screen is reachable from the exact
-    channel where typing a slash command is impossible. The "Komendy"
-    section still *lists* `/login` / `/register` / `/logout` as reference:
-    those work fine in DMs and unlocked channels, framed explicitly as such.
-    """
-    web = settings.gametrace_web_url
+_PL_WHAT = (
+    "GameTrace to tracker czasu spędzonego w grach. Bot Discorda widzi "
+    "Twoją aktywność (Activity / „W grze…”) i automatycznie zapisuje "
+    "sesje rozgrywki. Potem przeglądasz je na stronie lub w natywnej "
+    "aplikacji na Androida: biblioteka gier, szczegółowe statystyki, "
+    "mapa aktywności oraz ręczne i głosowe dodawanie sesji."
+)
+_EN_WHAT = (
+    "GameTrace is a playtime tracker. The Discord bot sees your "
+    "activity (Activity / “Playing…”) and automatically logs your "
+    "gaming sessions. You then review them on the website or in the "
+    "native Android app: game library, detailed stats, an activity "
+    "heatmap, and manual and voice session logging."
+)
 
-    what_is_it = (
-        "**Co to jest?**\n"
-        "GameTrace to tracker czasu spędzonego w grach. Bot Discorda widzi "
-        "Twoją aktywność (Activity / „W grze…”) i automatycznie zapisuje "
-        "sesje rozgrywki. Potem przeglądasz je na stronie lub w natywnej "
-        "aplikacji na Androida: biblioteka gier, szczegółowe statystyki, "
-        "mapa aktywności oraz ręczne i głosowe dodawanie sesji."
-    )
+_PL_COMMANDS = (
+    "Na tym kanale pisanie jest wyłączone, więc korzystasz z przycisków "
+    "powyżej. Na kanałach serwera, gdzie możesz pisać, działają też:\n"
+    "`/login` — kod logowania (ważny 5 min)\n"
+    "`/register` — utworzenie konta\n"
+    "`/logout` — unieważnia sesje w aplikacji"
+)
+_EN_COMMANDS = (
+    "Writing is disabled on this channel, so use the buttons above. "
+    "On server channels where you can type, these also work:\n"
+    "`/login` — login code (valid 5 min)\n"
+    "`/register` — create an account\n"
+    "`/logout` — invalidates your app sessions"
+)
 
-    commands_section = (
-        "**Komendy**\n"
-        "Na tym kanale pisanie jest wyłączone, więc korzystasz z przycisków "
-        "powyżej. Na kanałach serwera, gdzie możesz pisać, działają też:\n"
-        "`/login` — kod logowania (ważny 5 min)\n"
-        "`/register` — utworzenie konta\n"
-        "`/logout` — unieważnia sesje w aplikacji"
-    )
 
-    important_section = (
-        "**Ważne**\n"
-        "Komendy slash działają tylko na kanałach serwera, nie na priv. "
-        "(DM). Jeśli kod wygasł, kliknij **🔑 Weź kod** ponownie i użyj "
-        "nowego w ciągu 5 minut."
-    )
-
+def _pl_steps(web: str) -> str:
     if not web:
-        how_to_start = (
-            "**Jak zacząć**\n"
+        return (
             "1. Musisz być na tym serwerze — bot śledzi tylko członków "
             "serwera, na którym działa.\n"
             "2. Włącz w Discordzie wyświetlanie statusu aktywności gry "
@@ -487,12 +492,7 @@ def panel_info_pl() -> str:
             "4. Wpisz ten kod w aplikacji.\n"
             "5. Graj jak zwykle — sesje pojawią się automatycznie."
         )
-        return f"{what_is_it}\n\n{how_to_start}\n\n{commands_section}\n\n{important_section}"
-
-    start_here = f"👉 Zacznij tutaj: {web}/welcome — kreator przeprowadzi Cię krok po kroku."
-
-    how_to_start = (
-        "**Jak zacząć**\n"
+    return (
         "1. Musisz być na tym serwerze — bot śledzi tylko członków "
         "serwera, na którym działa.\n"
         "2. Włącz w Discordzie wyświetlanie statusu aktywności gry "
@@ -506,56 +506,10 @@ def panel_info_pl() -> str:
         "i mobilnej."
     )
 
-    apps_section = (
-        "**Aplikacje**\n"
-        f"Web: {web} · Android (APK): {web}/download · Onboarding od "
-        f"zera: {web}/welcome.\n"
-        "Jedno konto Discord — te same sesje w przeglądarce i w aplikacji."
-    )
 
-    return (
-        f"{what_is_it}\n\n{start_here}\n\n{how_to_start}\n\n{apps_section}"
-        f"\n\n{commands_section}\n\n{important_section}"
-    )
-
-
-def panel_info_en() -> str:
-    """English mirror of `panel_info_pl()`, opened from the **🇬🇧 What is
-    it?** button. Button labels stay in their exact on-screen form
-    (**▶ START**, **🔑 Weź kod**) — `🔑 Weź kod` is still Polish on the
-    button itself, so an English reader needs the literal text to find it,
-    not a translated paraphrase.
-    """
-    web = settings.gametrace_web_url
-
-    what_is_it = (
-        "**What is it?**\n"
-        "GameTrace is a playtime tracker. The Discord bot sees your "
-        "activity (Activity / “Playing…”) and automatically logs your "
-        "gaming sessions. You then review them on the website or in the "
-        "native Android app: game library, detailed stats, an activity "
-        "heatmap, and manual and voice session logging."
-    )
-
-    commands_section = (
-        "**Commands**\n"
-        "Writing is disabled on this channel, so use the buttons above. "
-        "On server channels where you can type, these also work:\n"
-        "`/login` — login code (valid 5 min)\n"
-        "`/register` — create an account\n"
-        "`/logout` — invalidates your app sessions"
-    )
-
-    important_section = (
-        "**Important**\n"
-        "Slash commands only work on server channels, not in DMs. If the "
-        "code expired, click **🔑 Weź kod** again and use the new one "
-        "within 5 minutes."
-    )
-
+def _en_steps(web: str) -> str:
     if not web:
-        how_to_start = (
-            "**How to get started**\n"
+        return (
             "1. You need to be a member of this server — the bot only "
             "tracks members of the server it runs on.\n"
             "2. Turn on Activity Status sharing in Discord.\n"
@@ -565,12 +519,7 @@ def panel_info_en() -> str:
             "4. Enter that code in the app.\n"
             "5. Play as usual — sessions will show up automatically."
         )
-        return f"{what_is_it}\n\n{how_to_start}\n\n{commands_section}\n\n{important_section}"
-
-    start_here = f"👉 Start here: {web}/welcome — the wizard walks you through it step by step."
-
-    how_to_start = (
-        "**How to get started**\n"
+    return (
         "1. You need to be a member of this server — the bot only tracks "
         "members of the server it runs on.\n"
         "2. Turn on Activity Status sharing in Discord.\n"
@@ -583,18 +532,111 @@ def panel_info_en() -> str:
         "and mobile."
     )
 
-    apps_section = (
-        "**Apps**\n"
+
+def info_what_pl(web_url_set: bool) -> str:
+    """Tracker paragraph, plus the wizard line when a web URL is set."""
+    if not web_url_set:
+        return _PL_WHAT
+    web = settings.gametrace_web_url
+    wizard = f"👉 Zacznij tutaj: {web}/welcome — kreator przeprowadzi Cię krok po kroku."
+    return f"{_PL_WHAT}\n\n{wizard}"
+
+
+def info_start_pl(web_url_set: bool) -> str:
+    """Numbered steps, plus the expired-code sentence."""
+    web = settings.gametrace_web_url if web_url_set else ""
+    return f"{_pl_steps(web)}\n\n{_PL_EXPIRED_CODE}"
+
+
+def info_apps_pl() -> str:
+    """Web / Android lines. Only shown when a web URL is configured."""
+    web = settings.gametrace_web_url
+    return (
+        f"Web: {web} · Android (APK): {web}/download · Onboarding od "
+        f"zera: {web}/welcome.\n"
+        "Jedno konto Discord — te same sesje w przeglądarce i w aplikacji."
+    )
+
+
+def info_commands_pl() -> str:
+    """Command list, the no-typing note, and the server-channel sentence."""
+    return f"{_PL_COMMANDS}\n\n{_PL_SERVER_CHANNELS}"
+
+
+def info_what_en(web_url_set: bool) -> str:
+    """English mirror of `info_what_pl`."""
+    if not web_url_set:
+        return _EN_WHAT
+    web = settings.gametrace_web_url
+    wizard = f"👉 Start here: {web}/welcome — the wizard walks you through it step by step."
+    return f"{_EN_WHAT}\n\n{wizard}"
+
+
+def info_start_en(web_url_set: bool) -> str:
+    """English mirror of `info_start_pl`."""
+    web = settings.gametrace_web_url if web_url_set else ""
+    return f"{_en_steps(web)}\n\n{_EN_EXPIRED_CODE}"
+
+
+def info_apps_en() -> str:
+    """English mirror of `info_apps_pl`."""
+    web = settings.gametrace_web_url
+    return (
         f"Web: {web} · Android (APK): {web}/download · Onboarding from "
         f"scratch: {web}/welcome.\n"
         "One Discord account — the same sessions in your browser and in "
         "the app."
     )
 
-    return (
-        f"{what_is_it}\n\n{start_here}\n\n{how_to_start}\n\n{apps_section}"
-        f"\n\n{commands_section}\n\n{important_section}"
-    )
+
+def info_commands_en() -> str:
+    """English mirror of `info_commands_pl`."""
+    return f"{_EN_COMMANDS}\n\n{_EN_SERVER_CHANNELS}"
+
+
+def panel_info_pl() -> str:
+    """Full Polish info screen, opened ephemerally from the **🇵🇱 Co to
+    jest?** button. Gets its own 4000-char Components V2 budget, so unlike
+    `panel_body()` this can afford the full walkthrough.
+
+    Step 3 of "Jak zacząć" is the buttons (**▶ START**, **🔑 Weź kod**) —
+    never "type /login" — because this screen is reachable from the exact
+    channel where typing a slash command is impossible. The "Komendy"
+    section still *lists* `/login` / `/register` / `/logout` as reference:
+    those work fine in DMs and unlocked channels, framed explicitly as such.
+
+    Panel buttons show one section at a time via `info_*_pl`. This function
+    still joins every section, including both "Ważne" sentences.
+    """
+    web = settings.gametrace_web_url
+    what = f"**Co to jest?**\n{_PL_WHAT}"
+    how = f"**Jak zacząć**\n{_pl_steps(web)}"
+    commands_section = f"**Komendy**\n{_PL_COMMANDS}"
+    important = f"**Ważne**\n{_PL_SERVER_CHANNELS} {_PL_EXPIRED_CODE}"
+    if not web:
+        return f"{what}\n\n{how}\n\n{commands_section}\n\n{important}"
+    wizard = f"👉 Zacznij tutaj: {web}/welcome — kreator przeprowadzi Cię krok po kroku."
+    apps = f"**Aplikacje**\n{info_apps_pl()}"
+    return f"{what}\n\n{wizard}\n\n{how}\n\n{apps}\n\n{commands_section}\n\n{important}"
+
+
+def panel_info_en() -> str:
+    """English mirror of `panel_info_pl()`, opened from the **🇬🇧 What is
+    it?** button. Button labels stay in their exact on-screen form
+    (**▶ START**, **🔑 Weź kod**) — `🔑 Weź kod` is still Polish on the
+    button itself, so an English reader needs the literal text to find it,
+    not a translated paraphrase.
+    """
+    web = settings.gametrace_web_url
+    what = f"**What is it?**\n{_EN_WHAT}"
+    how = f"**How to get started**\n{_en_steps(web)}"
+    commands_section = f"**Commands**\n{_EN_COMMANDS}"
+    important = f"**Important**\n{_EN_SERVER_CHANNELS} {_EN_EXPIRED_CODE}"
+    if not web:
+        return f"{what}\n\n{how}\n\n{commands_section}\n\n{important}"
+    wizard = f"👉 Start here: {web}/welcome — the wizard walks you through it step by step."
+    apps = f"**Apps**\n{info_apps_en()}"
+    return f"{what}\n\n{wizard}\n\n{how}\n\n{apps}\n\n{commands_section}\n\n{important}"
 
 
 # --- /panel command (admin-only, posts the panel above) -------------------

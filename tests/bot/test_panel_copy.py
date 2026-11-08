@@ -124,6 +124,25 @@ def test_panel_info_pl_points_at_buttons():
     assert "🔑 Weź kod" in text
 
 
+def test_panel_info_pl_keeps_both_important_sentences():
+    """The card split must not drop either sentence from the full reply."""
+    text = replies.panel_info_pl()
+    assert (
+        "**Ważne**\n"
+        "Komendy slash działają tylko na kanałach serwera, nie na priv. (DM). "
+        "Jeśli kod wygasł, kliknij **🔑 Weź kod** ponownie i użyj nowego w ciągu 5 minut."
+    ) in text
+
+
+def test_panel_info_en_keeps_both_important_sentences():
+    text = replies.panel_info_en()
+    assert (
+        "**Important**\n"
+        "Slash commands only work on server channels, not in DMs. "
+        "If the code expired, click **🔑 Weź kod** again and use the new one within 5 minutes."
+    ) in text
+
+
 def test_panel_info_en_points_at_buttons_using_literal_polish_labels():
     """The buttons themselves are labelled in Polish, so the English screen
     must refer to them by their exact on-screen text, not a translation."""

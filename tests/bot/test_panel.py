@@ -9,7 +9,10 @@ silently in production — duplicated `custom_id`s across persistent views
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import discord
 import pytest
+from discord.enums import SeparatorSpacing
+from discord.ui import Separator
 
 from app.bot import commands, panel, replies
 
@@ -128,11 +131,37 @@ def test_views_construct_with_no_arguments_and_never_time_out(view_cls):
 # --- rendered copy ---------------------------------------------------------
 
 
+def _custom_ids(view) -> set[str]:
+    return {item.custom_id for item in view.walk_children() if getattr(item, "custom_id", None)}
+
+
+def _buttons(view) -> list:
+    return [item for item in view.walk_children() if getattr(item, "custom_id", None)]
+
+
 def test_panel_view_renders_the_panel_title_and_body():
     """The public panel message — the one screen every visitor sees."""
-    texts = _texts(panel.PanelView())
+    view = panel.PanelView()
+    texts = _texts(view)
     assert f"### {replies.PANEL_TITLE}" in texts
     assert replies.panel_body() in texts
+    gaps = [child for child in view.walk_children() if isinstance(child, Separator)]
+    assert len(gaps) == 2
+    assert gaps[0].visible is False
+    assert gaps[0].spacing == SeparatorSpacing.small
+    assert gaps[1].visible is True
+    assert gaps[1].spacing == SeparatorSpacing.large
+    assert view.timeout is None
+    assert isinstance(view, discord.ui.LayoutView)
+
+
+def test_new_user_view_stays_on_the_reply_container():
+    """Disclosure stays on `_panel_container` / `reply_view`, not the card gaps."""
+    view = panel.NewUserView()
+    gaps = [child for child in view.walk_children() if isinstance(child, Separator)]
+    assert len(gaps) == 1
+    assert gaps[0].visible is True
+    assert gaps[0].spacing == SeparatorSpacing.small
 
 
 def test_member_menu_greets_a_connected_user_instead_of_repeating_the_help_text():
@@ -415,7 +444,7 @@ async def test_help_button_renders_the_polish_info_screen_without_deferring_or_i
     """`gt:panel:help` is deliberately kept for the Polish screen — panels
     already posted to the live server carry a button with this exact
     custom_id, so renaming it would leave those buttons dispatching
-    nowhere."""
+    nowhere. It opens the what-card, not the whole info wall."""
     interaction = _interaction()
 
     with patch.object(panel, "AsyncSessionLocal", MagicMock(side_effect=AssertionError("no I/O"))):
@@ -423,12 +452,15 @@ async def test_help_button_renders_the_polish_info_screen_without_deferring_or_i
 
     interaction.response.defer.assert_not_awaited()
     view = _sent_view(interaction.response.send_message)
-    texts = _texts(view)
-    # Distinguishing content, not just "one of the two" — must be the Polish
-    # screen specifically, and not the English one.
-    assert replies.panel_info_pl() in texts
-    assert replies.panel_info_en() not in texts
-    assert f"### {panel.BRAND_TITLE}" in texts
+    texts = "\n".join(_texts(view))
+    assert "GameTrace to tracker" in texts
+    assert "/login" not in texts
+    assert replies.panel_info_pl() not in texts
+    assert "### Co to jest?" in texts
+    ids = _custom_ids(view)
+    assert "gt:info:pl:start" in ids or "gt:info:pl:start:noweb" in ids
+    assert "gt:panel:help" not in ids
+    assert "gt:menu:code" not in ids
     assert interaction.response.send_message.await_args.kwargs["ephemeral"] is True
 
 
@@ -440,8 +472,142 @@ async def test_help_en_button_renders_the_english_info_screen_without_deferring_
 
     interaction.response.defer.assert_not_awaited()
     view = _sent_view(interaction.response.send_message)
-    texts = _texts(view)
-    assert replies.panel_info_en() in texts
-    assert replies.panel_info_pl() not in texts
-    assert f"### {panel.BRAND_TITLE}" in texts
+    texts = "\n".join(_texts(view))
+    assert "GameTrace is a playtime tracker" in texts
+    assert "/login" not in texts
+    assert replies.panel_info_en() not in texts
+    assert "### What is it?" in texts
+    ids = _custom_ids(view)
+    assert "gt:info:en:start" in ids or "gt:info:en:start:noweb" in ids
+    assert "gt:panel:help" not in ids
+    assert "gt:panel:help:en" not in ids
+    assert "gt:menu:code" not in ids
     assert interaction.response.send_message.await_args.kwargs["ephemeral"] is True
+
+
+async def test_polish_info_opens_the_what_card_not_the_whole_wall():
+    interaction = _interaction()
+    with patch.object(panel, "AsyncSessionLocal", MagicMock(side_effect=AssertionError("no I/O"))):
+        await _callback(panel.PanelView(), "gt:panel:help")(interaction)
+    view = _sent_view(interaction.response.send_message)
+    texts = "\n".join(_texts(view))
+    assert "GameTrace to tracker" in texts
+    assert "/login" not in texts
+    ids = _custom_ids(view)
+    assert "gt:info:pl:start" in ids or "gt:info:pl:start:noweb" in ids
+    assert "gt:panel:help" not in ids
+    assert "gt:menu:code" not in ids
+    assert all(":what" not in custom_id for custom_id in ids)
+    start = next(button for button in _buttons(view) if button.custom_id.startswith("gt:info:pl:start"))
+    assert start.label == "Jak zacząć"
+    assert start.style == discord.ButtonStyle.primary
+
+
+async def test_english_info_opens_the_what_card_not_the_whole_wall():
+    interaction = _interaction()
+    with patch.object(panel, "AsyncSessionLocal", MagicMock(side_effect=AssertionError("no I/O"))):
+        await _callback(panel.PanelView(), "gt:panel:help:en")(interaction)
+    view = _sent_view(interaction.response.send_message)
+    texts = "\n".join(_texts(view))
+    assert "GameTrace is a playtime tracker" in texts
+    assert "/login" not in texts
+    ids = _custom_ids(view)
+    assert "gt:info:en:start" in ids or "gt:info:en:start:noweb" in ids
+    assert "gt:panel:help:en" not in ids
+    assert "gt:menu:code" not in ids
+    assert all(":what" not in custom_id for custom_id in ids)
+
+
+async def test_start_subbutton_edits_in_place_and_does_not_follow_up(monkeypatch):
+    monkeypatch.setattr("app.bot.replies.settings.gametrace_web_url", "https://gt.example")
+    opener = _interaction()
+    with patch.object(panel, "AsyncSessionLocal", MagicMock(side_effect=AssertionError("no I/O"))):
+        await _callback(panel.PanelView(), "gt:panel:help")(opener)
+    opened = _sent_view(opener.response.send_message)
+    click = _interaction()
+    await _callback(opened, "gt:info:pl:start")(click)
+    click.response.edit_message.assert_awaited()
+    click.followup.send.assert_not_awaited()
+    edited = "\n".join(_texts(click.response.edit_message.await_args.kwargs["view"]))
+    assert "Weź kod" in edited
+    assert "/login" not in edited
+
+
+async def test_info_without_a_web_url_uses_noweb_ids_and_omits_the_app_button(monkeypatch):
+    monkeypatch.setattr("app.bot.replies.settings.gametrace_web_url", "")
+    interaction = _interaction()
+    with patch.object(panel, "AsyncSessionLocal", MagicMock(side_effect=AssertionError("no I/O"))):
+        await _callback(panel.PanelView(), "gt:panel:help")(interaction)
+    view = _sent_view(interaction.response.send_message)
+    ids = _custom_ids(view)
+    assert "gt:info:pl:start:noweb" in ids
+    assert "gt:info:pl:commands:noweb" in ids
+    assert "gt:info:pl:app:noweb" not in ids
+    assert "gt:info:pl:what:noweb" not in ids
+    labels = {item.label for item in _buttons(view)}
+    assert "Aplikacja" not in labels
+    assert "Jak zacząć" in labels
+    assert "Komendy" in labels
+
+    english = _interaction()
+    with patch.object(panel, "AsyncSessionLocal", MagicMock(side_effect=AssertionError("no I/O"))):
+        await _callback(panel.PanelView(), "gt:panel:help:en")(english)
+    en_view = _sent_view(english.response.send_message)
+    en_ids = _custom_ids(en_view)
+    assert "gt:info:en:start:noweb" in en_ids
+    assert "gt:info:en:commands:noweb" in en_ids
+    assert "gt:info:en:app:noweb" not in en_ids
+    assert "App" not in {item.label for item in _buttons(en_view)}
+
+
+async def test_other_info_screens_put_what_on_the_left_and_omit_themselves(monkeypatch):
+    monkeypatch.setattr("app.bot.replies.settings.gametrace_web_url", "https://gt.example")
+    opener = _interaction()
+    with patch.object(panel, "AsyncSessionLocal", MagicMock(side_effect=AssertionError("no I/O"))):
+        await _callback(panel.PanelView(), "gt:panel:help")(opener)
+    opened = _sent_view(opener.response.send_message)
+    click = _interaction()
+    await _callback(opened, "gt:info:pl:commands")(click)
+    view = click.response.edit_message.await_args.kwargs["view"]
+    buttons = _buttons(view)
+    assert [button.custom_id for button in buttons] == [
+        "gt:info:pl:what",
+        "gt:info:pl:start",
+        "gt:info:pl:app",
+    ]
+    assert buttons[0].label == "Co to jest?"
+    click.followup.send.assert_not_awaited()
+    click.response.defer.assert_not_awaited()
+
+
+async def test_missing_ephemeral_id_stops_the_info_view():
+    interaction = _interaction()
+    interaction.response.send_message = AsyncMock(return_value=SimpleNamespace(message_id=None))
+    with patch.object(panel, "AsyncSessionLocal", MagicMock(side_effect=AssertionError("no I/O"))):
+        await _callback(panel.PanelView(), "gt:panel:help")(interaction)
+    view = _sent_view(interaction.response.send_message)
+    assert view.is_finished()
+    assert view.timeout == 15 * 60
+
+
+async def test_returned_message_id_keeps_the_view_and_the_next_click_stops_it(monkeypatch):
+    monkeypatch.setattr("app.bot.replies.settings.gametrace_web_url", "https://gt.example")
+    panel._info_views.clear()
+    opener = _interaction()
+    opener.response.send_message = AsyncMock(return_value=SimpleNamespace(message_id=555))
+    with patch.object(panel, "AsyncSessionLocal", MagicMock(side_effect=AssertionError("no I/O"))):
+        await _callback(panel.PanelView(), "gt:panel:help")(opener)
+    opened = _sent_view(opener.response.send_message)
+    assert opened.is_finished() is False
+    assert panel._info_views[555] is opened
+    click = _interaction()
+    click.message = SimpleNamespace(id=555)
+    await _callback(opened, "gt:info:pl:start")(click)
+    assert opened.is_finished() is True
+    click.response.edit_message.assert_awaited()
+    click.followup.send.assert_not_awaited()
+    edited = click.response.edit_message.await_args.kwargs["view"]
+    assert edited is not opened
+    assert panel._info_views[555] is edited
+    assert edited.timeout == 15 * 60
+    assert "InfoCardView" not in {cls.__name__ for cls in panel.PERSISTENT_VIEWS}
