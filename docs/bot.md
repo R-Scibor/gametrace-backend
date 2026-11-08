@@ -125,6 +125,8 @@ Re-running `/panel` posts an **additional** panel; it does not replace or invali
 | `🕒 Ostatnie` | `MemberView` (ephemeral menu) | Same as `/recent`, via `commands.recent_command`. |
 | `🚪 Wyloguj` | `MemberView` (ephemeral menu) | Same as `/logout`, via `commands.logout_user`. |
 
+`/login` and **Weź kod** share a 30-second clock. **Statystyki**, **Ostatnie**, and **Wyloguj** each have a 5-second clock, shared with the matching slash command. A repeat press shows the remaining seconds and does not do the work. Eight of those second Discord calls may be in flight. The ninth gets "Za dużo próśb naraz." A menu refusal edits the same private card. It does not open another message.
+
 All three views (`PanelView`, `NewUserView`, `MemberView`) are stateless — instantiated once with no arguments and shared by every clicker, so any per-user data is read only from the interaction, never stored on the view.
 
 ### Persistence across restarts
