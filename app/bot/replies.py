@@ -42,6 +42,14 @@ def _format_duration(total_seconds: int) -> str:
     return f"{minutes} min"
 
 
+# Shared with the panel menu. The slash reply adds the `/stats` closer;
+# the menu must not, because that channel cannot send slash commands.
+_STATS_QUIET_PROMISE = (
+    "Jeszcze nie mam żadnych sesji z ostatnich 7 dni, ale już Cię obserwuję — "
+    "zagraj w cokolwiek, a Twój czas zacznie się tu pojawiać."
+)
+
+
 def stats_empty() -> str:
     """First-run / quiet-week state. Must read as a promise, not a dead end.
 
@@ -50,11 +58,24 @@ def stats_empty() -> str:
     those counts are non-zero, and a bare empty state still ends clean
     without one.
     """
+    return f"{_STATS_QUIET_PROMISE} Wróć po sesji i sprawdź `/stats` ponownie."
+
+
+def _pending_errors_sentence(count: int, *, quiet: bool) -> str:
+    lead = "Poza tym masz" if quiet else "Masz"
     return (
-        "Jeszcze nie mam żadnych sesji z ostatnich 7 dni, ale już Cię obserwuję — "
-        "zagraj w cokolwiek, a Twój czas zacznie się tu pojawiać. "
-        "Wróć po sesji i sprawdź `/stats` ponownie."
+        f"{lead} {count} sesje wymagające poprawy — "
+        f"popraw je w aplikacji.{_web_hint()}"
     )
+
+
+def _review_sentence(count: int, *, quiet: bool) -> str:
+    if quiet:
+        return (
+            f"{count} gier czeka na potwierdzenie w aplikacji — "
+            f"stąd też się nie liczą.{_web_hint()}"
+        )
+    return f"{count} gier czeka na potwierdzenie w aplikacji.{_web_hint()}"
 
 
 def stats_reply(
@@ -69,17 +90,11 @@ def stats_reply(
 
         if pending_errors_count > 0:
             lines.append("")
-            lines.append(
-                f"Poza tym masz {pending_errors_count} sesje wymagające poprawy — "
-                f"popraw je w aplikacji.{_web_hint()}"
-            )
+            lines.append(_pending_errors_sentence(pending_errors_count, quiet=True))
 
         if review_count > 0:
             lines.append("")
-            lines.append(
-                f"{review_count} gier czeka na potwierdzenie w aplikacji — "
-                f"stąd też się nie liczą.{_web_hint()}"
-            )
+            lines.append(_review_sentence(review_count, quiet=True))
 
         return "\n".join(lines)
 
@@ -96,16 +111,11 @@ def stats_reply(
 
     if pending_errors_count > 0:
         lines.append("")
-        lines.append(
-            f"Masz {pending_errors_count} sesje wymagające poprawy — "
-            f"popraw je w aplikacji.{_web_hint()}"
-        )
+        lines.append(_pending_errors_sentence(pending_errors_count, quiet=False))
 
     if review_count > 0:
         lines.append("")
-        lines.append(
-            f"{review_count} gier czeka na potwierdzenie w aplikacji.{_web_hint()}"
-        )
+        lines.append(_review_sentence(review_count, quiet=False))
 
     return "\n".join(lines)
 
@@ -679,7 +689,7 @@ def menu_stats(
 ) -> MenuCard:
     quiet = total_seconds <= 0 or not per_game
     if quiet:
-        parts = [stats_empty()]
+        parts = [_STATS_QUIET_PROMISE]
     else:
         game_lines = [
             f"- {entry['game_name']} — {_format_duration(entry['total_seconds'])}"
@@ -691,27 +701,10 @@ def menu_stats(
         ]
 
     if pending_errors_count > 0:
-        if quiet:
-            parts.append(
-                f"Poza tym masz {pending_errors_count} sesje wymagające poprawy — "
-                f"popraw je w aplikacji.{_web_hint()}"
-            )
-        else:
-            parts.append(
-                f"Masz {pending_errors_count} sesje wymagające poprawy — "
-                f"popraw je w aplikacji.{_web_hint()}"
-            )
+        parts.append(_pending_errors_sentence(pending_errors_count, quiet=quiet))
 
     if review_count > 0:
-        if quiet:
-            parts.append(
-                f"{review_count} gier czeka na potwierdzenie w aplikacji — "
-                f"stąd też się nie liczą.{_web_hint()}"
-            )
-        else:
-            parts.append(
-                f"{review_count} gier czeka na potwierdzenie w aplikacji.{_web_hint()}"
-            )
+        parts.append(_review_sentence(review_count, quiet=quiet))
 
     return MenuCard(
         title="Statystyki",

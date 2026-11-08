@@ -11,6 +11,7 @@ from app.bot.replies import (
     menu_recent,
     menu_stats,
     menu_text,
+    recent_empty,
 )
 
 
@@ -52,6 +53,8 @@ def test_quiet_week_has_no_big_number_and_keeps_the_review_line():
     assert card.caption == "Ostatnie 7 dni"
     assert not card.body.startswith("#")
     assert "2 gier czeka na potwierdzenie" in card.body
+    assert "stąd też się nie liczą" in card.body
+    assert "/stats" not in card.body
 
 
 def test_stats_with_playtime_puts_the_duration_in_the_heading_block():
@@ -64,7 +67,39 @@ def test_stats_with_playtime_puts_the_duration_in_the_heading_block():
     assert card.body.startswith("# 12 godz. 40 min\n-# Łącznie")
     assert "**Najwięcej grane**" in card.body
     assert "Hades II — 6 godz. 10 min" in card.body
-    assert "1 sesje wymagające poprawy" in card.body
+    assert "\n\nMasz 1 sesje wymagające poprawy" in card.body
+    assert "Poza tym masz" not in card.body
+
+
+def test_playtime_card_keeps_both_pending_and_review_lines():
+    card = menu_stats(
+        total_seconds=3600,
+        per_game=[{"game_name": "Hades II", "total_seconds": 3600}],
+        pending_errors_count=3,
+        review_count=4,
+    )
+    assert "\n\nMasz 3 sesje wymagające poprawy — popraw je w aplikacji." in card.body
+    assert "\n\n4 gier czeka na potwierdzenie w aplikacji." in card.body
+    assert "Poza tym masz" not in card.body
+    assert "stąd też się nie liczą" not in card.body
+
+
+def test_stats_lists_only_the_top_three_games():
+    card = menu_stats(
+        total_seconds=10_000,
+        per_game=[
+            {"game_name": "Alpha", "total_seconds": 4000},
+            {"game_name": "Beta", "total_seconds": 3000},
+            {"game_name": "Gamma", "total_seconds": 2000},
+            {"game_name": "Delta", "total_seconds": 1000},
+        ],
+        pending_errors_count=0,
+        review_count=0,
+    )
+    assert "Alpha" in card.body
+    assert "Beta" in card.body
+    assert "Gamma" in card.body
+    assert "Delta" not in card.body
 
 
 def test_recent_appends_the_see_more_line():
@@ -79,6 +114,46 @@ def test_recent_appends_the_see_more_line():
     )
     assert "- **Hades II** — 07.11 20:40 (2 godz. 10 min)" in card.body
     assert "Zobacz więcej w aplikacji." in card.body
+
+
+def _completed(name: str) -> dict:
+    return {
+        "status": "COMPLETED",
+        "game": {"primary_name": name},
+        "start_time": "2026-11-07T20:40:00+00:00",
+        "duration_seconds": 60,
+    }
+
+
+def test_recent_drops_ongoing_and_a_sixth_completed_session():
+    card = menu_recent(
+        sessions=[
+            _completed("Alpha"),
+            {
+                "status": "ONGOING",
+                "game": {"primary_name": "Live Now"},
+                "start_time": "2026-11-07T21:00:00+00:00",
+                "duration_seconds": None,
+            },
+            _completed("Beta"),
+            _completed("Gamma"),
+            _completed("Delta"),
+            _completed("Epsilon"),
+            _completed("Zeta"),
+        ],
+        user_timezone="UTC",
+    )
+    for name in ("Alpha", "Beta", "Gamma", "Delta", "Epsilon"):
+        assert name in card.body
+    assert "Live Now" not in card.body
+    assert "Zeta" not in card.body
+
+
+def test_empty_recent_uses_recent_empty_without_the_see_more_line():
+    card = menu_recent(sessions=[], user_timezone="UTC")
+    assert card.body == recent_empty()
+    assert "Zobacz więcej" not in card.body
+    assert card.caption == "Pięć ostatnich"
 
 
 def test_logout_caption_uses_the_count_without_parsing_polish():
