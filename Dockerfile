@@ -5,6 +5,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# python:3.11-slim currently ships zlib1g 1.3.1-1+b1. Trivy fails the
+# publish on the fixed HIGH advisories until 1.3.1-1+deb13u1 is installed.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade --no-install-recommends zlib1g \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 # Upgrade the installer, install the app, then remove the installer in this
 # same layer. A later layer would hide pip from the running container but
