@@ -15,6 +15,14 @@ from discord.enums import SeparatorSpacing
 from discord.ui import Separator
 
 from app.bot import commands, panel, replies
+from app.bot.interaction_guard import reset_followups_for_tests
+
+
+@pytest.fixture(autouse=True)
+def _reset_followups():
+    reset_followups_for_tests()
+    yield
+    reset_followups_for_tests()
 
 
 class _TextList(list):

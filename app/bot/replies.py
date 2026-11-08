@@ -21,6 +21,18 @@ LINK_CODES_UNCONFIGURED = "Kody logowania nie są skonfigurowane."
 MENU_ACTION_FAILED = "Nie udało się. Spróbuj ponownie za chwilę."
 
 
+def code_wait(n: int) -> str:
+    return f"Poczekaj jeszcze {n} s, zanim poprosisz o nowy kod."
+
+
+def action_wait(n: int) -> str:
+    return f"Poczekaj jeszcze {n} s, zanim użyjesz tego ponownie."
+
+
+def followup_busy() -> str:
+    return "Za dużo próśb naraz. Spróbuj ponownie za chwilę."
+
+
 def _day_word(days_left: int) -> str:
     # Simplified Polish plural: exact grammar needs 1 / 2-4 / 5+ (with
     # 12-14 exceptions), but days_left is always a small positive ceiling

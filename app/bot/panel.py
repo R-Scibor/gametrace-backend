@@ -26,11 +26,19 @@ All copy comes from `app/bot/replies.py`; only button labels live here.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 
 import discord
 from discord.ui import ActionRow, Container, LayoutView
 
 from app.bot import commands, layout, membership, replies
+from app.bot.interaction_guard import (
+    Action,
+    claim_cooldown,
+    cooldown_remaining,
+    release_followup,
+    try_acquire_followup,
+)
 from app.core.database import AsyncSessionLocal
 from app.core.redis import get_redis
 from app.models.user import User
@@ -81,7 +89,7 @@ async def _send_view(interaction: discord.Interaction, view: discord.ui.LayoutVi
 
 
 # Message ids whose menu click is between the loading edit and the result edit.
-# The interaction guard (a later task) reads this; this task only tracks it.
+# A refusal while the id is here defers instead of covering that card.
 _menu_inflight: set[int] = set()
 
 # Ephemeral info message id -> the view last put on it. The next card stops
@@ -252,6 +260,53 @@ async def _run_menu(interaction, title: str, work) -> None:
             _menu_inflight.discard(message_id)
 
 
+async def _guarded_menu(
+    interaction: discord.Interaction,
+    action: Action,
+    title: str,
+    wait: Callable[[int], str],
+    work: Callable[[], Awaitable[replies.MenuCard]],
+) -> None:
+    """Clock and follow-up cap, then ``_run_menu``. The slot outlives ``_run_menu``.
+
+    Release stays in this ``finally``, including when ``_run_menu`` edits a failure.
+    A lost claim releases once here and clears ``acquired`` so the ``finally`` does
+    not release again. An in-flight card is deferred, not edited.
+    """
+    message_id = getattr(getattr(interaction, "message", None), "id", None)
+    discord_id = str(interaction.user.id)
+    redis = get_redis()
+
+    async def refuse(body: str) -> None:
+        if message_id in _menu_inflight:
+            await interaction.response.defer()
+            return
+        await interaction.response.edit_message(
+            view=_menu_card_view(replies.menu_text(title, body), disabled=False)
+        )
+
+    remaining = await cooldown_remaining(redis, discord_id, action)
+    if remaining is not None:
+        await refuse(wait(remaining))
+        return
+    if not try_acquire_followup():
+        await refuse(replies.followup_busy())
+        return
+    acquired = True
+    try:
+        lost = await claim_cooldown(redis, discord_id, action)
+        if lost is not None:
+            release_followup()
+            acquired = False
+            await refuse(wait(lost))
+            return
+        await _run_menu(interaction, title, work)
+    finally:
+        if acquired:
+            release_followup()
+            acquired = False
+
+
 class _PanelRow(ActionRow):
     """Buttons on the public panel message."""
 
@@ -261,19 +316,30 @@ class _PanelRow(ActionRow):
         style=discord.ButtonStyle.primary,
     )
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        # Defer first: the registration lookup is a DB round-trip and Discord's
-        # ack deadline is ~3s. `thinking=True` is required on a *component*
-        # interaction — without it discord.py sends DEFERRED_MESSAGE_UPDATE and
-        # the click shows no loading indicator at all.
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        discord_id = str(interaction.user.id)
+        # Cap only — no cooldown. A full cap is its own ephemeral message, not
+        # an edit of the public panel and not a defer.
+        if not try_acquire_followup():
+            await interaction.response.send_message(
+                view=layout.reply_view(BRAND_TITLE, replies.followup_busy()),
+                ephemeral=True,
+            )
+            return
+        try:
+            # The registration lookup is a DB round-trip and Discord's ack
+            # deadline is ~3s. `thinking=True` is required on a *component*
+            # interaction — without it discord.py sends DEFERRED_MESSAGE_UPDATE
+            # and the click shows no loading indicator at all.
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            discord_id = str(interaction.user.id)
 
-        async with AsyncSessionLocal() as db:
-            user = await db.get(User, discord_id)
+            async with AsyncSessionLocal() as db:
+                user = await db.get(User, discord_id)
 
-        # Read-only branch — the account is created only on explicit accept.
-        view = MemberView() if user is not None else NewUserView()
-        await _send_view(interaction, view)
+            # Read-only branch — the account is created only on explicit accept.
+            view = MemberView() if user is not None else NewUserView()
+            await _send_view(interaction, view)
+        finally:
+            release_followup()
 
     @discord.ui.button(
         label="🇵🇱 Co to jest?",
@@ -355,7 +421,7 @@ class _MemberRow(ActionRow):
             await membership.refresh_user(get_redis(), interaction.client, discord_id)
             return replies.menu_code(code=facts.code, created=facts.created)
 
-        await _run_menu(interaction, "Kod logowania", work)
+        await _guarded_menu(interaction, Action.CODE, "Kod logowania", replies.code_wait, work)
 
     @discord.ui.button(
         label="📊 Statystyki",
@@ -377,7 +443,7 @@ class _MemberRow(ActionRow):
                 review_count=facts.review_count,
             )
 
-        await _run_menu(interaction, "Statystyki", work)
+        await _guarded_menu(interaction, Action.STATS, "Statystyki", replies.action_wait, work)
 
     @discord.ui.button(
         label="🕒 Ostatnie",
@@ -394,7 +460,7 @@ class _MemberRow(ActionRow):
                 return replies.menu_text(title="Ostatnie sesje", body=facts.raw_failure)
             return replies.menu_recent(sessions=facts.sessions, user_timezone=facts.user_timezone)
 
-        await _run_menu(interaction, "Ostatnie sesje", work)
+        await _guarded_menu(interaction, Action.RECENT, "Ostatnie sesje", replies.action_wait, work)
 
     @discord.ui.button(
         label="🚪 Wyloguj",
@@ -411,7 +477,7 @@ class _MemberRow(ActionRow):
                 return replies.menu_logout_unregistered()
             return replies.menu_logout(count=facts.count)
 
-        await _run_menu(interaction, "Wylogowano", work)
+        await _guarded_menu(interaction, Action.LOGOUT, "Wylogowano", replies.action_wait, work)
 
 
 class PanelView(LayoutView):

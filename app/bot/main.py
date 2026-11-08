@@ -6,6 +6,7 @@ Tracks game sessions for users who have logged into the app (exist in users tabl
 """
 import logging
 import time
+from collections.abc import Awaitable, Callable
 
 import discord
 import structlog
@@ -14,6 +15,13 @@ from discord.ext import tasks
 
 from app.bot import layout, membership, replies
 from app.bot.activity import activity_name
+from app.bot.interaction_guard import (
+    Action,
+    claim_cooldown,
+    cooldown_remaining,
+    release_followup,
+    try_acquire_followup,
+)
 from app.bot.panel import PERSISTENT_VIEWS, PanelView
 from app.core.bot_heartbeat import (
     BOT_HEARTBEAT_KEY,
@@ -171,66 +179,146 @@ async def register_command(interaction: discord.Interaction) -> None:
     )
 
 
+async def _refuse_slash(interaction: discord.Interaction, title: str, body: str) -> None:
+    await interaction.response.send_message(view=layout.reply_view(title, body), ephemeral=True)
+
+
+async def _guarded_slash(
+    interaction: discord.Interaction,
+    *,
+    action: Action,
+    title: str,
+    capped: bool,
+    wait: Callable[[int], str],
+    success: Callable[[str], Awaitable[None]],
+) -> None:
+    """Cooldown, then ``success``. ``capped`` is false for /login and /logout.
+
+    Those two share a clock with the matching menu button but must not take a
+    follow-up slot. A refusal sends its own message and does not call ``success``.
+    """
+    discord_id = str(interaction.user.id)
+    redis = get_redis()
+    remaining = await cooldown_remaining(redis, discord_id, action)
+    if remaining is not None:
+        await _refuse_slash(interaction, title, wait(remaining))
+        return
+    acquired = False
+    if capped:
+        if not try_acquire_followup():
+            await _refuse_slash(interaction, title, replies.followup_busy())
+            return
+        acquired = True
+    try:
+        lost = await claim_cooldown(redis, discord_id, action)
+        if lost is not None:
+            if acquired:
+                release_followup()
+                acquired = False
+            await _refuse_slash(interaction, title, wait(lost))
+            return
+        await success(discord_id)
+    finally:
+        if acquired:
+            release_followup()
+            acquired = False
+
+
 @tree.command(name="login", description="Uzyskaj kod logowania do aplikacji GameTrace")
 async def login_command(interaction: discord.Interaction) -> None:
-    discord_id = str(interaction.user.id)
-    username = interaction.user.name
+    async def success(discord_id: str) -> None:
+        username = interaction.user.name
 
-    async with AsyncSessionLocal() as db:
-        from app.bot.commands import issue_login_code
+        async with AsyncSessionLocal() as db:
+            from app.bot.commands import issue_login_code
 
-        msg = await issue_login_code(db, get_redis(), discord_id, username)
-    await membership.refresh_user(get_redis(), bot, discord_id)
+            msg = await issue_login_code(db, get_redis(), discord_id, username)
+        await membership.refresh_user(get_redis(), bot, discord_id)
 
-    await interaction.response.send_message(
-        view=layout.reply_view("Kod logowania", msg, layout.accent_for(msg)), ephemeral=True
+        await interaction.response.send_message(
+            view=layout.reply_view("Kod logowania", msg, layout.accent_for(msg)), ephemeral=True
+        )
+
+    await _guarded_slash(
+        interaction,
+        action=Action.CODE,
+        title="Kod logowania",
+        capped=False,
+        wait=replies.code_wait,
+        success=success,
     )
 
 
 @tree.command(name="logout", description="Wyloguj się ze wszystkich urządzeń w aplikacji GameTrace")
 async def logout_command(interaction: discord.Interaction) -> None:
-    discord_id = str(interaction.user.id)
+    async def success(discord_id: str) -> None:
+        async with AsyncSessionLocal() as db:
+            from app.bot.commands import logout_user
 
-    async with AsyncSessionLocal() as db:
-        from app.bot.commands import logout_user
+            msg = await logout_user(db, get_redis(), discord_id)
 
-        msg = await logout_user(db, get_redis(), discord_id)
+        await interaction.response.send_message(
+            view=layout.reply_view("Wylogowano", msg, layout.accent_for(msg)), ephemeral=True
+        )
 
-    await interaction.response.send_message(
-        view=layout.reply_view("Wylogowano", msg, layout.accent_for(msg)), ephemeral=True
+    await _guarded_slash(
+        interaction,
+        action=Action.LOGOUT,
+        title="Wylogowano",
+        capped=False,
+        wait=replies.action_wait,
+        success=success,
     )
 
 
 @tree.command(name="stats", description="Łączny czas grania i najczęściej grane gry z ostatnich 7 dni")
 async def stats_command_handler(interaction: discord.Interaction) -> None:
-    # Defer before any I/O — a cold container's DB query + API round-trip can
-    # exceed Discord's ~3s ack deadline, otherwise showing a false failure.
-    await interaction.response.defer(ephemeral=True)
-    discord_id = str(interaction.user.id)
+    async def success(discord_id: str) -> None:
+        # Defer before the DB query. A cold container can exceed Discord's
+        # ~3s ack deadline; the guard already ran, so a refusal never defers.
+        await interaction.response.defer(ephemeral=True)
 
-    async with AsyncSessionLocal() as db:
-        from app.bot.commands import stats_command
+        async with AsyncSessionLocal() as db:
+            from app.bot.commands import stats_command
 
-        msg = await stats_command(db, discord_id)
+            msg = await stats_command(db, discord_id)
 
-    await interaction.followup.send(
-        view=layout.reply_view("Statystyki", msg, layout.accent_for(msg)), ephemeral=True
+        await interaction.followup.send(
+            view=layout.reply_view("Statystyki", msg, layout.accent_for(msg)), ephemeral=True
+        )
+
+    await _guarded_slash(
+        interaction,
+        action=Action.STATS,
+        title="Statystyki",
+        capped=True,
+        wait=replies.action_wait,
+        success=success,
     )
 
 
 @tree.command(name="recent", description="Ostatnie sesje: gra, kiedy grałeś i ile trwało")
 async def recent_command_handler(interaction: discord.Interaction) -> None:
-    # Defer before any I/O — same rationale as /stats.
-    await interaction.response.defer(ephemeral=True)
-    discord_id = str(interaction.user.id)
+    async def success(discord_id: str) -> None:
+        # Same defer rationale as /stats: the guard runs first, then this ack.
+        await interaction.response.defer(ephemeral=True)
 
-    async with AsyncSessionLocal() as db:
-        from app.bot.commands import recent_command
+        async with AsyncSessionLocal() as db:
+            from app.bot.commands import recent_command
 
-        msg = await recent_command(db, discord_id)
+            msg = await recent_command(db, discord_id)
 
-    await interaction.followup.send(
-        view=layout.reply_view("Ostatnie sesje", msg, layout.accent_for(msg)), ephemeral=True
+        await interaction.followup.send(
+            view=layout.reply_view("Ostatnie sesje", msg, layout.accent_for(msg)), ephemeral=True
+        )
+
+    await _guarded_slash(
+        interaction,
+        action=Action.RECENT,
+        title="Ostatnie sesje",
+        capped=True,
+        wait=replies.action_wait,
+        success=success,
     )
 
 
