@@ -88,8 +88,9 @@ async def _send_view(interaction: discord.Interaction, view: discord.ui.LayoutVi
     await interaction.followup.send(view=view, ephemeral=True, wait=True)
 
 
-# Message ids whose menu click is between the loading edit and the result edit.
-# A refusal while the id is here defers instead of covering that card.
+# Message ids owned by a menu click. Set before claim_cooldown and the loading
+# edit, cleared when that click finishes or loses the claim. A second click
+# while the id is here defers instead of editing the card.
 _menu_inflight: set[int] = set()
 
 # Ephemeral info message id -> the view last put on it. The next card stops
@@ -238,12 +239,9 @@ def _menu_card_view(card: replies.MenuCard, *, disabled: bool) -> discord.ui.Lay
 
 
 async def _run_menu(interaction, title: str, work) -> None:
-    message_id = getattr(getattr(interaction, "message", None), "id", None)
     await interaction.response.edit_message(
         view=_menu_card_view(replies.menu_loading(title), disabled=True)
     )
-    if message_id is not None:
-        _menu_inflight.add(message_id)
     try:
         card = await work()
         await interaction.edit_original_response(view=_menu_card_view(card, disabled=False))
@@ -255,9 +253,6 @@ async def _run_menu(interaction, title: str, work) -> None:
             )
         except Exception:
             logger.exception("menu failure edit failed")
-    finally:
-        if message_id is not None:
-            _menu_inflight.discard(message_id)
 
 
 async def _guarded_menu(
@@ -267,18 +262,20 @@ async def _guarded_menu(
     wait: Callable[[int], str],
     work: Callable[[], Awaitable[replies.MenuCard]],
 ) -> None:
-    """Clock and follow-up cap, then ``_run_menu``. The slot outlives ``_run_menu``.
+    """Clock and follow-up cap, then ``_run_menu``.
 
-    Release stays in this ``finally``, including when ``_run_menu`` edits a failure.
-    A lost claim releases once here and clears ``acquired`` so the ``finally`` does
-    not release again. An in-flight card is deferred, not edited.
+    The card id is added with no await after the idle check, before
+    ``claim_cooldown`` and the loading edit, and stays until this call returns.
+    A lost claim drops that id and the follow-up slot once, then edits the wait
+    card. ``finally`` discards again and releases only while ``acquired``.
     """
-    message_id = getattr(getattr(interaction, "message", None), "id", None)
+    raw_id = getattr(getattr(interaction, "message", None), "id", None)
+    card_id = raw_id if isinstance(raw_id, int) else None
     discord_id = str(interaction.user.id)
     redis = get_redis()
 
     async def refuse(body: str) -> None:
-        if message_id in _menu_inflight:
+        if card_id is not None and card_id in _menu_inflight:
             await interaction.response.defer()
             return
         await interaction.response.edit_message(
@@ -286,6 +283,10 @@ async def _guarded_menu(
         )
 
     remaining = await cooldown_remaining(redis, discord_id, action)
+    # No await between this check and the add on the path that does the work.
+    if card_id is not None and card_id in _menu_inflight:
+        await interaction.response.defer()
+        return
     if remaining is not None:
         await refuse(wait(remaining))
         return
@@ -293,11 +294,15 @@ async def _guarded_menu(
         await refuse(replies.followup_busy())
         return
     acquired = True
+    if card_id is not None:
+        _menu_inflight.add(card_id)
     try:
         lost = await claim_cooldown(redis, discord_id, action)
         if lost is not None:
             release_followup()
             acquired = False
+            if card_id is not None:
+                _menu_inflight.discard(card_id)
             await refuse(wait(lost))
             return
         await _run_menu(interaction, title, work)
@@ -305,6 +310,8 @@ async def _guarded_menu(
         if acquired:
             release_followup()
             acquired = False
+        if card_id is not None:
+            _menu_inflight.discard(card_id)
 
 
 class _PanelRow(ActionRow):

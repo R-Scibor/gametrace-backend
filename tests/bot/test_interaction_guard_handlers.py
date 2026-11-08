@@ -175,6 +175,56 @@ async def test_lost_claim_releases_the_followup_slot_once():
         reset_followups_for_tests()
 
 
+async def test_code_button_is_inflight_before_the_loading_edit_returns():
+    interaction = _interaction()
+    inflight_during_edit = {}
+
+    async def edit_message(*args, **kwargs):
+        inflight_during_edit["value"] = interaction.message.id in panel._menu_inflight
+
+    interaction.response.edit_message = AsyncMock(side_effect=edit_message)
+
+    with patch.object(panel, "cooldown_remaining", new=AsyncMock(return_value=None), create=True), \
+         patch.object(panel, "claim_cooldown", new=AsyncMock(return_value=None), create=True), \
+         patch.object(panel, "get_redis", return_value="redis"), \
+         patch.object(panel, "AsyncSessionLocal", _session_factory(AsyncMock())), \
+         patch.object(
+             panel.commands,
+             "issue_login_code_facts",
+             new=AsyncMock(return_value=commands.LoginCodeFacts(False, False, "111 222")),
+         ), \
+         patch.object(panel.membership, "refresh_user", new=AsyncMock()):
+        await _callback(panel.MemberView(), "gt:menu:code")(interaction)
+
+    assert inflight_during_edit["value"] is True
+    assert interaction.message.id not in panel._menu_inflight
+
+
+async def test_stats_defers_without_a_slot_when_the_card_is_already_inflight():
+    interaction = _interaction()
+    panel._menu_inflight.add(interaction.message.id)
+    facts = AsyncMock(return_value=commands.StatsFacts(slash_body="ok", total_seconds=0, per_game=[]))
+    claim = AsyncMock(return_value=None)
+    reset_followups_for_tests()
+    try:
+        with patch.object(panel, "cooldown_remaining", new=AsyncMock(return_value=None), create=True), \
+             patch.object(panel, "claim_cooldown", claim, create=True), \
+             patch.object(panel, "get_redis", return_value="redis"), \
+             patch.object(panel, "AsyncSessionLocal", _session_factory(AsyncMock())), \
+             patch.object(panel.commands, "stats_facts", facts):
+            await _callback(panel.MemberView(), "gt:menu:stats")(interaction)
+
+        interaction.response.defer.assert_awaited_once_with()
+        interaction.response.edit_message.assert_not_awaited()
+        claim.assert_not_awaited()
+        facts.assert_not_awaited()
+        assert interaction.message.id in panel._menu_inflight
+        assert all(try_acquire_followup() for _ in range(8)) is True
+    finally:
+        panel._menu_inflight.discard(interaction.message.id)
+        reset_followups_for_tests()
+
+
 async def test_start_busy_sends_an_ephemeral_notice_without_the_menu():
     interaction = _interaction()
     db = AsyncMock()
