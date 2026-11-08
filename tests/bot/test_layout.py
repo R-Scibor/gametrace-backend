@@ -3,10 +3,11 @@
 No DB, no interaction handling: layout.py is pure presentation.
 """
 import discord
-from discord.ui import Container, TextDisplay
+from discord.enums import SeparatorSpacing
+from discord.ui import ActionRow, Button, Container, Separator, TextDisplay
 
 from app.bot import replies
-from app.bot.layout import Accent, accent_for, reply_view
+from app.bot.layout import Accent, accent_for, card_view, reply_view
 
 
 def _text_displays(view):
@@ -106,3 +107,56 @@ def test_accent_for_output_feeds_reply_view_colour_end_to_end():
     view = reply_view("Tytuł", body, accent=accent_for(body))
 
     assert _container(view).accent_colour == Accent.FAILURE.value
+
+
+def test_card_view_uses_soft_then_hard_gaps_and_optional_caption():
+    view = card_view(title="Statystyki", caption="Ostatnie 7 dni", body="środek")
+
+    container = _container(view)
+    contents = _text_displays(view)
+    assert contents[0] == "### Statystyki\n-# Ostatnie 7 dni"
+    assert contents[1] == "środek"
+    gaps = [child for child in container.children if isinstance(child, Separator)]
+    assert gaps[0].visible is False
+    assert gaps[0].spacing == SeparatorSpacing.small
+    assert gaps[1].visible is True
+    assert gaps[1].spacing == SeparatorSpacing.large
+    assert container.accent_colour == Accent.BRAND.value
+
+
+def test_card_view_omits_caption_line_when_absent():
+    view = card_view(title="Statystyki", body="środek")
+
+    assert _text_displays(view)[0] == "### Statystyki"
+
+
+def _buttons(node):
+    """Walk nested layout children until every Button is found."""
+    found = []
+    if isinstance(node, Button):
+        found.append(node)
+    for child in getattr(node, "children", []) or []:
+        found.extend(_buttons(child))
+    return found
+
+
+def test_card_view_can_disable_a_button_row():
+    row = ActionRow()
+    row.add_item(Button(label="🔑 Weź kod", custom_id="gt:menu:code"))
+    view = card_view(title="Kod logowania", body="Pobieram…", row=row, buttons_disabled=True)
+
+    buttons = _buttons(_container(view))
+    assert buttons[0].disabled is True
+    assert buttons[0].custom_id == "gt:menu:code"
+
+
+def test_reply_view_gap_stays_the_default_separator():
+    view = reply_view("Tytuł", "Treść.")
+    gaps = [child for child in _container(view).children if isinstance(child, Separator)]
+    assert len(gaps) == 1
+    assert gaps[0].visible is True
+    assert gaps[0].spacing == SeparatorSpacing.small
+
+
+def test_menu_action_failed_is_a_red_accent():
+    assert accent_for(replies.MENU_ACTION_FAILED) == Accent.FAILURE

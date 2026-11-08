@@ -17,6 +17,8 @@ RECENT_FAILURE = "Nie udało się pobrać ostatnich sesji. Spróbuj ponownie za 
 
 LINK_CODES_UNCONFIGURED = "Kody logowania nie są skonfigurowane."
 
+MENU_ACTION_FAILED = "Nie udało się. Spróbuj ponownie za chwilę."
+
 
 def _day_word(days_left: int) -> str:
     # Simplified Polish plural: exact grammar needs 1 / 2-4 / 5+ (with
