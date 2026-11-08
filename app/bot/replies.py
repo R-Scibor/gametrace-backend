@@ -373,9 +373,9 @@ def _privacy_hint() -> str:
 
 
 def panel_body() -> str:
-    """Landing copy for the panel message itself — short bilingual pitch plus
-    a pointer at the buttons below. No instructions to type anything: this is
-    the read-only channel the whole feature exists to work around.
+    """Landing copy for the panel message itself — short bilingual pitch.
+    No instructions to type or click anything: this is the read-only channel
+    the whole feature exists to work around.
 
     Does NOT restate `PANEL_TITLE`: the view this feeds (`reply_view()` in
     a later task) already renders the title as a `### heading` above the
@@ -387,11 +387,9 @@ def panel_body() -> str:
     """
     return (
         "🇵🇱 Bot rozpoznaje Twój status „W grze…” na Discordzie i sam "
-        "zapisuje sesje — nic nie trzeba włączać ręcznie. Kliknij "
-        "**▶ START**, żeby zacząć.\n\n"
+        "zapisuje sesje. Nic nie trzeba włączać ręcznie.\n\n"
         "🇬🇧 The bot recognises your “Playing…” status on Discord and saves "
-        "your sessions automatically — nothing to switch on. Click "
-        "**▶ START** to begin."
+        "your sessions. Nothing to switch on."
     )
 
 
@@ -435,7 +433,7 @@ def panel_member_menu() -> str:
     this) and must not instruct any slash command — the panel exists exactly
     where slash commands are unreachable.
     """
-    return "Cześć! Twoje konto jest już połączone. Co chcesz zrobić?"
+    return "Cześć. Co chcesz zrobić?"
 
 
 def panel_info_pl() -> str:

@@ -56,6 +56,18 @@ def test_panel_body_does_not_restate_title():
     assert not text.startswith(replies.PANEL_TITLE)
 
 
+def test_panel_body_does_not_tell_the_reader_to_click_start():
+    text = replies.panel_body()
+    assert "Kliknij" not in text
+    assert "Click" not in text
+    assert "W grze…" in text
+    assert "Playing…" in text
+
+
+def test_member_menu_greeting_is_the_short_line():
+    assert replies.panel_member_menu() == "Cześć. Co chcesz zrobić?"
+
+
 def test_help_copy_does_not_restate_the_brand_title(monkeypatch):
     """Same rule as `panel_body`, for every reply rendered under a
     "GameTrace" heading: `/help` and the two panel info screens all render
