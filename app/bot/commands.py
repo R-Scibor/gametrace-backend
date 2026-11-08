@@ -1,5 +1,6 @@
 """Discord slash command logic — testable without discord.py."""
 import logging
+from dataclasses import dataclass, field
 
 from sqlalchemy import select
 
@@ -30,6 +31,37 @@ def _format_code(code: str) -> str:
     return f"{code[:3]} {code[3:]}"
 
 
+@dataclass(frozen=True)
+class LoginCodeFacts:
+    unconfigured: bool
+    created: bool
+    code: str
+
+
+@dataclass(frozen=True)
+class LogoutFacts:
+    unregistered: bool
+    count: int
+
+
+@dataclass(frozen=True)
+class StatsFacts:
+    slash_body: str
+    total_seconds: int = 0
+    per_game: list = field(default_factory=list)
+    pending_errors_count: int = 0
+    review_count: int = 0
+    raw_failure: str | None = None
+
+
+@dataclass(frozen=True)
+class RecentFacts:
+    slash_body: str
+    sessions: list = field(default_factory=list)
+    user_timezone: str | None = None
+    raw_failure: str | None = None
+
+
 async def register_user(db, discord_id: str, username: str) -> str:
     existing = await db.get(User, discord_id)
     pending_deletion = existing is not None and existing.purge_at is not None
@@ -54,21 +86,26 @@ async def register_user(db, discord_id: str, username: str) -> str:
     return replies.register_reply(created=created)
 
 
-async def issue_login_code(db, r, discord_id: str, username: str) -> str:
+async def issue_login_code_facts(db, r, discord_id: str, username: str) -> LoginCodeFacts:
+    created = await _upsert_user(db, discord_id, username)
     try:
-        created = await _upsert_user(db, discord_id, username)
         code = await link_codes.issue_code(r, discord_id)
     except link_codes.LinkCodesNotConfigured:
+        return LoginCodeFacts(unconfigured=True, created=created, code="")
+    return LoginCodeFacts(unconfigured=False, created=created, code=_format_code(code))
+
+
+async def issue_login_code(db, r, discord_id: str, username: str) -> str:
+    facts = await issue_login_code_facts(db, r, discord_id, username)
+    if facts.unconfigured:
         return replies.LINK_CODES_UNCONFIGURED
-
-    spaced = _format_code(code)
-    return replies.login_reply(code=spaced, created=created)
+    return replies.login_reply(code=facts.code, created=facts.created)
 
 
-async def logout_user(db, r, discord_id: str) -> str:
+async def logout_user_facts(db, r, discord_id: str) -> LogoutFacts:
     user = await db.get(User, discord_id)
     if user is None:
-        return "Nie jesteś zarejestrowany."
+        return LogoutFacts(unregistered=True, count=0)
 
     result = await db.execute(
         select(UserAuthToken).where(UserAuthToken.user_id == discord_id)
@@ -80,7 +117,52 @@ async def logout_user(db, r, discord_id: str) -> str:
     await db.commit()
 
     await link_codes.discard_pending_code(r, discord_id)
-    return f"Wylogowano. Unieważniono {count} tokenów logowania w aplikacji."
+    return LogoutFacts(unregistered=False, count=count)
+
+
+async def logout_user(db, r, discord_id: str) -> str:
+    facts = await logout_user_facts(db, r, discord_id)
+    if facts.unregistered:
+        return "Nie jesteś zarejestrowany."
+    return f"Wylogowano. Unieważniono {facts.count} tokenów logowania w aplikacji."
+
+
+async def stats_facts(db, discord_id: str) -> StatsFacts:
+    """Read-only /stats payload. Never creates a users row."""
+    user = await db.get(User, discord_id)
+    if user is None:
+        return StatsFacts(slash_body=replies.NOT_REGISTERED, raw_failure=replies.NOT_REGISTERED)
+
+    try:
+        summary = await api_client.get_summary(discord_id)
+        review_count = await api_client.get_review_count(discord_id)
+    except PendingDeletionError as exc:
+        # Must be caught before BotApiError — PendingDeletionError is a
+        # subclass, so a blanket `except BotApiError` here would also catch
+        # it and mislabel it as a generic failure.
+        body = replies.pending_deletion_reply(
+            purge_at=exc.purge_at, days_left=exc.days_left, user_timezone=user.timezone
+        )
+        return StatsFacts(slash_body=body, raw_failure=body)
+    except BotApiError:
+        logger.warning("Failed to fetch /stats data for %s", discord_id, exc_info=True)
+        return StatsFacts(slash_body=replies.STATS_FAILURE, raw_failure=replies.STATS_FAILURE)
+
+    total_seconds = summary.get("total_seconds", 0)
+    per_game = summary.get("per_game", [])
+    pending_errors_count = len(summary.get("pending_errors", []))
+    return StatsFacts(
+        slash_body=replies.stats_reply(
+            total_seconds=total_seconds,
+            per_game=per_game,
+            pending_errors_count=pending_errors_count,
+            review_count=review_count,
+        ),
+        total_seconds=total_seconds,
+        per_game=per_game,
+        pending_errors_count=pending_errors_count,
+        review_count=review_count,
+    )
 
 
 async def stats_command(db, discord_id: str) -> str:
@@ -90,35 +172,38 @@ async def stats_command(db, discord_id: str) -> str:
     before invoking this, since the API round-trip can exceed Discord's
     ~3s ack deadline.
     """
-    user = await db.get(User, discord_id)
-    if user is None:
-        return replies.NOT_REGISTERED
-
-    try:
-        summary = await api_client.get_summary(discord_id)
-        review_count = await api_client.get_review_count(discord_id)
-    except PendingDeletionError as exc:
-        # Must be caught before BotApiError — PendingDeletionError is a
-        # subclass, so a blanket `except BotApiError` here would also catch
-        # it and mislabel it as a generic failure.
-        return replies.pending_deletion_reply(
-            purge_at=exc.purge_at, days_left=exc.days_left, user_timezone=user.timezone
-        )
-    except BotApiError:
-        logger.warning("Failed to fetch /stats data for %s", discord_id, exc_info=True)
-        return replies.STATS_FAILURE
-
-    return replies.stats_reply(
-        total_seconds=summary.get("total_seconds", 0),
-        per_game=summary.get("per_game", []),
-        pending_errors_count=len(summary.get("pending_errors", [])),
-        review_count=review_count,
-    )
+    facts = await stats_facts(db, discord_id)
+    return facts.slash_body
 
 
 def help_command() -> str:
     """Build the /help reply. No HTTP call, no DB lookup — reply directly."""
     return replies.help_reply()
+
+
+async def recent_facts(db, discord_id: str) -> RecentFacts:
+    """Read-only /recent payload. Never creates a users row."""
+    user = await db.get(User, discord_id)
+    if user is None:
+        return RecentFacts(slash_body=replies.NOT_REGISTERED, raw_failure=replies.NOT_REGISTERED)
+
+    try:
+        sessions = await api_client.get_recent_sessions(discord_id)
+    except PendingDeletionError as exc:
+        # Same catch-order note as stats_facts: subclass before base class.
+        body = replies.pending_deletion_reply(
+            purge_at=exc.purge_at, days_left=exc.days_left, user_timezone=user.timezone
+        )
+        return RecentFacts(slash_body=body, raw_failure=body)
+    except BotApiError:
+        logger.warning("Failed to fetch /recent data for %s", discord_id, exc_info=True)
+        return RecentFacts(slash_body=replies.RECENT_FAILURE, raw_failure=replies.RECENT_FAILURE)
+
+    return RecentFacts(
+        slash_body=replies.recent_reply(sessions=sessions, user_timezone=user.timezone),
+        sessions=sessions,
+        user_timezone=user.timezone,
+    )
 
 
 async def recent_command(db, discord_id: str) -> str:
@@ -128,19 +213,5 @@ async def recent_command(db, discord_id: str) -> str:
     before invoking this, since the API round-trip can exceed Discord's
     ~3s ack deadline.
     """
-    user = await db.get(User, discord_id)
-    if user is None:
-        return replies.NOT_REGISTERED
-
-    try:
-        sessions = await api_client.get_recent_sessions(discord_id)
-    except PendingDeletionError as exc:
-        # Same catch-order note as stats_command: subclass before base class.
-        return replies.pending_deletion_reply(
-            purge_at=exc.purge_at, days_left=exc.days_left, user_timezone=user.timezone
-        )
-    except BotApiError:
-        logger.warning("Failed to fetch /recent data for %s", discord_id, exc_info=True)
-        return replies.RECENT_FAILURE
-
-    return replies.recent_reply(sessions=sessions, user_timezone=user.timezone)
+    facts = await recent_facts(db, discord_id)
+    return facts.slash_body
