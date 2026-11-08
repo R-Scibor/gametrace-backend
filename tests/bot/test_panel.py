@@ -258,11 +258,28 @@ async def test_menu_button_edits_loading_then_the_result(custom_id, handler, tit
     loading = _sent_view(interaction.response.edit_message)
     assert "Pobieram…" in _texts(loading)
     assert f"### {title}" in _texts(loading)
+    loading_buttons = [
+        item for item in loading.walk_children() if getattr(item, "custom_id", None) == custom_id
+    ]
+    assert loading_buttons[0].disabled is True
     interaction.followup.send.assert_not_awaited()
     interaction.response.defer.assert_not_awaited()
     result = interaction.edit_original_response.await_args.kwargs["view"]
-    assert f"### {title}" in _texts(result)
-    assert "Pobieram…" not in _texts(result)
+    result_texts = _texts(result)
+    assert f"### {title}" in result_texts
+    assert "Pobieram…" not in result_texts
+    if handler == "issue_login_code_facts":
+        assert "482 913" in result_texts
+    elif handler == "stats_facts":
+        assert "Hades II" in result_texts
+    elif handler == "recent_facts":
+        assert replies.recent_empty() in result_texts
+    else:
+        assert "-# 2 tokenów" in result_texts
+    result_buttons = [
+        item for item in result.walk_children() if getattr(item, "custom_id", None) == custom_id
+    ]
+    assert result_buttons[0].disabled is False
 
 
 async def test_menu_failure_reenables_after_the_handler_raises():
@@ -306,6 +323,36 @@ async def test_code_button_passes_the_redis_handle_and_username():
         await _callback(panel.MemberView(), "gt:menu:code")(interaction)
 
     func.assert_awaited_once_with(db, "redis-handle", "9", "bob")
+
+
+async def test_configured_code_refreshes_membership():
+    interaction = _interaction(user_id=9, username="bob")
+    db = AsyncMock()
+    with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
+         patch.object(panel, "get_redis", return_value="redis-handle"), \
+         patch.object(panel.commands, "issue_login_code_facts", new=AsyncMock(
+             return_value=commands.LoginCodeFacts(unconfigured=False, created=False, code="482 913")
+         )), \
+         patch.object(panel.membership, "refresh_user", new=AsyncMock()) as refresh:
+        await _callback(panel.MemberView(), "gt:menu:code")(interaction)
+
+    refresh.assert_awaited_once_with("redis-handle", interaction.client, "9")
+
+
+async def test_unconfigured_code_does_not_refresh_membership():
+    interaction = _interaction()
+    db = AsyncMock()
+    with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
+         patch.object(panel, "get_redis", return_value="redis"), \
+         patch.object(panel.commands, "issue_login_code_facts", new=AsyncMock(
+             return_value=commands.LoginCodeFacts(unconfigured=True, created=False, code="")
+         )), \
+         patch.object(panel.membership, "refresh_user", new=AsyncMock()) as refresh:
+        await _callback(panel.MemberView(), "gt:menu:code")(interaction)
+
+    refresh.assert_not_awaited()
+    result = interaction.edit_original_response.await_args.kwargs["view"]
+    assert replies.LINK_CODES_UNCONFIGURED in _texts(result)
 
 
 # --- 7. persistent-view registration hygiene -------------------------------
