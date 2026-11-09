@@ -13,7 +13,10 @@ alembic==1.13.1
 pydantic-settings==2.3.4
 
 # Task queue
+# kombu 5.7+ requires redis-py >= 6.1. Celery 5.4's redis extra caps it at <6,
+# so an unpinned kombu makes the worker exit on broker connect.
 celery[redis]==5.4.0
+kombu==5.6.2
 
 # Discord bot
 discord.py==2.7.1
