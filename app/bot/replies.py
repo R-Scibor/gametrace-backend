@@ -10,7 +10,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.core.config import settings
 
-NOT_REGISTERED = "Nie jesteś zarejestrowany. Użyj `/register` lub `/login`, aby zacząć."
+NOT_REGISTERED = (
+    "Nie jesteś zarejestrowany. Przejdź do panelu GameTrace na serwerze i kliknij "
+    "**▶ START** (albo użyj `/register` lub `/login`)."
+)
 
 STATS_FAILURE = "Nie udało się pobrać statystyk. Spróbuj ponownie za chwilę."
 
@@ -193,12 +196,14 @@ _HELP_WHAT_IS_IT = (
 _HELP_HOW_TO_START_NO_APP = (
     "**Jak zacząć**\n"
     "1. Włącz w Discordzie wyświetlanie statusu aktywności gry (Activity Status).\n"
-    "2. Na tym kanale wpisz `/login` albo `/register` — bot odpowie kodem "
-    "widocznym tylko dla Ciebie."
+    "2. Przejdź na kanał z panelem GameTrace na tym serwerze i kliknij **▶ START** "
+    "(a potem **🔑 Weź kod**, żeby dostać kod logowania)."
 )
 
 _HELP_COMMANDS = (
-    "**Komendy**\n"
+    "**Skróty (komendy)**\n"
+    "To samo zrobisz przyciskami w panelu. Na kanałach serwera, gdzie możesz pisać, "
+    "działają też skróty:\n"
     "`/register` — załóż konto i zacznij śledzenie sesji\n"
     "`/login` — kod logowania do aplikacji (ważny 5 min)\n"
     "`/logout` — wyloguj się ze wszystkich urządzeń w aplikacji\n"
@@ -229,8 +234,8 @@ def help_reply() -> str:
         f"👉 Więcej o GameTrace: {web_url}/welcome\n\n"
         f"**Jak zacząć**\n"
         f"1. Włącz w Discordzie wyświetlanie statusu aktywności gry (Activity Status).\n"
-        f"2. Na tym kanale wpisz `/login` albo `/register` — bot odpowie kodem "
-        f"widocznym tylko dla Ciebie.\n"
+        f"2. Przejdź na kanał z panelem GameTrace na tym serwerze i kliknij **▶ START** "
+        f"(a potem **🔑 Weź kod**, żeby dostać kod logowania).\n"
         f"3. Wpisz kod w aplikacji i graj jak zwykle — sesje pojawią się automatycznie.\n\n"
         f"{_HELP_COMMANDS}\n\n"
         f"**Aplikacje**\n"
@@ -242,14 +247,18 @@ def help_reply() -> str:
 
 def register_reply(*, created: bool) -> str:
     """First-time /register gets full orientation; returning users get a
-    terse ack plus a reminder of the /login next step — not a bare no-op
+    terse ack plus a reminder of the panel code next step — not a bare no-op
     reply, since "already registered" still leaves "now what?" unanswered.
     """
     if not created:
         if not settings.gametrace_web_url:
-            return "Jesteś już zarejestrowany. Wpisz `/login`, żeby dostać kod logowania do aplikacji."
+            return (
+                "Jesteś już zarejestrowany. Kliknij **🔑 Weź kod** w panelu "
+                "(albo użyj `/login`), żeby dostać kod logowania do aplikacji."
+            )
         return (
-            f"Jesteś już zarejestrowany. Wpisz `/login` i zaloguj się w "
+            f"Jesteś już zarejestrowany. Kliknij **🔑 Weź kod** w panelu "
+            f"(albo użyj `/login`) i zaloguj się w "
             f"aplikacji lub na stronie: {settings.gametrace_web_url}"
         )
 
@@ -257,7 +266,7 @@ def register_reply(*, created: bool) -> str:
         "Zarejestrowano w GameTrace! Od teraz bot automatycznie zapisuje "
         "Twoje sesje grania.\n\n"
         "**Co dalej**\n"
-        "1. Wpisz `/login` — dostaniesz kod widoczny tylko dla Ciebie.\n"
+        "1. Kliknij **🔑 Weź kod** w panelu (albo użyj `/login`) — dostaniesz kod widoczny tylko dla Ciebie.\n"
         "2. Wpisz kod w aplikacji, żeby połączyć konto.\n"
         "3. Graj jak zwykle — sesje pojawią się automatycznie."
     )
@@ -266,7 +275,7 @@ def register_reply(*, created: bool) -> str:
     return (
         f"{intro}\n\n"
         f"👉 Aplikacja: {settings.gametrace_web_url}/login — zaloguj się przez Discorda "
-        f"albo kodem z `/login`."
+        f"albo kodem z panelu (🔑 Weź kod)."
     )
 
 

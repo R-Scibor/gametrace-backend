@@ -212,3 +212,36 @@ def test_panel_register_confirmation_points_at_code_button():
 
 def test_settings_has_privacy_url_default_empty():
     assert settings.gametrace_privacy_url == ""
+
+
+@pytest.mark.parametrize("web_url", ["", "https://gametrace.example"])
+def test_help_reply_has_no_slash_start_instruction(monkeypatch, web_url):
+    monkeypatch.setattr(settings, "gametrace_web_url", web_url)
+    _assert_no_slash_start_instruction(replies.help_reply())
+
+
+def test_help_reply_and_not_registered_mention_start(monkeypatch):
+    for web_url in ("", "https://gametrace.example"):
+        monkeypatch.setattr(settings, "gametrace_web_url", web_url)
+        assert "▶ START" in replies.help_reply()
+    assert "▶ START" in replies.NOT_REGISTERED
+
+
+def test_help_commands_header_and_intro():
+    assert "**Skróty (komendy)**" in replies._HELP_COMMANDS
+    assert "panel" in replies._HELP_COMMANDS.lower()
+
+
+def test_register_reply_points_to_panel_code_button(monkeypatch):
+    for web_url in ("", "https://gametrace.example"):
+        monkeypatch.setattr(settings, "gametrace_web_url", web_url)
+        for created in (True, False):
+            text = replies.register_reply(created=created)
+            assert "🔑 Weź kod" in text
+            assert "/login" in text
+
+
+def test_register_reply_web_url_points_to_panel_code(monkeypatch):
+    monkeypatch.setattr(settings, "gametrace_web_url", "https://gametrace.example")
+    text = replies.register_reply(created=True)
+    assert "albo kodem z panelu (🔑 Weź kod)" in text
