@@ -21,7 +21,7 @@ services:
     restart: always
 
   alembic_init:
-    image: gametrace-backend:local
+    image: ghcr.io/r-scibor/gametrace-backend:${IMAGE_TAG:-latest}
     build:
       context: .
       args:
@@ -37,7 +37,7 @@ services:
         condition: service_healthy
 
   api:
-    image: gametrace-backend:local
+    image: ghcr.io/r-scibor/gametrace-backend:${IMAGE_TAG:-latest}
     build:
       context: .
       args:
@@ -62,7 +62,7 @@ services:
         condition: service_started
 
   bot:
-    image: gametrace-backend:local
+    image: ghcr.io/r-scibor/gametrace-backend:${IMAGE_TAG:-latest}
     build:
       context: .
       args:
@@ -85,7 +85,7 @@ services:
         condition: service_completed_successfully
 
   worker:
-    image: gametrace-backend:local
+    image: ghcr.io/r-scibor/gametrace-backend:${IMAGE_TAG:-latest}
     build:
       context: .
       args:
@@ -110,7 +110,7 @@ services:
         condition: service_completed_successfully
 
   beat:
-    image: gametrace-backend:local
+    image: ghcr.io/r-scibor/gametrace-backend:${IMAGE_TAG:-latest}
     build:
       context: .
       args:
