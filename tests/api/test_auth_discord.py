@@ -28,8 +28,10 @@ def _patch_discord(monkeypatch, *, identity, guilds):
     monkeypatch.setattr(discord_oauth, "fetch_guilds", fake_guilds)
 
 
-def _body():
-    return {"code": "c", "code_verifier": "v", "redirect_uri": REDIRECT}
+def _body(**overrides):
+    payload = {"code": "c", "code_verifier": "v", "redirect_uri": REDIRECT}
+    payload.update(overrides)
+    return payload
 
 
 async def test_new_user_is_auto_created(client, db, monkeypatch):
@@ -183,3 +185,91 @@ async def test_fetch_guilds_upstream_error_returns_502(client, monkeypatch):
     resp = await client.post("/api/v1/auth/discord", json=_body())
 
     assert resp.status_code == 502
+
+
+async def test_new_user_with_valid_tz(client, db, monkeypatch):
+    _patch_discord(monkeypatch, identity={"id": "555", "username": "newbie"}, guilds={"123"})
+
+    resp = await client.post("/api/v1/auth/discord", json=_body(timezone="America/New_York"))
+
+    assert resp.status_code == 200
+    assert resp.json()["timezone"] == "America/New_York"
+
+    from app.models.user import User
+    user = await db.get(User, "555")
+    assert user is not None
+    assert user.timezone == "America/New_York"
+
+
+async def test_new_user_with_no_tz_gets_default_timezone(client, db, monkeypatch):
+    _patch_discord(monkeypatch, identity={"id": "555", "username": "newbie"}, guilds={"123"})
+
+    resp = await client.post("/api/v1/auth/discord", json=_body())
+
+    assert resp.status_code == 200
+    assert resp.json()["timezone"] == settings.default_timezone
+
+    from app.models.user import User
+    user = await db.get(User, "555")
+    assert user is not None
+    assert user.timezone == settings.default_timezone
+
+
+async def test_new_user_with_invalid_tz_falls_back(client, db, monkeypatch):
+    _patch_discord(monkeypatch, identity={"id": "555", "username": "newbie"}, guilds={"123"})
+
+    resp = await client.post("/api/v1/auth/discord", json=_body(timezone="Invalid/Timezone"))
+
+    assert resp.status_code == 200
+    assert resp.json()["timezone"] == settings.default_timezone
+
+    from app.models.user import User
+    user = await db.get(User, "555")
+    assert user is not None
+    assert user.timezone == settings.default_timezone
+
+
+async def test_existing_utc_user_gets_updated(client, db, monkeypatch):
+    await make_user(db, discord_id="555", username="sam", tz="UTC")
+    _patch_discord(monkeypatch, identity={"id": "555", "username": "sam"}, guilds={"123"})
+
+    resp = await client.post("/api/v1/auth/discord", json=_body(timezone="America/New_York"))
+
+    assert resp.status_code == 200
+    assert resp.json()["timezone"] == "America/New_York"
+
+    from app.models.user import User
+    refreshed = await db.get(User, "555")
+    assert refreshed is not None
+    assert refreshed.timezone == "America/New_York"
+
+
+async def test_existing_non_utc_user_not_overridden(client, db, monkeypatch):
+    await make_user(db, discord_id="555", username="sam", tz="Europe/Berlin")
+    _patch_discord(monkeypatch, identity={"id": "555", "username": "sam"}, guilds={"123"})
+
+    resp = await client.post("/api/v1/auth/discord", json=_body(timezone="America/New_York"))
+
+    assert resp.status_code == 200
+    assert resp.json()["timezone"] == "Europe/Berlin"
+
+    from app.models.user import User
+    refreshed = await db.get(User, "555")
+    assert refreshed is not None
+    assert refreshed.timezone == "Europe/Berlin"
+
+
+async def test_existing_demo_user_timezone_never_changed(client, db, monkeypatch):
+    from app.services.demo import DEMO_DISCORD_ID
+    await make_user(db, discord_id=DEMO_DISCORD_ID, username="demo", tz="UTC")
+    _patch_discord(monkeypatch, identity={"id": DEMO_DISCORD_ID, "username": "demo"}, guilds={"123"})
+
+    resp = await client.post("/api/v1/auth/discord", json=_body(timezone="America/New_York"))
+
+    assert resp.status_code == 200
+    assert resp.json()["timezone"] == "UTC"
+
+    from app.models.user import User
+    refreshed = await db.get(User, DEMO_DISCORD_ID)
+    assert refreshed is not None
+    assert refreshed.timezone == "UTC"
