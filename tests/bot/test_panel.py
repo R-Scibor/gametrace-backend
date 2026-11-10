@@ -6,6 +6,7 @@ silently in production — duplicated `custom_id`s across persistent views
 (discord.py's dispatch table would overwrite one with the other) and missing
 `defer()` before I/O (Discord's ~3s ack deadline).
 """
+import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,6 +17,14 @@ from discord.ui import Separator
 
 from app.bot import commands, panel, replies
 from app.bot.interaction_guard import reset_followups_for_tests
+
+
+def _without_urls(text: str) -> str:
+    """Drop web links so the sign-in page URL (``…/login``) is not mistaken
+    for a "type /login" instruction; panel screens must still never tell the
+    user to type the slash command."""
+    return re.sub(r"https?://\S+", "", text)
+
 
 
 @pytest.fixture(autouse=True)
@@ -462,7 +471,7 @@ async def test_help_button_renders_the_polish_info_screen_without_deferring_or_i
     view = _sent_view(interaction.response.send_message)
     texts = "\n".join(_texts(view))
     assert "GameTrace to tracker" in texts
-    assert "/login" not in texts
+    assert "/login" not in _without_urls(texts)
     assert replies.panel_info_pl() not in texts
     assert "### Co to jest?" in texts
     ids = _custom_ids(view)
@@ -482,7 +491,7 @@ async def test_help_en_button_renders_the_english_info_screen_without_deferring_
     view = _sent_view(interaction.response.send_message)
     texts = "\n".join(_texts(view))
     assert "GameTrace is a playtime tracker" in texts
-    assert "/login" not in texts
+    assert "/login" not in _without_urls(texts)
     assert replies.panel_info_en() not in texts
     assert "### What is it?" in texts
     ids = _custom_ids(view)
@@ -500,7 +509,7 @@ async def test_polish_info_opens_the_what_card_not_the_whole_wall():
     view = _sent_view(interaction.response.send_message)
     texts = "\n".join(_texts(view))
     assert "GameTrace to tracker" in texts
-    assert "/login" not in texts
+    assert "/login" not in _without_urls(texts)
     ids = _custom_ids(view)
     assert "gt:info:pl:start" in ids or "gt:info:pl:start:noweb" in ids
     assert "gt:panel:help" not in ids
@@ -518,7 +527,7 @@ async def test_english_info_opens_the_what_card_not_the_whole_wall():
     view = _sent_view(interaction.response.send_message)
     texts = "\n".join(_texts(view))
     assert "GameTrace is a playtime tracker" in texts
-    assert "/login" not in texts
+    assert "/login" not in _without_urls(texts)
     ids = _custom_ids(view)
     assert "gt:info:en:start" in ids or "gt:info:en:start:noweb" in ids
     assert "gt:panel:help:en" not in ids
@@ -538,7 +547,7 @@ async def test_start_subbutton_edits_in_place_and_does_not_follow_up(monkeypatch
     click.followup.send.assert_not_awaited()
     edited = "\n".join(_texts(click.response.edit_message.await_args.kwargs["view"]))
     assert "Weź kod" in edited
-    assert "/login" not in edited
+    assert "/login" not in _without_urls(edited)
 
 
 async def test_info_without_a_web_url_uses_noweb_ids_and_omits_the_app_button(monkeypatch):

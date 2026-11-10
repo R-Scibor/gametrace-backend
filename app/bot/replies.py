@@ -214,7 +214,7 @@ def help_reply() -> str:
     Spells out every command here even though Discord's own slash-command
     picker also lists them — the picker's descriptions are one-liners
     truncated to fit, this is the place for real explanations. The
-    web-app section (wizard link, app links) is only appended when a URL is
+    web-app section (landing link, app links) is only appended when a URL is
     configured — a dangling "see the app" with nothing to point at reads as
     broken.
     """
@@ -226,8 +226,7 @@ def help_reply() -> str:
         f"{_HELP_WHAT_IS_IT} W aplikacji webowej i na Androidzie masz "
         f"bibliotekę gier, szczegółowe statystyki, mapę aktywności oraz "
         f"ręczne i głosowe dodawanie sesji.\n\n"
-        f"👉 Zacznij tutaj: {web_url}/welcome?onboarding=1 — kreator przeprowadzi Cię "
-        f"krok po kroku.\n\n"
+        f"👉 Więcej o GameTrace: {web_url}/welcome\n\n"
         f"**Jak zacząć**\n"
         f"1. Włącz w Discordzie wyświetlanie statusu aktywności gry (Activity Status).\n"
         f"2. Na tym kanale wpisz `/login` albo `/register` — bot odpowie kodem "
@@ -266,8 +265,8 @@ def register_reply(*, created: bool) -> str:
         return intro
     return (
         f"{intro}\n\n"
-        f"👉 Aplikacja: {settings.gametrace_web_url}/welcome?onboarding=1 — kreator "
-        f"przeprowadzi Cię krok po kroku."
+        f"👉 Aplikacja: {settings.gametrace_web_url}/login — zaloguj się przez Discorda "
+        f"albo kodem z `/login`."
     )
 
 
@@ -297,8 +296,8 @@ def login_reply(*, code: str, created: bool) -> str:
         return intro
     return (
         f"{intro}\n\n"
-        f"👉 Aplikacja: {settings.gametrace_web_url}/welcome?onboarding=1 — kreator "
-        f"przeprowadzi Cię krok po kroku."
+        f"👉 Aplikacja: {settings.gametrace_web_url}/login — wpisz tam ten kod "
+        f"albo zaloguj się przez Discorda."
     )
 
 
@@ -512,8 +511,7 @@ def _pl_steps(web: str) -> str:
         "3. Kliknij **▶ START** na panelu powyżej, a potem **🔑 Weź "
         "kod** — bot odpowie 6-cyfrowym kodem widocznym tylko dla Ciebie, "
         "ważnym 5 minut.\n"
-        f"4. Wpisz ten kod w aplikacji (przeglądarka {web} albo kreator "
-        f"{web}/welcome?onboarding=1).\n"
+        f"4. Wpisz ten kod w aplikacji (w przeglądarce na {web}/login).\n"
         "5. Graj jak zwykle — sesje pojawią się automatycznie w wersji web "
         "i mobilnej."
     )
@@ -538,20 +536,19 @@ def _en_steps(web: str) -> str:
         "3. Click **▶ START** on the panel above, then **🔑 Weź kod** "
         "— the bot will reply with a 6-digit code visible only to you, "
         "valid for 5 minutes.\n"
-        f"4. Enter that code in the app (browser {web} or the wizard "
-        f"{web}/welcome?onboarding=1).\n"
+        f"4. Enter that code in the app (in the browser at {web}/login).\n"
         "5. Play as usual — sessions will show up automatically on web "
         "and mobile."
     )
 
 
 def info_what_pl(web_url_set: bool) -> str:
-    """Tracker paragraph, plus the wizard line when a web URL is set."""
+    """Tracker paragraph, plus the landing link when a web URL is set."""
     if not web_url_set:
         return _PL_WHAT
     web = settings.gametrace_web_url
-    wizard = f"👉 Zacznij tutaj: {web}/welcome?onboarding=1 — kreator przeprowadzi Cię krok po kroku."
-    return f"{_PL_WHAT}\n\n{wizard}"
+    start_line = f"👉 Więcej o GameTrace: {web}/welcome"
+    return f"{_PL_WHAT}\n\n{start_line}"
 
 
 def info_start_pl(web_url_set: bool) -> str:
@@ -564,8 +561,8 @@ def info_apps_pl() -> str:
     """Web / Android lines. Only shown when a web URL is configured."""
     web = settings.gametrace_web_url
     return (
-        f"Web: {web} · Android (APK): {web}/download · Onboarding od "
-        f"zera: {web}/welcome?onboarding=1.\n"
+        f"Web: {web} · Android (APK): {web}/download · O GameTrace: "
+        f"{web}/welcome.\n"
         "Jedno konto Discord — te same sesje w przeglądarce i w aplikacji."
     )
 
@@ -580,8 +577,8 @@ def info_what_en(web_url_set: bool) -> str:
     if not web_url_set:
         return _EN_WHAT
     web = settings.gametrace_web_url
-    wizard = f"👉 Start here: {web}/welcome?onboarding=1 — the wizard walks you through it step by step."
-    return f"{_EN_WHAT}\n\n{wizard}"
+    start_line = f"👉 More about GameTrace: {web}/welcome"
+    return f"{_EN_WHAT}\n\n{start_line}"
 
 
 def info_start_en(web_url_set: bool) -> str:
@@ -594,8 +591,8 @@ def info_apps_en() -> str:
     """English mirror of `info_apps_pl`."""
     web = settings.gametrace_web_url
     return (
-        f"Web: {web} · Android (APK): {web}/download · Onboarding from "
-        f"scratch: {web}/welcome?onboarding=1.\n"
+        f"Web: {web} · Android (APK): {web}/download · About GameTrace: "
+        f"{web}/welcome.\n"
         "One Discord account — the same sessions in your browser and in "
         "the app."
     )
@@ -627,9 +624,9 @@ def panel_info_pl() -> str:
     important = f"**Ważne**\n{_PL_SERVER_CHANNELS} {_PL_EXPIRED_CODE}"
     if not web:
         return f"{what}\n\n{how}\n\n{commands_section}\n\n{important}"
-    wizard = f"👉 Zacznij tutaj: {web}/welcome?onboarding=1 — kreator przeprowadzi Cię krok po kroku."
+    start_line = f"👉 Więcej o GameTrace: {web}/welcome"
     apps = f"**Aplikacje**\n{info_apps_pl()}"
-    return f"{what}\n\n{wizard}\n\n{how}\n\n{apps}\n\n{commands_section}\n\n{important}"
+    return f"{what}\n\n{start_line}\n\n{how}\n\n{apps}\n\n{commands_section}\n\n{important}"
 
 
 def panel_info_en() -> str:
@@ -646,9 +643,9 @@ def panel_info_en() -> str:
     important = f"**Important**\n{_EN_SERVER_CHANNELS} {_EN_EXPIRED_CODE}"
     if not web:
         return f"{what}\n\n{how}\n\n{commands_section}\n\n{important}"
-    wizard = f"👉 Start here: {web}/welcome?onboarding=1 — the wizard walks you through it step by step."
+    start_line = f"👉 More about GameTrace: {web}/welcome"
     apps = f"**Apps**\n{info_apps_en()}"
-    return f"{what}\n\n{wizard}\n\n{how}\n\n{apps}\n\n{commands_section}\n\n{important}"
+    return f"{what}\n\n{start_line}\n\n{how}\n\n{apps}\n\n{commands_section}\n\n{important}"
 
 
 # --- /panel command (admin-only, posts the panel above) -------------------
@@ -722,8 +719,8 @@ def menu_code(code: str, created: bool) -> MenuCard:
         if settings.gametrace_web_url:
             lines.append("")
             lines.append(
-                f"👉 Aplikacja: {settings.gametrace_web_url}/welcome?onboarding=1 — kreator "
-                f"przeprowadzi Cię krok po kroku."
+                f"👉 Aplikacja: {settings.gametrace_web_url}/login — wpisz tam ten kod "
+                f"albo zaloguj się przez Discorda."
             )
     return MenuCard(
         title="Kod logowania",

@@ -33,7 +33,7 @@ def test_first_login_keeps_the_welcome_and_the_wizard_line(monkeypatch):
     assert card.caption == "Ważny 5 minut"
     assert card.body.startswith("# 482 913\n-# Wpisz go w aplikacji.")
     assert "Co dalej" in card.body
-    assert "https://gt.example/welcome?onboarding=1" in card.body
+    assert "https://gt.example/login" in card.body
 
 
 def test_unconfigured_code_is_the_constant_and_paints_red():
