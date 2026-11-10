@@ -158,7 +158,7 @@ def test_panel_info_includes_web_links_when_configured(monkeypatch, info_fn):
     monkeypatch.setattr(settings, "gametrace_web_url", "https://gametrace.example")
     text = info_fn()
     assert "https://gametrace.example" in text
-    assert "https://gametrace.example/welcome" in text
+    assert "https://gametrace.example/welcome?onboarding=1" in text
     assert "https://gametrace.example/download" in text
 
 
