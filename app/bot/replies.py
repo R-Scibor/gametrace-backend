@@ -247,7 +247,7 @@ def help_reply() -> str:
 
 def register_reply(*, created: bool) -> str:
     """First-time /register gets full orientation; returning users get a
-    terse ack plus a reminder of the panel code next step — not a bare no-op
+    terse ack plus a reminder of the panel code next step, not a bare no-op
     reply, since "already registered" still leaves "now what?" unanswered.
     """
     if not created:
@@ -266,7 +266,7 @@ def register_reply(*, created: bool) -> str:
         "Zarejestrowano w GameTrace! Od teraz bot automatycznie zapisuje "
         "Twoje sesje grania.\n\n"
         "**Co dalej**\n"
-        "1. Kliknij **🔑 Weź kod** w panelu (albo użyj `/login`) — dostaniesz kod widoczny tylko dla Ciebie.\n"
+        "1. Kliknij **🔑 Weź kod** w panelu (albo użyj `/login`). Dostaniesz kod widoczny tylko dla Ciebie.\n"
         "2. Wpisz kod w aplikacji, żeby połączyć konto.\n"
         "3. Graj jak zwykle — sesje pojawią się automatycznie."
     )
@@ -274,7 +274,7 @@ def register_reply(*, created: bool) -> str:
         return intro
     return (
         f"{intro}\n\n"
-        f"👉 Aplikacja: {settings.gametrace_web_url}/login — zaloguj się przez Discorda "
+        f"👉 Aplikacja: {settings.gametrace_web_url}/login. Zaloguj się przez Discorda "
         f"albo kodem z panelu (🔑 Weź kod)."
     )
 
@@ -305,7 +305,7 @@ def login_reply(*, code: str, created: bool) -> str:
         return intro
     return (
         f"{intro}\n\n"
-        f"👉 Aplikacja: {settings.gametrace_web_url}/login — wpisz tam ten kod "
+        f"👉 Aplikacja: {settings.gametrace_web_url}/login. Wpisz tam ten kod "
         f"albo zaloguj się przez Discorda."
     )
 
@@ -570,7 +570,7 @@ def info_apps_pl() -> str:
     """Web / Android lines. Only shown when a web URL is configured."""
     web = settings.gametrace_web_url
     return (
-        f"Web: {web} · Android (APK): {web}/download · O GameTrace: "
+        f"Web: {web}, Android (APK): {web}/download, O GameTrace: "
         f"{web}/welcome.\n"
         "Jedno konto Discord — te same sesje w przeglądarce i w aplikacji."
     )
@@ -600,7 +600,7 @@ def info_apps_en() -> str:
     """English mirror of `info_apps_pl`."""
     web = settings.gametrace_web_url
     return (
-        f"Web: {web} · Android (APK): {web}/download · About GameTrace: "
+        f"Web: {web}, Android (APK): {web}/download, About GameTrace: "
         f"{web}/welcome.\n"
         "One Discord account — the same sessions in your browser and in "
         "the app."
@@ -728,7 +728,7 @@ def menu_code(code: str, created: bool) -> MenuCard:
         if settings.gametrace_web_url:
             lines.append("")
             lines.append(
-                f"👉 Aplikacja: {settings.gametrace_web_url}/login — wpisz tam ten kod "
+                f"👉 Aplikacja: {settings.gametrace_web_url}/login. Wpisz tam ten kod "
                 f"albo zaloguj się przez Discorda."
             )
     return MenuCard(
