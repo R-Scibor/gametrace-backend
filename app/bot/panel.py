@@ -238,17 +238,29 @@ def _saved_language(user: object | None) -> str:
 
 def _button_language(interaction: discord.Interaction) -> str | None:
     message = getattr(interaction, "message", None)
-    rows = getattr(message, "components", None) or []
-    for row in rows:
-        children = getattr(row, "children", None)
+    roots = getattr(message, "components", None) or []
+
+    def language_of(node: object) -> str | None:
+        label = getattr(node, "label", None)
+        if label in _PL_MENU_LABELS:
+            return "pl"
+        if label in _EN_MENU_LABELS:
+            return "en"
+        children = getattr(node, "children", None)
         if children is None:
-            children = getattr(row, "components", None) or []
+            children = getattr(node, "components", None)
+        if not children:
+            return None
         for child in children:
-            label = getattr(child, "label", None)
-            if label in _PL_MENU_LABELS:
-                return "pl"
-            if label in _EN_MENU_LABELS:
-                return "en"
+            found = language_of(child)
+            if found is not None:
+                return found
+        return None
+
+    for node in roots:
+        found = language_of(node)
+        if found is not None:
+            return found
     return None
 
 

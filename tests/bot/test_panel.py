@@ -719,7 +719,12 @@ async def test_menu_failure_for_an_english_user_does_not_paste_the_slash_sentenc
 async def test_open_menu_keeps_polish_labels_when_the_account_is_now_english():
     interaction = _interaction()
     interaction.message.components = [
-        SimpleNamespace(children=[SimpleNamespace(label="🔑 Weź kod")])
+        SimpleNamespace(
+            children=[
+                SimpleNamespace(),
+                SimpleNamespace(children=[SimpleNamespace(label="🔑 Weź kod")]),
+            ]
+        )
     ]
     db = AsyncMock()
     db.get = AsyncMock(return_value=_user("en"))
