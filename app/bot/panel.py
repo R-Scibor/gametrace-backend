@@ -442,6 +442,7 @@ class _PanelRow(ActionRow):
                 user = await db.get(User, discord_id)
 
             # Read-only branch — the account is created only on explicit accept.
+            view: LayoutView
             if user is None:
                 view = NewUserView()
             else:
@@ -579,7 +580,7 @@ async def _menu_action(interaction: discord.Interaction, action: str) -> None:
     if action == "code":
         title = "Kod logowania" if language == "pl" else "Login code"
 
-        async def work() -> replies.MenuCard:
+        async def load_code() -> replies.MenuCard:
             async with AsyncSessionLocal() as db:
                 facts = await commands.issue_login_code_facts(
                     db, get_redis(), discord_id, username
@@ -596,7 +597,7 @@ async def _menu_action(interaction: discord.Interaction, action: str) -> None:
 
         await _guarded_menu(
             interaction, Action.CODE, title,
-            lambda n: replies.code_wait(n, language), work,
+            lambda n: replies.code_wait(n, language), load_code,
             language=language, button_language=buttons,
         )
         return
@@ -604,7 +605,7 @@ async def _menu_action(interaction: discord.Interaction, action: str) -> None:
     if action == "stats":
         title = "Statystyki" if language == "pl" else "Stats"
 
-        async def work() -> replies.MenuCard:
+        async def load_stats() -> replies.MenuCard:
             async with AsyncSessionLocal() as db:
                 facts = await commands.stats_facts(db, discord_id)
             if facts.raw_failure:
@@ -619,7 +620,7 @@ async def _menu_action(interaction: discord.Interaction, action: str) -> None:
 
         await _guarded_menu(
             interaction, Action.STATS, title,
-            lambda n: replies.action_wait(n, language), work,
+            lambda n: replies.action_wait(n, language), load_stats,
             language=language, button_language=buttons,
         )
         return
@@ -627,7 +628,7 @@ async def _menu_action(interaction: discord.Interaction, action: str) -> None:
     if action == "recent":
         title = "Ostatnie sesje" if language == "pl" else "Recent sessions"
 
-        async def work() -> replies.MenuCard:
+        async def load_recent() -> replies.MenuCard:
             async with AsyncSessionLocal() as db:
                 facts = await commands.recent_facts(db, discord_id)
             if facts.raw_failure:
@@ -640,14 +641,14 @@ async def _menu_action(interaction: discord.Interaction, action: str) -> None:
 
         await _guarded_menu(
             interaction, Action.RECENT, title,
-            lambda n: replies.action_wait(n, language), work,
+            lambda n: replies.action_wait(n, language), load_recent,
             language=language, button_language=buttons,
         )
         return
 
     title = "Wylogowano" if language == "pl" else "Logged out"
 
-    async def work() -> replies.MenuCard:
+    async def load_logout() -> replies.MenuCard:
         async with AsyncSessionLocal() as db:
             facts = await commands.logout_user_facts(db, get_redis(), discord_id)
         if facts.unregistered:
@@ -656,7 +657,7 @@ async def _menu_action(interaction: discord.Interaction, action: str) -> None:
 
     await _guarded_menu(
         interaction, Action.LOGOUT, title,
-        lambda n: replies.action_wait(n, language), work,
+        lambda n: replies.action_wait(n, language), load_logout,
         language=language, button_language=buttons,
     )
 
