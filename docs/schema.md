@@ -15,6 +15,7 @@ The root identity table. Keyed on Discord ID (a snowflake — string, not intege
 | `discord_id` | `VARCHAR(32)` | Primary key |
 | `username` | `VARCHAR(100)` | Indexed, **not** unique. Display-only — identity is `discord_id`. Synced from Discord on every `/login`, and Discord names are renameable by their owner, so two rows can legitimately hold the same name (see migration `0021`). |
 | `timezone` | `VARCHAR(64)` | IANA tz name. Default `UTC`. Updated on mobile login from device OS, or manually via `PUT /profile/settings`. |
+| `language` | `VARCHAR(8)` | Not null. `pl` or `en`. Default `en` (migration `0025`). Existing rows keep the value they had. The private Discord panel and the mobile client both read it. |
 | `weekly_report_enabled` | `BOOLEAN` | Default `true`. Gates the weekly Celery push. |
 | `push_enabled` | `BOOLEAN` | Default `true`. Master switch for any push notification. |
 | `is_admin` | `BOOLEAN` | Default `false`. Gates admin-only endpoints. Not settable via API — operators promote users manually. |

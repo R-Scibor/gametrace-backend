@@ -116,24 +116,27 @@ Re-running `/panel` posts an **additional** panel; it does not replace or invali
 
 | Button | Where | Does |
 |---|---|---|
-| `▶ START` | `PanelView` (public panel) | Looks up the clicker in `users` (read-only). No account → opens the `NewUserView` disclosure, ephemeral. Existing account → opens the `MemberView` menu, ephemeral. |
+| `▶ START` | `PanelView` (public panel) | Looks up the clicker in `users` (read-only). No account → opens the English `NewUserView` disclosure, ephemeral. Existing account → opens the `MemberView` menu in `users.language` (`pl`, otherwise English), ephemeral. |
 | `🇵🇱 Co to jest?` (`gt:panel:help`) | `PanelView` (public panel) | Polish orientation screen (`replies.panel_info_pl()`), ephemeral. No I/O. Kept on `gt:panel:help` deliberately — panels already posted to the live server carry a button with that exact `custom_id`, so keeping the id (rather than minting a new one for the Polish screen) means those existing panels keep working after this deploy. |
 | `🇬🇧 What is it?` (`gt:panel:help:en`) | `PanelView` (public panel) | English mirror (`replies.panel_info_en()`), ephemeral. No I/O. New `custom_id` — only this button is new. |
-| `✓ Akceptuję i zakładam konto` | `NewUserView` (ephemeral disclosure) | Calls `commands.register_user`, then **edits the same message** into a `MemberView` — the disclosure becomes the member menu in place, not a second message. |
-| `🔑 Weź kod` | `MemberView` (ephemeral menu) | Issues a login code via `commands.issue_login_code`, same semantics as `/login`'s code step. |
-| `📊 Statystyki` | `MemberView` (ephemeral menu) | Same as `/stats`, via `commands.stats_command`. |
-| `🕒 Ostatnie` | `MemberView` (ephemeral menu) | Same as `/recent`, via `commands.recent_command`. |
-| `🚪 Wyloguj` | `MemberView` (ephemeral menu) | Same as `/logout`, via `commands.logout_user`. |
+| `✓ I agree and create my account` (`gt:new:accept:en`) | `NewUserView` | Creates the account with `language='en'`, then edits that message into the member menu. |
+| `🇵🇱 Polski` (`gt:new:lang:pl`) | `NewUserView` | Edits the same message into `NewUserPolishView`. No database write. |
+| `✓ Akceptuję i zakładam konto` (`gt:new:accept`) | `NewUserPolishView` | Creates the account with `language='pl'`, then edits that message into the member menu. This id is the one an already-open Polish disclosure has. |
+| `🇬🇧 English` (`gt:new:lang:en`) | `NewUserPolishView` | Edits the same message back into `NewUserView`. No database write. |
+| `🔑 Weź kod` / `🔑 Get a code` | `MemberView` | Same login-code facts as `/login`. The label follows the menu language. The id stays `gt:menu:code`. |
+| `📊 Statystyki` / `📊 Stats` | `MemberView` | Same facts as `/stats`. Id `gt:menu:stats`. |
+| `🕒 Ostatnie` / `🕒 Recent` | `MemberView` | Same facts as `/recent`. Id `gt:menu:recent`. |
+| `🚪 Wyloguj` / `🚪 Log out` | `MemberView` | Same facts as `/logout`. Id `gt:menu:logout`. |
 
-`/login` and **Weź kod** share a 30-second clock. **Statystyki**, **Ostatnie**, and **Wyloguj** each have a 5-second clock, shared with the matching slash command. A repeat press shows the remaining seconds and does not do the work. Eight of those second Discord calls may be in flight. The ninth gets "Za dużo próśb naraz." A menu refusal edits the same private card. It does not open another message.
+`/login` and the code button share a 30-second clock. Stats, recent, and logout each have a 5-second clock, shared with the matching slash command. A repeat press shows the remaining seconds and does not do the work. Eight of those second Discord calls may be in flight. The ninth gets the busy line. On an English menu that line is "Too many requests at once. Try again in a moment." Slash commands and the **▶ START** cap stay "Za dużo próśb naraz. Spróbuj ponownie za chwilę." A menu refusal edits the same private card. It does not open another message.
 
-All three views (`PanelView`, `NewUserView`, `MemberView`) are stateless — instantiated once with no arguments and shared by every clicker, so any per-user data is read only from the interaction, never stored on the view.
+`PanelView`, `NewUserView`, `NewUserPolishView`, and `MemberView` each construct with no arguments and are registered once. The disclosure views carry their language in the button id. The member menu that gets sent is a separate `MemberView` built for that clicker's saved language. A later click reads `users.language` again for the card text. Button labels stay as they were on that message until the next **▶ START**.
 
 ### Persistence across restarts
 
-`on_ready` registers every class in `panel.PERSISTENT_VIEWS` (`PanelView`, `NewUserView`, `MemberView`) via `bot.add_view(cls())`, so their `custom_id`s keep dispatching after a bot restart without needing the original message. Because `on_ready` re-fires on every gateway reconnect (not just process start), registration is guarded by a module-level flag in `app/bot/main.py` — the same pattern `_heartbeat_loop.is_running()` uses to guard the heartbeat loop — so repeated reconnects don't re-register the same views.
+`on_ready` registers every class in `panel.PERSISTENT_VIEWS` (`PanelView`, `NewUserView`, `NewUserPolishView`, `MemberView`) via `bot.add_view(cls())`, so their `custom_id`s keep dispatching after a bot restart without needing the original message. Because `on_ready` re-fires on every gateway reconnect (not just process start), registration is guarded by a module-level flag in `app/bot/main.py` — the same pattern `_heartbeat_loop.is_running()` uses to guard the heartbeat loop — so repeated reconnects don't re-register the same views.
 
-**One owner per `custom_id`.** discord.py dispatches persistent components by `(component_type, custom_id)` in a single bucket, so if the same pair were ever registered on two views, the second registration would silently steal the first's callback. This is why `gt:menu:*` lives on `MemberView` alone — the accept path reaches it by editing the disclosure message into a `MemberView`, never by duplicating the button onto `NewUserView`.
+**One owner per `custom_id`.** discord.py dispatches persistent components by `(component_type, custom_id)` in a single bucket, so if the same pair were ever registered on two views, the second registration would silently steal the first's callback. This is why `gt:menu:*` lives on `MemberView` alone — the accept path reaches it by editing the disclosure message into a `MemberView`, never by duplicating the button onto `NewUserView` or `NewUserPolishView`.
 
 ### Setting up a locked onboarding channel
 
