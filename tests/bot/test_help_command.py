@@ -39,3 +39,14 @@ def test_help_lists_every_command(monkeypatch):
 
     for command in ("/register", "/login", "/logout", "/stats", "/recent", "/help"):
         assert command in msg
+
+
+def test_help_and_not_registered_mention_start(monkeypatch):
+    from app.bot import replies
+
+    for web_url in ("", "https://gametrace.example"):
+        monkeypatch.setattr(settings, "gametrace_web_url", web_url)
+        assert "▶ START" in help_command()
+        assert "▶ START" in replies.help_reply()
+
+    assert "▶ START" in replies.NOT_REGISTERED

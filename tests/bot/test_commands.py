@@ -54,6 +54,7 @@ async def test_register_first_time_includes_orientation(db):
     msg = await register_user(db, _DISCORD_ID, _USERNAME)
 
     assert "Zarejestrowano w GameTrace!" in msg
+    assert "🔑 Weź kod" in msg
     assert "/login" in msg
 
 
@@ -63,6 +64,7 @@ async def test_register_first_time_includes_web_hint_when_configured(db, monkeyp
     msg = await register_user(db, _DISCORD_ID, _USERNAME)
 
     assert "https://gametrace.example" in msg
+    assert "albo kodem z panelu (🔑 Weź kod)" in msg
 
 
 async def test_register_creates_user_with_default_timezone(db):
@@ -80,6 +82,7 @@ async def test_register_syncs_username(db):
     user = await db.get(User, _DISCORD_ID)
     assert user.username == "newname"
     assert msg.startswith("Jesteś już zarejestrowany.")
+    assert "🔑 Weź kod" in msg
     assert "/login" in msg
     assert "nazwą Discord" not in msg
 
