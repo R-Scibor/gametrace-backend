@@ -14,11 +14,17 @@ from app.services.account_deletion import days_left as _days_left
 logger = logging.getLogger(__name__)
 
 
-async def _upsert_user(db, discord_id: str, username: str) -> bool:
-    """Create or sync username. Returns True if a new user was created."""
+async def _upsert_user(db, discord_id: str, username: str, language: str | None = None) -> bool:
+    """Create or sync username. Returns True if a new user was created.
+
+    `language` is written only on insert, and only when it is `pl` or `en`.
+    A later call must not change `users.language`.
+    """
     user = await db.get(User, discord_id)
     if user is None:
         user = User(discord_id=discord_id, username=username, timezone=settings.default_timezone)
+        if language in {"pl", "en"}:
+            user.language = language
         db.add(user)
         await db.commit()
         return True
@@ -62,11 +68,11 @@ class RecentFacts:
     raw_failure: str | None = None
 
 
-async def register_user(db, discord_id: str, username: str) -> str:
+async def register_user(db, discord_id: str, username: str, language: str | None = None) -> str:
     existing = await db.get(User, discord_id)
     pending_deletion = existing is not None and existing.purge_at is not None
 
-    created = await _upsert_user(db, discord_id, username)
+    created = await _upsert_user(db, discord_id, username, language)
     if created:
         logger.info("New user registered via /register: %s (%s)", username, discord_id)
     else:

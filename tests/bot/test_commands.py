@@ -409,3 +409,23 @@ async def test_recent_facts_success_matches_slash_payload(mock_recent, db):
     assert facts.sessions == sessions
     assert facts.user_timezone == "Europe/Warsaw"
     assert await recent_command(db, _DISCORD_ID) == facts.slash_body
+
+
+async def test_register_without_language_stores_en(db):
+    await register_user(db, _DISCORD_ID, _USERNAME)
+
+    user = await db.get(User, _DISCORD_ID)
+    assert user.language == "en"
+
+
+async def test_register_language_is_set_on_create_and_not_overwritten(db):
+    await register_user(db, _DISCORD_ID, _USERNAME, language="pl")
+
+    user = await db.get(User, _DISCORD_ID)
+    assert user.language == "pl"
+
+    await register_user(db, _DISCORD_ID, "renamed", language="en")
+
+    user = await db.get(User, _DISCORD_ID)
+    assert user.language == "pl"
+    assert user.username == "renamed"
