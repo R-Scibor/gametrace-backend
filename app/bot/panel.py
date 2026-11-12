@@ -50,7 +50,6 @@ logger = logging.getLogger(__name__)
 # `main.py` gives `/help`.
 BRAND_TITLE = "GameTrace"
 DISCLOSURE_TITLE = replies.PANEL_TITLE
-REGISTERED_TITLE = "Rejestracja"
 
 
 def _panel_container(title: str, body: str, row: ActionRow) -> Container:
@@ -376,34 +375,96 @@ class _PanelRow(ActionRow):
         await _open_info(interaction, "en")
 
 
-class _NewUserRow(ActionRow):
-    """The single consent button shown before an account exists."""
-
-    @discord.ui.button(
-        label="✓ Akceptuję i zakładam konto",
-        custom_id="gt:new:accept",
-        style=discord.ButtonStyle.success,
-    )
-    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        discord_id = str(interaction.user.id)
-        username = interaction.user.name
-
-        async with AsyncSessionLocal() as db:
-            await commands.register_user(db, discord_id, username)
-        await membership.refresh_user(get_redis(), interaction.client, discord_id)
-
-        # `edit_message` IS the interaction response, so this path must not
-        # defer. The disclosure becomes the member menu in place — one
-        # message transformed, not a second one sent.
-        await interaction.response.edit_message(
-            view=MemberView(
-                card=replies.MenuCard(
-                    title=REGISTERED_TITLE,
-                    caption=None,
-                    body=replies.panel_register_confirmation(),
-                    accent_body="",
-                )
+class _AcceptButton(discord.ui.Button):
+    def __init__(self, *, language: str) -> None:
+        if language == "pl":
+            super().__init__(
+                label="✓ Akceptuję i zakładam konto",
+                custom_id="gt:new:accept",
+                style=discord.ButtonStyle.success,
             )
+        else:
+            super().__init__(
+                label="✓ I agree and create my account",
+                custom_id="gt:new:accept:en",
+                style=discord.ButtonStyle.success,
+            )
+        self._language = language
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _accept_disclosure(interaction, self._language)
+
+
+class _SwitchButton(discord.ui.Button):
+    """Shown on one disclosure. The id is the language this press opens."""
+
+    def __init__(self, *, target: str) -> None:
+        if target == "pl":
+            super().__init__(
+                label="🇵🇱 Polski",
+                custom_id="gt:new:lang:pl",
+                style=discord.ButtonStyle.secondary,
+            )
+        else:
+            super().__init__(
+                label="🇬🇧 English",
+                custom_id="gt:new:lang:en",
+                style=discord.ButtonStyle.secondary,
+            )
+        self._target = target
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = NewUserPolishView() if self._target == "pl" else NewUserView()
+        await interaction.response.edit_message(view=view)
+
+
+def _disclosure_row(language: str) -> ActionRow:
+    row: ActionRow = ActionRow()
+    row.add_item(_AcceptButton(language=language))
+    row.add_item(_SwitchButton(target="pl" if language == "en" else "en"))
+    return row
+
+
+async def _accept_disclosure(interaction: discord.Interaction, language: str) -> None:
+    discord_id = str(interaction.user.id)
+    username = interaction.user.name
+
+    async with AsyncSessionLocal() as db:
+        await commands.register_user(db, discord_id, username, language=language)
+        user = await db.get(User, discord_id)
+    await membership.refresh_user(get_redis(), interaction.client, discord_id)
+
+    saved = user.language if user is not None and user.language == "pl" else "en"
+    await interaction.response.edit_message(
+        view=MemberView(
+            language=saved,
+            card=replies.MenuCard(
+                title=replies.registered_title(saved),
+                caption=None,
+                body=replies.panel_register_confirmation(saved),
+                accent_body="",
+            ),
+        )
+    )
+
+
+class NewUserView(LayoutView):
+    """English disclosure. This is what ▶ START sends when no account exists."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            _panel_container(DISCLOSURE_TITLE, replies.panel_disclosure_en(), _disclosure_row("en"))
+        )
+
+
+class NewUserPolishView(LayoutView):
+    """Polish disclosure. Owns the original gt:new:accept id."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            _panel_container(DISCLOSURE_TITLE, replies.panel_disclosure(), _disclosure_row("pl"))
         )
 
 
@@ -511,16 +572,6 @@ class PanelView(LayoutView):
         self.add_item(container)
 
 
-class NewUserView(LayoutView):
-    """Ephemeral disclosure shown to someone with no account yet."""
-
-    def __init__(self) -> None:
-        super().__init__(timeout=None)
-        self.add_item(
-            _panel_container(DISCLOSURE_TITLE, replies.panel_disclosure(), _NewUserRow())
-        )
-
-
 class MemberView(LayoutView):
     """Ephemeral menu for a registered user.
 
@@ -535,13 +586,15 @@ class MemberView(LayoutView):
         *,
         card: replies.MenuCard | None = None,
         buttons_disabled: bool = False,
+        language: str = "en",
     ) -> None:
         super().__init__(timeout=None)
+        self._language = "pl" if language == "pl" else "en"
         if card is None:
             card = replies.MenuCard(
                 title=BRAND_TITLE,
-                caption="Konto połączone",
-                body=replies.panel_member_menu(),
+                caption=replies.member_menu_caption(self._language),
+                body=replies.panel_member_menu(self._language),
                 accent_body="",
             )
         rendered = _menu_card_view(card, disabled=buttons_disabled)
@@ -555,5 +608,6 @@ class MemberView(LayoutView):
 PERSISTENT_VIEWS: tuple[type[discord.ui.LayoutView], ...] = (
     PanelView,
     NewUserView,
+    NewUserPolishView,
     MemberView,
 )

@@ -120,6 +120,9 @@ def test_custom_ids_are_unique_across_every_persistent_view():
         "gt:panel:help",
         "gt:panel:help:en",
         "gt:new:accept",
+        "gt:new:accept:en",
+        "gt:new:lang:pl",
+        "gt:new:lang:en",
         "gt:menu:code",
         "gt:menu:stats",
         "gt:menu:recent",
@@ -128,9 +131,14 @@ def test_custom_ids_are_unique_across_every_persistent_view():
 
 
 def test_login_code_button_belongs_to_member_view_only():
-    new_user_ids = {getattr(i, "custom_id", None) for i in panel.NewUserView().walk_children()}
-    assert "gt:menu:code" not in new_user_ids
-    assert "gt:new:accept" in new_user_ids
+    english_ids = {getattr(i, "custom_id", None) for i in panel.NewUserView().walk_children()}
+    polish_ids = {getattr(i, "custom_id", None) for i in panel.NewUserPolishView().walk_children()}
+    assert "gt:menu:code" not in english_ids
+    assert "gt:menu:code" not in polish_ids
+    assert "gt:new:accept:en" in english_ids
+    assert "gt:new:accept" in polish_ids
+    assert "gt:new:lang:pl" in english_ids
+    assert "gt:new:lang:en" in polish_ids
 
 
 # --- 6. statelessness ------------------------------------------------------
@@ -174,21 +182,27 @@ def test_panel_view_renders_the_panel_title_and_body():
 
 def test_new_user_view_stays_on_the_reply_container():
     """Disclosure stays on `_panel_container` / `reply_view`, not the card gaps."""
-    view = panel.NewUserView()
-    gaps = [child for child in view.walk_children() if isinstance(child, Separator)]
-    assert len(gaps) == 1
-    assert gaps[0].visible is True
-    assert gaps[0].spacing == SeparatorSpacing.small
+    for view in (panel.NewUserView(), panel.NewUserPolishView()):
+        gaps = [child for child in view.walk_children() if isinstance(child, Separator)]
+        assert len(gaps) == 1
+        assert gaps[0].visible is True
+        assert gaps[0].spacing == SeparatorSpacing.small
 
 
 def test_member_menu_greets_a_connected_user_instead_of_repeating_the_help_text():
     """A registered user must not be told to click ▶ START to create an
     account, which is what the info screens say."""
-    texts = _texts(panel.MemberView())
+    texts = _texts(panel.MemberView(language="pl"))
     assert replies.panel_member_menu() in texts
     assert "Konto połączone" in texts
     assert replies.panel_info_pl() not in texts
     assert replies.panel_info_en() not in texts
+
+
+def test_zero_arg_member_view_is_english():
+    texts = _texts(panel.MemberView())
+    assert replies.panel_member_menu("en") in texts
+    assert "Account connected" in texts
 
 
 # --- 2. entry branch -------------------------------------------------------
@@ -204,7 +218,7 @@ async def test_start_offers_disclosure_to_an_unknown_user():
 
     view = _sent_view(interaction.followup.send)
     assert isinstance(view, panel.NewUserView)
-    assert replies.panel_disclosure() in _texts(view)
+    assert replies.panel_disclosure_en() in _texts(view)
     assert interaction.followup.send.await_args.kwargs["ephemeral"] is True
 
 
@@ -239,12 +253,13 @@ async def test_start_does_not_create_an_account():
 async def test_accept_registers_then_edits_the_message_into_the_member_menu():
     interaction = _interaction(user_id=77, username="ala")
     db = AsyncMock()
+    db.get = AsyncMock(return_value=SimpleNamespace(language="pl"))
 
     with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
          patch.object(panel.commands, "register_user", new=AsyncMock(return_value="ok")) as register:
-        await _callback(panel.NewUserView(), "gt:new:accept")(interaction)
+        await _callback(panel.NewUserPolishView(), "gt:new:accept")(interaction)
 
-    register.assert_awaited_once_with(db, "77", "ala")
+    register.assert_awaited_once_with(db, "77", "ala", language="pl")
     interaction.followup.send.assert_not_awaited()
     interaction.response.send_message.assert_not_awaited()
 
@@ -259,9 +274,45 @@ async def test_accept_does_not_defer_because_edit_message_is_the_response():
 
     with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
          patch.object(panel.commands, "register_user", new=AsyncMock(return_value="ok")):
-        await _callback(panel.NewUserView(), "gt:new:accept")(interaction)
+        await _callback(panel.NewUserPolishView(), "gt:new:accept")(interaction)
 
     interaction.response.defer.assert_not_awaited()
+
+
+async def test_english_accept_passes_en_and_skips_defer():
+    interaction = _interaction(user_id=77, username="ala")
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=SimpleNamespace(language="en"))
+
+    with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
+         patch.object(panel.commands, "register_user", new=AsyncMock(return_value="ok")) as register, \
+         patch.object(panel.membership, "refresh_user", new=AsyncMock()):
+        await _callback(panel.NewUserView(), "gt:new:accept:en")(interaction)
+
+    register.assert_awaited_once_with(db, "77", "ala", language="en")
+    interaction.response.defer.assert_not_awaited()
+    view = _sent_view(interaction.response.edit_message)
+    assert isinstance(view, panel.MemberView)
+    assert replies.panel_register_confirmation("en") in _texts(view)
+    assert "Registered" in _texts(view)
+
+
+async def test_switch_edits_to_the_other_disclosure_without_registering():
+    interaction = _interaction()
+    with patch.object(panel.commands, "register_user", new=AsyncMock()) as register:
+        await _callback(panel.NewUserView(), "gt:new:lang:pl")(interaction)
+    register.assert_not_awaited()
+    view = _sent_view(interaction.response.edit_message)
+    assert isinstance(view, panel.NewUserPolishView)
+    assert replies.panel_disclosure() in _texts(view)
+
+    interaction = _interaction()
+    with patch.object(panel.commands, "register_user", new=AsyncMock()) as register:
+        await _callback(panel.NewUserPolishView(), "gt:new:lang:en")(interaction)
+    register.assert_not_awaited()
+    view = _sent_view(interaction.response.edit_message)
+    assert isinstance(view, panel.NewUserView)
+    assert replies.panel_disclosure_en() in _texts(view)
 
 
 # --- 4. delegation + 5. deferral ------------------------------------------
