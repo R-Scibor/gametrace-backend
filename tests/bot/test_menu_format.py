@@ -1,8 +1,12 @@
 from app.bot.replies import (
     LINK_CODES_UNCONFIGURED,
     MENU_ACTION_FAILED,
+    MENU_ACTION_FAILED_EN,
     NOT_REGISTERED,
     MenuCard,
+    action_wait,
+    code_wait,
+    followup_busy,
     menu_code,
     menu_failed,
     menu_loading,
@@ -181,3 +185,81 @@ def test_loading_and_failure_frames():
 def test_not_registered_menu_text_uses_the_raw_string_for_accent():
     card = menu_text(title="Statystyki", body=NOT_REGISTERED)
     assert card.accent_body == NOT_REGISTERED
+
+
+def test_english_code_card_for_a_new_account(monkeypatch):
+    monkeypatch.setattr("app.bot.replies.settings.gametrace_web_url", "https://gt.example")
+    card = menu_code(code="482 913", created=True, language="en")
+    assert card.title == "Login code"
+    assert card.caption == "Valid for 5 minutes"
+    assert card.body.startswith("# 482 913\n-# Enter it in the app.")
+    assert "https://gt.example/login" in card.body
+    assert "sign in with Discord" in card.body
+
+
+def test_english_quiet_stats_uses_singular_for_one_each():
+    card = menu_stats(
+        total_seconds=0,
+        per_game=[],
+        pending_errors_count=1,
+        review_count=1,
+        language="en",
+    )
+    assert card.title == "Stats"
+    assert card.caption == "Last 7 days"
+    assert "1 session that needs a fix" in card.body
+    assert "1 game is waiting for confirmation" in card.body
+    assert "/stats" not in card.body
+
+
+def test_english_stats_duration_and_plural_counts():
+    card = menu_stats(
+        total_seconds=12 * 3600 + 40 * 60,
+        per_game=[{"game_name": "Hades II", "total_seconds": 6 * 3600 + 10 * 60}],
+        pending_errors_count=3,
+        review_count=0,
+        language="en",
+    )
+    assert card.body.startswith("# 12 h 40 min\n-# Total")
+    assert "Hades II — 6 h 10 min" in card.body
+    assert "You have 3 sessions that need a fix" in card.body
+
+
+def test_english_recent_and_logout():
+    card = menu_recent(
+        sessions=[{
+            "status": "COMPLETED",
+            "game": {"primary_name": "Hades II"},
+            "start_time": "2026-11-07T20:40:00+00:00",
+            "duration_seconds": 7800,
+        }],
+        user_timezone="UTC",
+        language="en",
+    )
+    assert card.title == "Recent sessions"
+    assert "- **Hades II** — 07.11 20:40 (2 h 10 min)" in card.body
+    assert "See more in the app." in card.body
+
+    empty = menu_recent(sessions=[], user_timezone="UTC", language="en")
+    assert "Nothing to show here yet" in empty.body
+    assert "See more" not in empty.body
+
+    logged_out = menu_logout(count=1, language="en")
+    assert logged_out.caption == "App disconnected"
+    assert "-# 1 token" in logged_out.body
+    assert "1 tokens" not in logged_out.body
+
+    missing = menu_logout_unregistered(language="en")
+    assert missing.body == "You are not registered."
+
+
+def test_english_loading_failure_and_waits():
+    assert menu_loading("Stats", language="en") == MenuCard(
+        title="Stats", caption="One moment", body="Loading…", accent_body=""
+    )
+    failed = menu_failed("Stats", language="en")
+    assert failed.body == MENU_ACTION_FAILED_EN
+    assert failed.accent_body == MENU_ACTION_FAILED_EN
+    assert code_wait(12, language="en") == "Wait 12 s before asking for a new code."
+    assert action_wait(4, language="en") == "Wait 4 s before using this again."
+    assert followup_busy(language="en") == "Too many requests at once. Try again in a moment."

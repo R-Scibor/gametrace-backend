@@ -245,3 +245,28 @@ def test_register_reply_web_url_points_to_panel_code(monkeypatch):
     monkeypatch.setattr(settings, "gametrace_web_url", "https://gametrace.example")
     text = replies.register_reply(created=True)
     assert "albo kodem z panelu (🔑 Weź kod)" in text
+
+
+def test_english_disclosure_names_recorded_fields():
+    text = replies.panel_disclosure_en().lower()
+    assert "game name" in text
+    assert "start and end time" in text
+    assert "nothing else" in text
+    assert "✓ i agree and create my account" in text
+
+
+def test_english_disclosure_includes_privacy_link_when_configured(monkeypatch):
+    monkeypatch.setattr(settings, "gametrace_privacy_url", "https://gametrace.example/privacy")
+    text = replies.panel_disclosure_en()
+    assert "https://gametrace.example/privacy" in text
+    assert "Full privacy policy" in text
+
+
+def test_english_member_menu_and_confirmation():
+    assert replies.panel_member_menu("en") == "Hi. What do you want to do?"
+    assert replies.registered_title("en") == "Registered"
+    assert replies.member_menu_caption("en") == "Account connected"
+    text = replies.panel_register_confirmation("en")
+    assert "Account created!" in text
+    assert "🔑 Get a code" in text
+    assert "/login" not in text

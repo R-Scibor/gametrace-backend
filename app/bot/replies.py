@@ -20,19 +20,27 @@ STATS_FAILURE = "Nie udało się pobrać statystyk. Spróbuj ponownie za chwilę
 RECENT_FAILURE = "Nie udało się pobrać ostatnich sesji. Spróbuj ponownie za chwilę."
 
 LINK_CODES_UNCONFIGURED = "Kody logowania nie są skonfigurowane."
+LINK_CODES_UNCONFIGURED_EN = "Login codes are not configured."
 
 MENU_ACTION_FAILED = "Nie udało się. Spróbuj ponownie za chwilę."
+MENU_ACTION_FAILED_EN = "That didn't work. Try again in a moment."
 
 
-def code_wait(n: int) -> str:
+def code_wait(n: int, language: str = "pl") -> str:
+    if language == "en":
+        return f"Wait {n} s before asking for a new code."
     return f"Poczekaj jeszcze {n} s, zanim poprosisz o nowy kod."
 
 
-def action_wait(n: int) -> str:
+def action_wait(n: int, language: str = "pl") -> str:
+    if language == "en":
+        return f"Wait {n} s before using this again."
     return f"Poczekaj jeszcze {n} s, zanim użyjesz tego ponownie."
 
 
-def followup_busy() -> str:
+def followup_busy(language: str = "pl") -> str:
+    if language == "en":
+        return "Too many requests at once. Try again in a moment."
     return "Za dużo próśb naraz. Spróbuj ponownie za chwilę."
 
 
@@ -47,9 +55,15 @@ def _web_hint() -> str:
     return f" {settings.gametrace_web_url}" if settings.gametrace_web_url else ""
 
 
-def _format_duration(total_seconds: int) -> str:
+def _format_duration(total_seconds: int, language: str = "pl") -> str:
     hours = total_seconds // 3600
     minutes = (total_seconds % 3600) // 60
+    if language == "en":
+        if hours and minutes:
+            return f"{hours} h {minutes} min"
+        if hours:
+            return f"{hours} h"
+        return f"{minutes} min"
     if hours and minutes:
         return f"{hours} godz. {minutes} min"
     if hours:
@@ -154,18 +168,18 @@ def _parse_iso(value: str | None) -> datetime | None:
         return None
 
 
-def _format_session_line(entry: dict, tz: ZoneInfo) -> str:
+def _format_session_line(entry: dict, tz: ZoneInfo, language: str = "pl") -> str:
     game_name = (entry.get("game") or {}).get("primary_name", "?")
     start = _parse_iso(entry.get("start_time"))
     time_str = start.astimezone(tz).strftime("%d.%m %H:%M") if start else "?"
 
     duration_seconds = entry.get("duration_seconds")
     if duration_seconds is not None:
-        detail = _format_duration(duration_seconds)
+        detail = _format_duration(duration_seconds, language)
     elif entry.get("status") == "ERROR":
-        detail = "błąd, brak czasu trwania"
+        detail = "error, no duration" if language == "en" else "błąd, brak czasu trwania"
     else:
-        detail = "brak czasu trwania"
+        detail = "no duration" if language == "en" else "brak czasu trwania"
 
     return f"- **{game_name}** — {time_str} ({detail})"
 
@@ -434,9 +448,27 @@ def panel_disclosure() -> str:
     )
 
 
-def panel_register_confirmation() -> str:
+def panel_disclosure_en() -> str:
+    privacy = settings.gametrace_privacy_url
+    privacy_line = f"\nFull privacy policy: {privacy}\n" if privacy else ""
+    return (
+        "Before you create an account, here is what a session is:\n\n"
+        "While you play, GameTrace saves the **game name** and the session's "
+        "**start and end time**. Nothing else. No message content, no "
+        f"screenshots.\n{privacy_line}\n"
+        "Click **✓ I agree and create my account** to continue."
+    )
+
+
+def panel_register_confirmation(language: str = "pl") -> str:
     """Shown right after the panel creates the account — points at the
     button that gets the login code, not at typing /login."""
+    if language == "en":
+        return (
+            "Account created! From now on the bot records your play sessions "
+            "automatically.\n\n"
+            "Click **🔑 Get a code** to get a code and connect the account to the app."
+        )
     return (
         "Konto założone! Od teraz bot automatycznie zapisuje Twoje sesje "
         "grania.\n\n"
@@ -444,7 +476,15 @@ def panel_register_confirmation() -> str:
     )
 
 
-def panel_member_menu() -> str:
+def registered_title(language: str = "pl") -> str:
+    return "Registered" if language == "en" else "Rejestracja"
+
+
+def member_menu_caption(language: str = "pl") -> str:
+    return "Account connected" if language == "en" else "Konto połączone"
+
+
+def panel_member_menu(language: str = "pl") -> str:
     """Body of the ephemeral menu an already-registered user opens from the
     panel. Deliberately tiny: the buttons underneath are the content, and
     every extra sentence pushes them further from the eye.
@@ -453,6 +493,8 @@ def panel_member_menu() -> str:
     this) and must not instruct any slash command — the panel exists exactly
     where slash commands are unreachable.
     """
+    if language == "en":
+        return "Hi. What do you want to do?"
     return "Cześć. Co chcesz zrobić?"
 
 
@@ -699,11 +741,20 @@ def menu_text(title: str, body: str) -> MenuCard:
     return MenuCard(title=title, caption=None, body=body, accent_body=body)
 
 
-def menu_loading(title: str) -> MenuCard:
+def menu_loading(title: str, language: str = "pl") -> MenuCard:
+    if language == "en":
+        return MenuCard(title=title, caption="One moment", body="Loading…", accent_body="")
     return MenuCard(title=title, caption="Chwila", body="Pobieram…", accent_body="")
 
 
-def menu_failed(title: str) -> MenuCard:
+def menu_failed(title: str, language: str = "pl") -> MenuCard:
+    if language == "en":
+        return MenuCard(
+            title=title,
+            caption=None,
+            body=MENU_ACTION_FAILED_EN,
+            accent_body=MENU_ACTION_FAILED_EN,
+        )
     return MenuCard(
         title=title,
         caption=None,
@@ -712,7 +763,46 @@ def menu_failed(title: str) -> MenuCard:
     )
 
 
-def menu_code(code: str, created: bool) -> MenuCard:
+def _en_sessions(count: int) -> str:
+    if count == 1:
+        return "1 session that needs a fix. Fix it in the app."
+    return f"{count} sessions that need a fix. Fix them in the app."
+
+
+def _en_games(count: int, *, quiet: bool) -> str:
+    if count == 1:
+        tail = ", so it isn't counted here either." if quiet else "."
+        return f"1 game is waiting for confirmation in the app{tail}"
+    tail = ", so they aren't counted here either." if quiet else "."
+    return f"{count} games are waiting for confirmation in the app{tail}"
+
+
+def menu_code(code: str, created: bool, language: str = "pl") -> MenuCard:
+    if language == "en":
+        lines = [f"# {code}", "-# Enter it in the app."]
+        if settings.gametrace_web_url:
+            lines.append(settings.gametrace_web_url)
+        if created:
+            lines.append("")
+            lines.append(
+                "Welcome to GameTrace! You didn't have an account yet, so this one was just created."
+            )
+            lines.append("")
+            lines.append("**What next**")
+            lines.append("1. Enter the code in the app or on the website to connect the account.")
+            lines.append("2. Play as usual on Discord. Sessions start recording on their own.")
+            if settings.gametrace_web_url:
+                lines.append("")
+                lines.append(
+                    f"👉 App: {settings.gametrace_web_url}/login. Enter this code there, "
+                    "or sign in with Discord."
+                )
+        return MenuCard(
+            title="Login code",
+            caption="Valid for 5 minutes",
+            body="\n".join(lines),
+            accent_body="",
+        )
     lines = [f"# {code}", "-# Wpisz go w aplikacji."]
     if settings.gametrace_web_url:
         lines.append(settings.gametrace_web_url)
@@ -744,7 +834,35 @@ def menu_stats(
     per_game: list[dict],
     pending_errors_count: int,
     review_count: int,
+    language: str = "pl",
 ) -> MenuCard:
+    if language == "en":
+        quiet = total_seconds <= 0 or not per_game
+        if quiet:
+            parts = [
+                "I don't have any sessions from the last 7 days yet, but I'm "
+                "already watching. Play anything and your time will start showing up here."
+            ]
+        else:
+            game_lines = [
+                f"- {entry['game_name']} — {_format_duration(entry['total_seconds'], language='en')}"
+                for entry in per_game[:3]
+            ]
+            parts = [
+                f"# {_format_duration(total_seconds, language='en')}\n-# Total\n\n"
+                "**Most played**\n" + "\n".join(game_lines)
+            ]
+        if pending_errors_count > 0:
+            lead = "You also have" if quiet else "You have"
+            parts.append(f"{lead} {_en_sessions(pending_errors_count)}{_web_hint()}")
+        if review_count > 0:
+            parts.append(f"{_en_games(review_count, quiet=quiet)}{_web_hint()}")
+        return MenuCard(
+            title="Stats",
+            caption="Last 7 days",
+            body="\n\n".join(parts),
+            accent_body="",
+        )
     quiet = total_seconds <= 0 or not per_game
     if quiet:
         parts = [_STATS_QUIET_PROMISE]
@@ -772,13 +890,34 @@ def menu_stats(
     )
 
 
-def menu_recent(sessions: list[dict], user_timezone: str | None) -> MenuCard:
+def menu_recent(
+    sessions: list[dict], user_timezone: str | None, language: str = "pl"
+) -> MenuCard:
+    if language == "en":
+        visible = [entry for entry in sessions if entry.get("status") != "ONGOING"]
+        if not visible:
+            body = (
+                "Nothing to show here yet, but I'm already watching. "
+                f"Play anything and it will show up after the session ends.{_web_hint()}"
+            )
+        else:
+            tz = _resolve_tz(user_timezone)
+            lines = [_format_session_line(entry, tz, language="en") for entry in visible[:5]]
+            lines.append("")
+            lines.append(f"See more in the app.{_web_hint()}")
+            body = "\n".join(lines)
+        return MenuCard(
+            title="Recent sessions",
+            caption="Last five",
+            body=body,
+            accent_body="",
+        )
     visible = [entry for entry in sessions if entry.get("status") != "ONGOING"]
     if not visible:
         body = recent_empty()
     else:
         tz = _resolve_tz(user_timezone)
-        lines = [_format_session_line(entry, tz) for entry in visible[:5]]
+        lines = [_format_session_line(entry, tz, language) for entry in visible[:5]]
         lines.append("")
         lines.append(f"Zobacz więcej w aplikacji.{_web_hint()}")
         body = "\n".join(lines)
@@ -790,7 +929,15 @@ def menu_recent(sessions: list[dict], user_timezone: str | None) -> MenuCard:
     )
 
 
-def menu_logout(count: int) -> MenuCard:
+def menu_logout(count: int, language: str = "pl") -> MenuCard:
+    if language == "en":
+        token = "1 token" if count == 1 else f"{count} tokens"
+        return MenuCard(
+            title="Logged out",
+            caption="App disconnected",
+            body=f"Login tokens in the app have been revoked.\n-# {token}",
+            accent_body="",
+        )
     return MenuCard(
         title="Wylogowano",
         caption="Aplikacja odłączona",
@@ -802,7 +949,14 @@ def menu_logout(count: int) -> MenuCard:
     )
 
 
-def menu_logout_unregistered() -> MenuCard:
+def menu_logout_unregistered(language: str = "pl") -> MenuCard:
+    if language == "en":
+        return MenuCard(
+            title="Logged out",
+            caption=None,
+            body="You are not registered.",
+            accent_body="",
+        )
     return MenuCard(
         title="Wylogowano",
         caption=None,

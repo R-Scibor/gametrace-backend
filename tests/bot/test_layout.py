@@ -160,3 +160,8 @@ def test_reply_view_gap_stays_the_default_separator():
 
 def test_menu_action_failed_is_a_red_accent():
     assert accent_for(replies.MENU_ACTION_FAILED) == Accent.FAILURE
+
+
+def test_english_menu_failures_are_red():
+    assert accent_for(replies.LINK_CODES_UNCONFIGURED_EN) == Accent.FAILURE
+    assert accent_for(replies.MENU_ACTION_FAILED_EN) == Accent.FAILURE
