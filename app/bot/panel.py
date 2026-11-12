@@ -384,7 +384,7 @@ async def _guarded_menu(
         await refuse(wait(remaining))
         return
     if not try_acquire_followup():
-        await refuse(replies.followup_busy())
+        await refuse(replies.followup_busy(language))
         return
     acquired = True
     if card_id is not None:

@@ -4,6 +4,7 @@ Guard names are patched on the module that calls them (`app.bot.main` or
 `app.bot.panel`). Patching `app.bot.interaction_guard` alone misses the
 already-imported bindings.
 """
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -243,3 +244,32 @@ async def test_start_busy_sends_an_ephemeral_notice_without_the_menu():
     interaction.response.defer.assert_not_awaited()
     interaction.response.edit_message.assert_not_awaited()
     assert all(getattr(child, "custom_id", None) != "gt:menu:code" for child in view.walk_children())
+
+
+async def test_menu_followup_cap_uses_the_saved_language():
+    cases = (
+        ("en", "Too many requests at once. Try again in a moment.", "Za dużo próśb naraz"),
+        ("pl", "Za dużo próśb naraz. Spróbuj ponownie za chwilę.", None),
+    )
+    for language, expected, forbidden in cases:
+        interaction = _interaction()
+        panel._menu_inflight.discard(77)
+        db = AsyncMock()
+        db.get = AsyncMock(return_value=SimpleNamespace(language=language))
+        facts = AsyncMock(return_value=commands.LoginCodeFacts(False, False, "111 222"))
+
+        with patch.object(panel, "cooldown_remaining", new=AsyncMock(return_value=None), create=True), \
+             patch.object(panel, "try_acquire_followup", return_value=False, create=True), \
+             patch.object(panel, "get_redis", return_value="redis"), \
+             patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
+             patch.object(panel.commands, "issue_login_code_facts", facts), \
+             patch.object(panel.membership, "refresh_user", new=AsyncMock()):
+            await _callback(panel.MemberView(), "gt:menu:code")(interaction)
+
+        facts.assert_not_awaited()
+        interaction.response.defer.assert_not_awaited()
+        view = interaction.response.edit_message.await_args.kwargs["view"]
+        texts = _texts(view)
+        assert expected in texts
+        if forbidden is not None:
+            assert forbidden not in texts
