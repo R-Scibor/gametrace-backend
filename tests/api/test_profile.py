@@ -28,7 +28,7 @@ async def test_get_me_returns_defaults(authed_client, user):
     assert body["weekly_report_enabled"] is True
     assert body["push_enabled"] is True
     assert body["is_admin"] is False
-    assert body["language"] == "pl"
+    assert body["language"] == "en"
 
 
 async def test_put_settings_language_persists(authed_client):
@@ -104,7 +104,7 @@ async def test_put_settings_invalid_timezone_rejected(authed_client):
     ("field", "stored_key", "stored"),
     [
         ("timezone", "timezone", "UTC"),
-        ("language", "language", "pl"),
+        ("language", "language", "en"),
         ("weekly_report_enabled", "weekly_report_enabled", True),
         ("push_enabled", "push_enabled", True),
     ],

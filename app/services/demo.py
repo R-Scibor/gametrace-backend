@@ -6,7 +6,7 @@ from app.core.config import settings
 DEMO_DISCORD_ID = "1"
 DEMO_USERNAME = "GameTrace Reviewer"
 DEMO_TIMEZONE = "Europe/Warsaw"  # matches default_timezone
-DEMO_LANGUAGE = "en"  # Play review instructions are English; model default is pl
+DEMO_LANGUAGE = "en"  # Play review instructions are English; model default is en
 DEMO_MAX_TOKENS = 5
 
 

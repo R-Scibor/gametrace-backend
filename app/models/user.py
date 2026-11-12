@@ -17,7 +17,7 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(100), index=True)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC", server_default="UTC")
     language: Mapped[str] = mapped_column(
-        String(8), default="pl", server_default="pl", nullable=False
+        String(8), default="en", server_default="en", nullable=False
     )
     weekly_report_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true", nullable=False
