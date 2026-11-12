@@ -321,10 +321,10 @@ async def test_switch_edits_to_the_other_disclosure_without_registering():
 @pytest.mark.parametrize(
     "custom_id,handler,title",
     [
-        ("gt:menu:code", "issue_login_code_facts", "Kod logowania"),
-        ("gt:menu:stats", "stats_facts", "Statystyki"),
-        ("gt:menu:recent", "recent_facts", "Ostatnie sesje"),
-        ("gt:menu:logout", "logout_user_facts", "Wylogowano"),
+        ("gt:menu:code", "issue_login_code_facts", "Login code"),
+        ("gt:menu:stats", "stats_facts", "Stats"),
+        ("gt:menu:recent", "recent_facts", "Recent sessions"),
+        ("gt:menu:logout", "logout_user_facts", "Logged out"),
     ],
 )
 async def test_menu_button_edits_loading_then_the_result(custom_id, handler, title):
@@ -353,7 +353,7 @@ async def test_menu_button_edits_loading_then_the_result(custom_id, handler, tit
 
     assert edited_before_handler["value"] == 1
     loading = _sent_view(interaction.response.edit_message)
-    assert "Pobieram…" in _texts(loading)
+    assert "Loading…" in _texts(loading)
     assert f"### {title}" in _texts(loading)
     loading_buttons = [
         item for item in loading.walk_children() if getattr(item, "custom_id", None) == custom_id
@@ -364,15 +364,15 @@ async def test_menu_button_edits_loading_then_the_result(custom_id, handler, tit
     result = interaction.edit_original_response.await_args.kwargs["view"]
     result_texts = _texts(result)
     assert f"### {title}" in result_texts
-    assert "Pobieram…" not in result_texts
+    assert "Loading…" not in result_texts
     if handler == "issue_login_code_facts":
         assert "482 913" in result_texts
     elif handler == "stats_facts":
         assert "Hades II" in result_texts
     elif handler == "recent_facts":
-        assert replies.recent_empty() in result_texts
+        assert "Nothing to show here yet" in result_texts
     else:
-        assert "-# 2 tokenów" in result_texts
+        assert "-# 2 tokens" in result_texts
     result_buttons = [
         item for item in result.walk_children() if getattr(item, "custom_id", None) == custom_id
     ]
@@ -388,7 +388,7 @@ async def test_menu_failure_reenables_after_the_handler_raises():
         await _callback(panel.MemberView(), "gt:menu:stats")(interaction)
 
     failure = interaction.edit_original_response.await_args.kwargs["view"]
-    assert replies.MENU_ACTION_FAILED in _texts(failure)
+    assert replies.MENU_ACTION_FAILED_EN in _texts(failure)
     buttons = [item for item in failure.walk_children() if getattr(item, "custom_id", None) == "gt:menu:stats"]
     assert buttons[0].disabled is False
 
@@ -449,7 +449,7 @@ async def test_unconfigured_code_does_not_refresh_membership():
 
     refresh.assert_not_awaited()
     result = interaction.edit_original_response.await_args.kwargs["view"]
-    assert replies.LINK_CODES_UNCONFIGURED in _texts(result)
+    assert replies.LINK_CODES_UNCONFIGURED_EN in _texts(result)
 
 
 # --- 7. persistent-view registration hygiene -------------------------------
@@ -679,3 +679,61 @@ async def test_returned_message_id_keeps_the_view_and_the_next_click_stops_it(mo
     assert panel._info_views[555] is edited
     assert edited.timeout == 15 * 60
     assert "InfoCardView" not in {cls.__name__ for cls in panel.PERSISTENT_VIEWS}
+
+
+def _user(language: str):
+    return SimpleNamespace(discord_id="4242", language=language)
+
+
+async def test_known_user_opens_the_menu_in_the_saved_language():
+    interaction = _interaction()
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=_user("pl"))
+
+    with patch.object(panel, "AsyncSessionLocal", _session_factory(db)):
+        await _callback(panel.PanelView(), "gt:panel:start")(interaction)
+
+    view = _sent_view(interaction.followup.send)
+    labels = {item.label for item in view.walk_children() if getattr(item, "label", None)}
+    assert "🔑 Weź kod" in labels
+    assert replies.panel_member_menu() in _texts(view)
+
+
+async def test_menu_failure_for_an_english_user_does_not_paste_the_slash_sentence():
+    interaction = _interaction()
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=_user("en"))
+    facts = commands.StatsFacts(slash_body="bad", raw_failure=replies.STATS_FAILURE)
+
+    with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
+         patch.object(panel, "get_redis", return_value="redis"), \
+         patch.object(panel.commands, "stats_facts", new=AsyncMock(return_value=facts)):
+        await _callback(panel.MemberView(), "gt:menu:stats")(interaction)
+
+    result = interaction.edit_original_response.await_args.kwargs["view"]
+    texts = _texts(result)
+    assert "That didn't work. Try again in a moment." in texts
+    assert replies.STATS_FAILURE not in texts
+
+
+async def test_open_menu_keeps_polish_labels_when_the_account_is_now_english():
+    interaction = _interaction()
+    interaction.message.components = [
+        SimpleNamespace(children=[SimpleNamespace(label="🔑 Weź kod")])
+    ]
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=_user("en"))
+
+    with patch.object(panel, "AsyncSessionLocal", _session_factory(db)), \
+         patch.object(panel, "get_redis", return_value="redis"), \
+         patch.object(panel.commands, "issue_login_code_facts", new=AsyncMock(
+             return_value=commands.LoginCodeFacts(unconfigured=False, created=False, code="482 913")
+         )), \
+         patch.object(panel.membership, "refresh_user", new=AsyncMock()):
+        await _callback(panel.MemberView(language="pl"), "gt:menu:code")(interaction)
+
+    result = interaction.edit_original_response.await_args.kwargs["view"]
+    labels = {item.label for item in result.walk_children() if getattr(item, "label", None)}
+    texts = _texts(result)
+    assert "🔑 Weź kod" in labels
+    assert "Enter it in the app." in texts

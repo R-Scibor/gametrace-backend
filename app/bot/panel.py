@@ -228,30 +228,102 @@ async def _edit_info(interaction: discord.Interaction, lang: str, card: str) -> 
         _info_views[message_id] = view
 
 
-def _menu_card_view(card: replies.MenuCard, *, disabled: bool) -> discord.ui.LayoutView:
+_PL_MENU_LABELS = {"🔑 Weź kod", "📊 Statystyki", "🕒 Ostatnie", "🚪 Wyloguj"}
+_EN_MENU_LABELS = {"🔑 Get a code", "📊 Stats", "🕒 Recent", "🚪 Log out"}
+
+
+def _saved_language(user: object | None) -> str:
+    return "pl" if getattr(user, "language", None) == "pl" else "en"
+
+
+def _button_language(interaction: discord.Interaction) -> str | None:
+    message = getattr(interaction, "message", None)
+    rows = getattr(message, "components", None) or []
+    for row in rows:
+        children = getattr(row, "children", None)
+        if children is None:
+            children = getattr(row, "components", None) or []
+        for child in children:
+            label = getattr(child, "label", None)
+            if label in _PL_MENU_LABELS:
+                return "pl"
+            if label in _EN_MENU_LABELS:
+                return "en"
+    return None
+
+
+_MENU_BUTTONS: dict[tuple[str, str], tuple[str, str, discord.ButtonStyle]] = {
+    ("pl", "code"): ("🔑 Weź kod", "gt:menu:code", discord.ButtonStyle.primary),
+    ("pl", "stats"): ("📊 Statystyki", "gt:menu:stats", discord.ButtonStyle.secondary),
+    ("pl", "recent"): ("🕒 Ostatnie", "gt:menu:recent", discord.ButtonStyle.secondary),
+    ("pl", "logout"): ("🚪 Wyloguj", "gt:menu:logout", discord.ButtonStyle.danger),
+    ("en", "code"): ("🔑 Get a code", "gt:menu:code", discord.ButtonStyle.primary),
+    ("en", "stats"): ("📊 Stats", "gt:menu:stats", discord.ButtonStyle.secondary),
+    ("en", "recent"): ("🕒 Recent", "gt:menu:recent", discord.ButtonStyle.secondary),
+    ("en", "logout"): ("🚪 Log out", "gt:menu:logout", discord.ButtonStyle.danger),
+}
+
+
+class _MenuButton(discord.ui.Button):
+    def __init__(self, *, action: str, language: str) -> None:
+        label, custom_id, style = _MENU_BUTTONS[(language, action)]
+        super().__init__(label=label, custom_id=custom_id, style=style)
+        self._action = action
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _menu_action(interaction, self._action)
+
+
+def _member_row(language: str) -> ActionRow:
+    row: ActionRow = ActionRow()
+    for action in ("code", "stats", "recent", "logout"):
+        row.add_item(_MenuButton(action=action, language=language))
+    return row
+
+
+def _menu_card_view(
+    card: replies.MenuCard, *, disabled: bool, button_language: str
+) -> discord.ui.LayoutView:
     # Fresh row every time: card_view sets child.disabled in place.
     return layout.card_view(
         title=card.title,
         caption=card.caption,
         body=card.body,
         accent=layout.accent_for(card.accent_body) if card.accent_body else layout.Accent.BRAND,
-        row=_MemberRow(),
+        row=_member_row(button_language),
         buttons_disabled=disabled,
     )
 
 
-async def _run_menu(interaction, title: str, work) -> None:
+async def _run_menu(
+    interaction,
+    title: str,
+    work,
+    *,
+    language: str,
+    button_language: str,
+) -> None:
     await interaction.response.edit_message(
-        view=_menu_card_view(replies.menu_loading(title), disabled=True)
+        view=_menu_card_view(
+            replies.menu_loading(title, language),
+            disabled=True,
+            button_language=button_language,
+        )
     )
     try:
         card = await work()
-        await interaction.edit_original_response(view=_menu_card_view(card, disabled=False))
+        await interaction.edit_original_response(
+            view=_menu_card_view(card, disabled=False, button_language=button_language)
+        )
     except Exception:
         logger.exception("menu action failed")
         try:
             await interaction.edit_original_response(
-                view=_menu_card_view(replies.menu_failed(title), disabled=False)
+                view=_menu_card_view(
+                    replies.menu_failed(title, language),
+                    disabled=False,
+                    button_language=button_language,
+                )
             )
         except Exception:
             logger.exception("menu failure edit failed")
@@ -263,6 +335,9 @@ async def _guarded_menu(
     title: str,
     wait: Callable[[int], str],
     work: Callable[[], Awaitable[replies.MenuCard]],
+    *,
+    language: str,
+    button_language: str,
 ) -> None:
     """Clock and follow-up cap, then ``_run_menu``.
 
@@ -281,7 +356,11 @@ async def _guarded_menu(
             await interaction.response.defer()
             return
         await interaction.response.edit_message(
-            view=_menu_card_view(replies.menu_text(title, body), disabled=False)
+            view=_menu_card_view(
+                replies.menu_text(title, body),
+                disabled=False,
+                button_language=button_language,
+            )
         )
 
     remaining = await cooldown_remaining(redis, discord_id, action)
@@ -307,7 +386,13 @@ async def _guarded_menu(
                 _menu_inflight.discard(card_id)
             await refuse(wait(lost))
             return
-        await _run_menu(interaction, title, work)
+        await _run_menu(
+            interaction,
+            title,
+            work,
+            language=language,
+            button_language=button_language,
+        )
     finally:
         if acquired:
             release_followup()
@@ -345,7 +430,10 @@ class _PanelRow(ActionRow):
                 user = await db.get(User, discord_id)
 
             # Read-only branch — the account is created only on explicit accept.
-            view = MemberView() if user is not None else NewUserView()
+            if user is None:
+                view = NewUserView()
+            else:
+                view = MemberView(language=_saved_language(user))
             await _send_view(interaction, view)
         finally:
             release_followup()
@@ -468,17 +556,16 @@ class NewUserPolishView(LayoutView):
         )
 
 
-class _MemberRow(ActionRow):
-    """Everything a registered user can do from the panel."""
+async def _menu_action(interaction: discord.Interaction, action: str) -> None:
+    discord_id = str(interaction.user.id)
+    username = interaction.user.name
+    async with AsyncSessionLocal() as db:
+        user = await db.get(User, discord_id)
+    language = _saved_language(user)
+    buttons = _button_language(interaction) or language
 
-    @discord.ui.button(
-        label="🔑 Weź kod",
-        custom_id="gt:menu:code",
-        style=discord.ButtonStyle.primary,
-    )
-    async def code(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        discord_id = str(interaction.user.id)
-        username = interaction.user.name
+    if action == "code":
+        title = "Kod logowania" if language == "pl" else "Login code"
 
         async def work() -> replies.MenuCard:
             async with AsyncSessionLocal() as db:
@@ -486,69 +573,80 @@ class _MemberRow(ActionRow):
                     db, get_redis(), discord_id, username
                 )
             if facts.unconfigured:
-                return replies.menu_text(
-                    title="Kod logowania", body=replies.LINK_CODES_UNCONFIGURED
+                body = (
+                    replies.LINK_CODES_UNCONFIGURED
+                    if language == "pl"
+                    else replies.LINK_CODES_UNCONFIGURED_EN
                 )
+                return replies.menu_text(title=title, body=body)
             await membership.refresh_user(get_redis(), interaction.client, discord_id)
-            return replies.menu_code(code=facts.code, created=facts.created)
+            return replies.menu_code(code=facts.code, created=facts.created, language=language)
 
-        await _guarded_menu(interaction, Action.CODE, "Kod logowania", replies.code_wait, work)
+        await _guarded_menu(
+            interaction, Action.CODE, title,
+            lambda n: replies.code_wait(n, language), work,
+            language=language, button_language=buttons,
+        )
+        return
 
-    @discord.ui.button(
-        label="📊 Statystyki",
-        custom_id="gt:menu:stats",
-        style=discord.ButtonStyle.secondary,
-    )
-    async def stats(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        discord_id = str(interaction.user.id)
+    if action == "stats":
+        title = "Statystyki" if language == "pl" else "Stats"
 
         async def work() -> replies.MenuCard:
             async with AsyncSessionLocal() as db:
                 facts = await commands.stats_facts(db, discord_id)
             if facts.raw_failure:
-                return replies.menu_text(title="Statystyki", body=facts.raw_failure)
+                return replies.menu_failed(title, language)
             return replies.menu_stats(
                 total_seconds=facts.total_seconds,
                 per_game=facts.per_game,
                 pending_errors_count=facts.pending_errors_count,
                 review_count=facts.review_count,
+                language=language,
             )
 
-        await _guarded_menu(interaction, Action.STATS, "Statystyki", replies.action_wait, work)
+        await _guarded_menu(
+            interaction, Action.STATS, title,
+            lambda n: replies.action_wait(n, language), work,
+            language=language, button_language=buttons,
+        )
+        return
 
-    @discord.ui.button(
-        label="🕒 Ostatnie",
-        custom_id="gt:menu:recent",
-        style=discord.ButtonStyle.secondary,
-    )
-    async def recent(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        discord_id = str(interaction.user.id)
+    if action == "recent":
+        title = "Ostatnie sesje" if language == "pl" else "Recent sessions"
 
         async def work() -> replies.MenuCard:
             async with AsyncSessionLocal() as db:
                 facts = await commands.recent_facts(db, discord_id)
             if facts.raw_failure:
-                return replies.menu_text(title="Ostatnie sesje", body=facts.raw_failure)
-            return replies.menu_recent(sessions=facts.sessions, user_timezone=facts.user_timezone)
+                return replies.menu_failed(title, language)
+            return replies.menu_recent(
+                sessions=facts.sessions,
+                user_timezone=facts.user_timezone,
+                language=language,
+            )
 
-        await _guarded_menu(interaction, Action.RECENT, "Ostatnie sesje", replies.action_wait, work)
+        await _guarded_menu(
+            interaction, Action.RECENT, title,
+            lambda n: replies.action_wait(n, language), work,
+            language=language, button_language=buttons,
+        )
+        return
 
-    @discord.ui.button(
-        label="🚪 Wyloguj",
-        custom_id="gt:menu:logout",
-        style=discord.ButtonStyle.danger,
+    title = "Wylogowano" if language == "pl" else "Logged out"
+
+    async def work() -> replies.MenuCard:
+        async with AsyncSessionLocal() as db:
+            facts = await commands.logout_user_facts(db, get_redis(), discord_id)
+        if facts.unregistered:
+            return replies.menu_logout_unregistered(language)
+        return replies.menu_logout(count=facts.count, language=language)
+
+    await _guarded_menu(
+        interaction, Action.LOGOUT, title,
+        lambda n: replies.action_wait(n, language), work,
+        language=language, button_language=buttons,
     )
-    async def logout(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        discord_id = str(interaction.user.id)
-
-        async def work() -> replies.MenuCard:
-            async with AsyncSessionLocal() as db:
-                facts = await commands.logout_user_facts(db, get_redis(), discord_id)
-            if facts.unregistered:
-                return replies.menu_logout_unregistered()
-            return replies.menu_logout(count=facts.count)
-
-        await _guarded_menu(interaction, Action.LOGOUT, "Wylogowano", replies.action_wait, work)
 
 
 class PanelView(LayoutView):
@@ -597,7 +695,9 @@ class MemberView(LayoutView):
                 body=replies.panel_member_menu(self._language),
                 accent_body="",
             )
-        rendered = _menu_card_view(card, disabled=buttons_disabled)
+        rendered = _menu_card_view(
+            card, disabled=buttons_disabled, button_language=self._language
+        )
         container = rendered.children[0]
         rendered.remove_item(container)
         self.add_item(container)

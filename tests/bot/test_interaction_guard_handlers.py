@@ -93,7 +93,7 @@ async def test_menu_code_cooldown_edits_an_enabled_card_when_idle():
     claim.assert_not_awaited()
     acquire.assert_not_called()
     view = interaction.response.edit_message.await_args.kwargs["view"]
-    assert "Poczekaj jeszcze 12 s, zanim poprosisz o nowy kod." in _texts(view)
+    assert "Wait 12 s before asking for a new code." in _texts(view)
     assert "Pobieram…" not in _texts(view)
     buttons = _buttons(view)
     assert any(button.custom_id == "gt:menu:code" for button in buttons)
@@ -143,7 +143,7 @@ async def test_menu_stats_allowed_releases_the_followup_slot():
             await _callback(panel.MemberView(), "gt:menu:stats")(interaction)
 
         loading = interaction.response.edit_message.await_args.kwargs["view"]
-        assert "Pobieram…" in _texts(loading)
+        assert "Loading…" in _texts(loading)
         interaction.edit_original_response.assert_awaited()
         assert all(try_acquire_followup() for _ in range(8)) is True
     finally:
@@ -168,7 +168,7 @@ async def test_lost_claim_releases_the_followup_slot_once():
 
         assert wrapped_release.call_count == 1
         view = interaction.response.edit_message.await_args.kwargs["view"]
-        assert "Poczekaj jeszcze 4 s, zanim użyjesz tego ponownie." in _texts(view)
+        assert "Wait 4 s before using this again." in _texts(view)
         facts.assert_not_awaited()
         assert all(try_acquire_followup() for _ in range(8)) is True
     finally:
