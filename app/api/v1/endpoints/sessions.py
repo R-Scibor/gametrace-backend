@@ -121,7 +121,7 @@ async def _check_overlap(
 @router.get("", response_model=list[SessionResponse])
 async def list_sessions(
     status_filter: list[SessionStatus] | None = Query(default=None, alias="status"),
-    library_only: bool = Query(default=False),
+    library_only: bool = Query(default=True),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
@@ -132,10 +132,11 @@ async def list_sessions(
     "Recents" tile. Excludes soft-deleted rows. Optional `?status=` filter
     accepts multiple values (e.g. `?status=COMPLETED&status=ERROR`).
 
-    `?library_only=true` additionally applies `library_visible_filter()` —
-    the same visibility rules `/stats` uses — hiding sessions on ignored
-    games and unaccepted NEEDS_REVIEW stubs. Defaults to `false` so existing
-    web/mobile consumers are unaffected.
+    `library_only` applies `library_visible_filter()` — the same visibility
+    rules `/stats` uses — hiding sessions on ignored games and unaccepted
+    NEEDS_REVIEW stubs. It defaults to `true`, which is what the Dashboard
+    "Recents" tile relies on. Pass `?library_only=false` to include those
+    sessions.
 
     Also reachable via the bot-service credential (X-Bot-Service-Secret +
     X-Discord-Id) for the Discord bot's read-only /recent command — see
