@@ -574,8 +574,8 @@ def _en_steps(web: str) -> str:
             "1. You need to be a member of this server — the bot only "
             "tracks members of the server it runs on.\n"
             "2. Turn on Activity Status sharing in Discord.\n"
-            "3. Click **▶ START** on the panel above, then **🔑 Weź "
-            "kod** — the bot will reply with a 6-digit code visible only "
+            "3. Click **▶ START** on the panel above, then **🔑 Get a "
+            "code** — the bot will reply with a 6-digit code visible only "
             "to you, valid for 5 minutes.\n"
             "4. Enter that code in the app.\n"
             "5. Play as usual — sessions will show up automatically."
@@ -682,10 +682,8 @@ def panel_info_pl() -> str:
 
 def panel_info_en() -> str:
     """English mirror of `panel_info_pl()`, opened from the **🇬🇧 What is
-    it?** button. Button labels stay in their exact on-screen form
-    (**▶ START**, **🔑 Weź kod**) — `🔑 Weź kod` is still Polish on the
-    button itself, so an English reader needs the literal text to find it,
-    not a translated paraphrase.
+    it?** button. Button labels use their exact English on-screen form
+    (**▶ START**, **🔑 Get a code**).
     """
     web = settings.gametrace_web_url
     what = f"**What is it?**\n{_EN_WHAT}"
