@@ -401,7 +401,7 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
     after_name = after_pair[0] if after_pair is not None else None
     after_application_id = after_pair[1] if after_pair is not None else None
     if before_name == after_name:
-        if after_name is not None:
+        if after_name is not None and after_application_id is not None:
             async with AsyncSessionLocal() as db:
                 await note_application_id(db, after_name, after_application_id)
                 await db.commit()
