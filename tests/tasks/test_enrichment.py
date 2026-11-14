@@ -85,6 +85,8 @@ def _make_mock_session(game: MagicMock) -> MagicMock:
     session.get.return_value = game
     result = MagicMock()
     result.scalar_one_or_none.return_value = game
+    result.all.return_value = []
+    result.scalars.return_value.all.return_value = []
     session.execute = AsyncMock(return_value=result)
     nested = AsyncMock()
     nested.__aenter__ = AsyncMock(return_value=nested)

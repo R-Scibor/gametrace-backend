@@ -109,6 +109,14 @@ Step 5 — Pipeline decision
   The write session then loads the row with SELECT … FOR UPDATE. That load
   is the empty-id check. A bare legacy external_api_id counts as set.
 
+  An alias application id changes the step above. No alias has one: this
+  name pipeline. One does, and external_api_id is already set: return
+  without Discord and without a metadata refresh. One does, and
+  external_api_id is null: GET Discord RPC for the lowest such alias id.
+  One IGDB id is applied. No IGDB id and one Steam id is applied through
+  appdetails. Anything else is NEEDS_REVIEW unless the locked row is
+  ENRICHED. The RPC branch does not search by name.
+
   IGDB confidence >= 0.85, with an id >= 1 and a name:
     empty id → ENRICHED, external_api_id = igdb:{id}, primary_name = IGDB name
     id already set → refresh genres, themes, developers, publishers, and
@@ -157,20 +165,23 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.celery_app import celery_app
 from app.core.config import settings
-from app.models.game import CoverSource, EnrichmentStatus, Game
+from app.models.game import CoverSource, EnrichmentStatus, Game, GameAlias
 from app.services.enrichment_dispatch import queue_enrichment
 from app.services.external_ids import is_external_id_conflict, steam_external_id
+from app.services.game_aliases import choose_application_id
 from app.services.game_matching import (
     CONFIDENCE_THRESHOLD,
     IGDBResult,
     _confidence,
     _empty_igdb_result,
+    _igdb_fetch_by_id,
     _igdb_search,
     _RateLimited,
     _sanitize,
     apply_igdb_metadata,
 )
 from app.services.game_review import sync_review_preferences
+from app.tasks.discord_rpc import RpcCall, fetch_discord_rpc
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +261,28 @@ def _steam_search(name: str) -> tuple[int | None, str | None, str | None]:
     return None, None, None
 
 
+def _steam_appdetails(app_id: int) -> tuple[int, str, str] | None:
+    """One Steam app by id. None is a miss, including a null body and success false."""
+    with httpx.Client(timeout=10) as client:
+        response = client.get(
+            "https://store.steampowered.com/api/appdetails",
+            params={"appids": str(app_id), "l": "english", "cc": "US"},
+        )
+    if response.status_code == 429:
+        raise _RateLimited("Steam")
+    response.raise_for_status()
+    body = response.json()
+    node = body.get(str(app_id)) if isinstance(body, dict) else None
+    if not isinstance(node, dict) or node.get("success") is not True:
+        return None
+    data = node.get("data")
+    name = data.get("name") if isinstance(data, dict) else None
+    if not isinstance(name, str) or not name:
+        return None
+    cover = f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/library_600x900.jpg"
+    return app_id, cover, name
+
+
 def _igdb_hit(result: IGDBResult) -> bool:
     return (
         result.confidence >= CONFIDENCE_THRESHOLD
@@ -282,6 +315,7 @@ async def _write_enrichment(
     *,
     igdb_result: IGDBResult,
     steam: tuple[int | None, str | None, str | None],
+    stop_if_identified: bool = False,
 ) -> tuple[EnrichmentStatus, str | None, str | None]:
     """Lock the row and write one enrich attempt. The caller commits nothing else.
 
@@ -300,6 +334,9 @@ async def _write_enrichment(
     prior_cover = game.cover_image_url
     prior_external_id = game.external_api_id
     identity_empty = prior_external_id is None
+
+    if stop_if_identified and prior_external_id is not None:
+        return prior_status, prior_cover, prior_external_id
 
     if _igdb_hit(igdb_result):
         assert igdb_result.igdb_id is not None
@@ -375,6 +412,152 @@ async def _write_enrichment(
     return EnrichmentStatus.NEEDS_REVIEW, None, game.external_api_id
 
 
+async def _chosen_application_id(db: AsyncSession, game_id: int) -> str | None:
+    rows = (
+        await db.execute(
+            select(GameAlias.id, GameAlias.application_id).where(GameAlias.game_id == game_id)
+        )
+    ).all()
+    return choose_application_id(
+        [(int(alias_id), application_id) for alias_id, application_id in rows]
+    )
+
+
+async def _review_or_keep(session_factory, game_id: int):
+    async with session_factory() as db:
+        return await _write_enrichment(
+            db,
+            game_id,
+            igdb_result=_empty_igdb_result(),
+            steam=(None, None, None),
+            stop_if_identified=True,
+        )
+
+
+def _raise_or_give_up(exc: BaseException, *, source: str, retries: int, max_retries: int, game_id: int) -> bool:
+    """Raise LookupRetryable while retries remain. Return True when this was the last try."""
+    kind = _lookup_kind(exc)
+    if kind == "unexpected":
+        raise
+    if kind == "retry" and retries < max_retries:
+        raise LookupRetryable(source) from exc
+    if kind == "retry":
+        logger.error(
+            "enrich_game.retries_exhausted",
+            extra={"game_id": game_id, "source": source},
+        )
+        return True
+    logger.warning(
+        "enrich_game.lookup_unanswered",
+        extra={"game_id": game_id, "source": source},
+    )
+    return True
+
+
+async def _enrich_from_rpc(
+    session_factory,
+    game_id: int,
+    application_id: str,
+    *,
+    prior_status: EnrichmentStatus,
+    prior_cover: str | None,
+    prior_external_id: str | None,
+    retries: int,
+    max_retries: int,
+):
+    payload = await asyncio.to_thread(fetch_discord_rpc, application_id)
+    if payload.call is RpcCall.RETRY:
+        if retries < max_retries:
+            raise LookupRetryable("discord_rpc")
+        logger.error(
+            "enrich_game.retries_exhausted",
+            extra={"game_id": game_id, "source": "discord_rpc"},
+        )
+        return await _review_or_keep(session_factory, game_id)
+    if payload.call is RpcCall.TERMINAL:
+        return await _review_or_keep(session_factory, game_id)
+    if len(payload.igdb_ids) == 1:
+        return await _apply_rpc_igdb(
+            session_factory,
+            game_id,
+            payload.igdb_ids[0],
+            prior_status=prior_status,
+            prior_cover=prior_cover,
+            prior_external_id=prior_external_id,
+            retries=retries,
+            max_retries=max_retries,
+        )
+    if len(payload.igdb_ids) == 0 and len(payload.steam_ids) == 1:
+        return await _apply_rpc_steam(
+            session_factory,
+            game_id,
+            payload.steam_ids[0],
+            retries=retries,
+            max_retries=max_retries,
+        )
+    return await _review_or_keep(session_factory, game_id)
+
+
+async def _apply_rpc_igdb(
+    session_factory,
+    game_id: int,
+    igdb_id: int,
+    *,
+    prior_status: EnrichmentStatus,
+    prior_cover: str | None,
+    prior_external_id: str | None,
+    retries: int,
+    max_retries: int,
+):
+    if not settings.igdb_client_id or not settings.igdb_client_secret:
+        logger.warning(
+            "IGDB credentials not set — skipping RPC IGDB fetch",
+            extra={"game_id": game_id},
+        )
+        return prior_status, prior_cover, prior_external_id
+    try:
+        fetched = await asyncio.to_thread(_igdb_fetch_by_id, igdb_id)
+    except Exception as exc:
+        _raise_or_give_up(exc, source="igdb", retries=retries, max_retries=max_retries, game_id=game_id)
+        return await _review_or_keep(session_factory, game_id)
+    if fetched is None or not _igdb_hit(fetched[1]):
+        return await _review_or_keep(session_factory, game_id)
+    _name, igdb_result = fetched
+    async with session_factory() as db:
+        return await _write_enrichment(
+            db,
+            game_id,
+            igdb_result=igdb_result,
+            steam=(None, None, None),
+            stop_if_identified=True,
+        )
+
+
+async def _apply_rpc_steam(
+    session_factory,
+    game_id: int,
+    app_id: int,
+    *,
+    retries: int,
+    max_retries: int,
+):
+    try:
+        found = await asyncio.to_thread(_steam_appdetails, app_id)
+    except Exception as exc:
+        _raise_or_give_up(exc, source="steam", retries=retries, max_retries=max_retries, game_id=game_id)
+        return await _review_or_keep(session_factory, game_id)
+    if found is None:
+        return await _review_or_keep(session_factory, game_id)
+    async with session_factory() as db:
+        return await _write_enrichment(
+            db,
+            game_id,
+            igdb_result=_empty_igdb_result(),
+            steam=found,
+            stop_if_identified=True,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Single async function — owns its own engine for this event loop
 # ---------------------------------------------------------------------------
@@ -407,6 +590,21 @@ async def _run_enrichment(
             prior_status = game.enrichment_status
             prior_cover = game.cover_image_url
             prior_external_id = game.external_api_id
+            chosen = await _chosen_application_id(db, game_id)
+
+        if chosen is not None and prior_external_id is not None:
+            return prior_status, prior_cover, prior_external_id
+        if chosen is not None:
+            return await _enrich_from_rpc(
+                SessionLocal,
+                game_id,
+                chosen,
+                prior_status=prior_status,
+                prior_cover=prior_cover,
+                prior_external_id=prior_external_id,
+                retries=retries,
+                max_retries=max_retries,
+            )
 
         igdb_result: IGDBResult = _empty_igdb_result()
         igdb_state = "unanswered"
@@ -478,7 +676,7 @@ async def _run_enrichment(
 
 def _retry_source(exc: BaseException) -> str:
     source = getattr(exc, "source", None)
-    if isinstance(source, str) and source in ("igdb", "steam"):
+    if isinstance(source, str) and source in ("igdb", "steam", "discord_rpc"):
         return source
     if "steam" in str(exc).lower():
         return "steam"
