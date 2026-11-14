@@ -423,7 +423,10 @@ async def _chosen_application_id(db: AsyncSession, game_id: int) -> str | None:
     )
 
 
-async def _review_or_keep(session_factory, game_id: int):
+async def _review_or_keep(
+    session_factory: async_sessionmaker[AsyncSession],
+    game_id: int,
+) -> tuple[EnrichmentStatus, str | None, str | None]:
     async with session_factory() as db:
         return await _write_enrichment(
             db,
@@ -455,7 +458,7 @@ def _raise_or_give_up(exc: BaseException, *, source: str, retries: int, max_retr
 
 
 async def _enrich_from_rpc(
-    session_factory,
+    session_factory: async_sessionmaker[AsyncSession],
     game_id: int,
     application_id: str,
     *,
@@ -464,7 +467,7 @@ async def _enrich_from_rpc(
     prior_external_id: str | None,
     retries: int,
     max_retries: int,
-):
+) -> tuple[EnrichmentStatus, str | None, str | None]:
     payload = await asyncio.to_thread(fetch_discord_rpc, application_id)
     if payload.call is RpcCall.RETRY:
         if retries < max_retries:
@@ -499,7 +502,7 @@ async def _enrich_from_rpc(
 
 
 async def _apply_rpc_igdb(
-    session_factory,
+    session_factory: async_sessionmaker[AsyncSession],
     game_id: int,
     igdb_id: int,
     *,
@@ -508,7 +511,7 @@ async def _apply_rpc_igdb(
     prior_external_id: str | None,
     retries: int,
     max_retries: int,
-):
+) -> tuple[EnrichmentStatus, str | None, str | None]:
     if not settings.igdb_client_id or not settings.igdb_client_secret:
         logger.warning(
             "IGDB credentials not set — skipping RPC IGDB fetch",
@@ -534,13 +537,13 @@ async def _apply_rpc_igdb(
 
 
 async def _apply_rpc_steam(
-    session_factory,
+    session_factory: async_sessionmaker[AsyncSession],
     game_id: int,
     app_id: int,
     *,
     retries: int,
     max_retries: int,
-):
+) -> tuple[EnrichmentStatus, str | None, str | None]:
     try:
         found = await asyncio.to_thread(_steam_appdetails, app_id)
     except Exception as exc:

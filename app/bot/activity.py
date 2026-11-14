@@ -23,11 +23,12 @@ def playing_activity(member: discord.Member) -> tuple[str, str | None] | None:
     A ``discord.Game`` has no application id. The id is not a second key.
     """
     for activity in member.activities:
-        if isinstance(activity, discord.Game):
+        if isinstance(activity, discord.Game) and activity.name:
             return activity.name, None
         if (
             isinstance(activity, discord.Activity)
             and activity.type == discord.ActivityType.playing
+            and activity.name
         ):
             return activity.name, usable_application_id(
                 getattr(activity, "application_id", None)
