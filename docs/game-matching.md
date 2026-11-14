@@ -2,10 +2,22 @@
 
 When the Discord bot detects a game via `on_presence_update`, it records whatever name Discord provides — this can be anything from `"The Witcher 3: Wild Hunt"` to `"witcher3.exe"` to `"Baldur's Gate 3"`. The enrichment worker then queries IGDB to fetch canonical metadata (cover art, external ID). The matching pipeline decides whether a returned IGDB result is the same game.
 
+Discord can also collapse two executables onto one application id before that name arrives. Lords of the Fallen is the worked case, in [bot.md](bot.md#what-discords-presence-identifies). The name pipeline cannot split a pair Discord has already merged.
+
 ## Pipeline overview
 
 ```
 raw name from Discord
+      │
+      ▼
+  alias has an application id?
+   ├── external_api_id already set → leave the row
+   ├── external_api_id null → Discord RPC for the lowest such alias id
+   │     ├── one IGDB id → ENRICHED (that id, even if the name differs)
+   │     ├── no IGDB id, one Steam id → ENRICHED (appdetails)
+   │     └── anything else → NEEDS_REVIEW, unless the row is already ENRICHED
+   │     the name search below is not used
+   └── no application id
       │
       ▼
   _sanitize()          normalise both sides of every comparison

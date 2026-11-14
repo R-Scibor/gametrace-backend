@@ -91,8 +91,9 @@ Maps Discord process names (what the bot sees on `on_presence_update`) to game r
 | `id` | `INTEGER` | Primary key |
 | `game_id` | `INTEGER` | FK → `games.id`, `ON DELETE CASCADE` |
 | `discord_process_name` | `VARCHAR(256)` | Unique, indexed. The exact string the bot received. |
+| `application_id` | `VARCHAR(32)` | Nullable. Not unique. The first usable Discord application id seen for this exact process name, stored as a decimal string. A later different id is logged as `presence.application_id_conflict` and does not replace it. Null when no usable id has been seen. |
 
-The bot looks up via `discord_process_name` first; if no alias matches, it creates a new stub `Game` and a corresponding alias in one transaction.
+The bot looks up via `discord_process_name` first; if no alias matches, it creates a new stub `Game` and a corresponding alias in one transaction. The application id is written onto the surviving alias after that lookup. It is not part of the lookup key.
 
 ### `game_sessions`
 

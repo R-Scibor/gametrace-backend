@@ -152,7 +152,7 @@ Required permissions in that channel:
 
 `on_presence_update` fires whenever any cached member changes activity. The `on_presence_update` handler does:
 
-1. **Filter:** ignore bots; ignore presence changes that didn't change the playing-game name.
+1. **Filter:** ignore bots. When the playing-game name is unchanged, store a usable `application_id` on that name's alias if the column is null, then return. That write does not start, close, or enqueue a session.
 2. **Gate:** look up the user in `users` via `get_user_if_tracked`. If they haven't run `/register` or `/login`, return — the bot is "blind" to non-registered users. Accounts scheduled for deletion (`purge_at IS NOT NULL`) are treated the same way — `get_user_if_tracked` returns `None` for them, so presence writes stop the instant a deletion is scheduled.
 3. **Resolve game:** for an active game name, find or create a `games` row via `game_aliases.discord_process_name`. New games are inserted as a stub (just the process name) and queued for async enrichment via Celery.
 4. **Apply transition** to the user's current `ONGOING` session (if any):
@@ -163,7 +163,7 @@ Required permissions in that channel:
 | none | game | Open row is already that alias's `game_id`: leave it. Otherwise `ERROR` a different open row with the presence note naming the after string, then `start_or_resume_session`. |
 | game A | game B, same `game_id` | Open row is that game: no-op. No open row: `start_or_resume_session` for that game. |
 | game A | game B, different `game_id` | Open row matches A: `complete_session`, then `start_or_resume_session` for B. Open row exists and does not match A: `ERROR` with the presence note naming A, then start B. No open row: start B and do not call `error_session`. |
-| same string | same string | no-op, filtered before the lock |
+| same string | same string | Note the application id when the column is null. No session write. No enrich queue. |
 
 Only one `ONGOING` session per user is allowed at a time — this is invariant the handler relies on.
 
@@ -186,6 +186,21 @@ Discord rich-presence is occasionally flaky: a single continuous play session ca
 The bot writes session and stub-game rows immediately, regardless of any user preference (`is_ignored` filtering happens at the API layer, not the bot). It then fires a Celery task `enrich_game_{game_id}` to fetch metadata. The task id `enrich_game_{game_id}` is the Celery result key. It does not collapse duplicate messages. Enrichment failure never blocks session writes — the worst case is a `Game` row with `enrichment_status=PENDING` indefinitely, which is fine.
 
 Game-name matching for enrichment is described in [game-matching.md](game-matching.md).
+
+When the alias has an application id and the game's `external_api_id` is null, enrichment calls Discord's RPC endpoint for that id instead of searching by the presence name. One IGDB id is applied. No IGDB id and one Steam id is applied. Any other payload sets `NEEDS_REVIEW` unless the row is already `ENRICHED`. A row that already has `external_api_id` is left as it is. Clearing that column, then requeueing, is how an identified row is enriched again. A different application id on the same process name does not create a second game.
+
+### What Discord's presence identifies
+
+The bot stores the playing activity's `name`. A gateway `PRESENCE_UPDATE` can also carry `application_id`, `details`, `state`, `timestamps`, `assets`, `party`, `flags`, and button labels. It does not carry the executable path, an IGDB id, or a Steam id. Button URLs are not included. The profile link other people open is `https://discord.com/games/{application_id}`. That page is one profile: one title, one cover, one description. Discord's developer docs describe Rich Presence, which a game sends on purpose, and say automatic detection is a separate system. They do not publish the matcher. A staff reply on 12 January 2021 said a false match was fixed by making "path detection" more specific.
+
+The client matches the running process against a catalog entry, then broadcasts that entry. One entry can list several executables and several store SKUs. The presence still has one `application_id`.
+
+Lords of the Fallen is that case. Application `463425384893906944` is named "Lords of the Fallen" and its profile is the 2014 game. Both of these executables are on that entry:
+
+- `lordsofthefallen.exe`
+- `lords of the fallen/lotf2.exe`
+
+The RPC payload for that id lists IGDB `4847` and `21593`, and Steam `265300` (2014) and `1501750` (2023). Playing either executable on 14 November 2026 opened `https://discord.com/games/463425384893906944`. The 2023 game was already reported as showing the 2014 icon the day after its release. `application_id` therefore repeats the game Discord displayed. It does not tell the two editions apart. A name alias already enriched to IGDB `21593` captures both launches, so the catalog row can be the 2023 game while Discord's profile is the 2014 game.
 
 ## Heartbeat and liveness
 
