@@ -64,6 +64,7 @@ class GameAlias(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"))
     discord_process_name: Mapped[str] = mapped_column(String(256), unique=True, index=True)
+    application_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     game: Mapped["Game"] = relationship(back_populates="aliases")
 
