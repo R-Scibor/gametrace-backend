@@ -507,7 +507,7 @@ _PL_EXPIRED_CODE = (
 )
 _EN_SERVER_CHANNELS = "Slash commands only work on server channels, not in DMs."
 _EN_EXPIRED_CODE = (
-    "If the code expired, click **🔑 Get a code** or **🔑 Weź kod** again and use the new one within 5 minutes."
+    "If the code expired, click **🔑 Get a code** again and use the new one within 5 minutes."
 )
 
 _PL_WHAT = (
@@ -585,7 +585,6 @@ def _en_steps(web: str) -> str:
         "members of the server it runs on.\n"
         "2. Turn on Activity Status sharing in Discord.\n"
         "3. Click **▶ START** on the panel above, then **🔑 Get a code** "
-        "(or **🔑 Weź kod** if your panel is in Polish) "
         "— the bot will reply with a 6-digit code visible only to you, "
         "valid for 5 minutes.\n"
         f"4. Enter that code in the app (in the browser at {web}/login).\n"

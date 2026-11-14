@@ -139,18 +139,16 @@ def test_panel_info_en_keeps_both_important_sentences():
     assert (
         "**Important**\n"
         "Slash commands only work on server channels, not in DMs. "
-        "If the code expired, click **🔑 Get a code** or **🔑 Weź kod** again "
-        "and use the new one within 5 minutes."
+        "If the code expired, click **🔑 Get a code** again and use the new one within 5 minutes."
     ) in text
 
 
-def test_panel_info_en_points_at_both_code_button_labels():
-    """The member menu follows the saved language, so the English screen
-    names the code button by both of its exact on-screen labels."""
+def test_panel_info_en_points_at_the_english_code_button():
+    """The English screen names the English button label."""
     text = replies.panel_info_en()
     assert "▶ START" in text
     assert "🔑 Get a code" in text
-    assert "🔑 Weź kod" in text
+    assert "Weź kod" not in text
 
 
 @pytest.mark.parametrize(
