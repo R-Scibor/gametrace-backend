@@ -89,3 +89,17 @@ async def note_application_id(
             "application_id": application_id,
         },
     )
+
+
+def choose_application_id(rows: list[tuple[int, str | None]]) -> str | None:
+    """Application id on the lowest alias id that has one. Other ids are ignored."""
+    chosen: tuple[int, str] | None = None
+    for alias_id, application_id in rows:
+        if not application_id:
+            continue
+        if chosen is None or alias_id < chosen[0]:
+            chosen = (alias_id, application_id)
+    if chosen is None:
+        return None
+    return chosen[1]
+
