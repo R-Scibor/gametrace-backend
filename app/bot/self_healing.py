@@ -13,7 +13,7 @@ import discord
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.activity import activity_name
+from app.bot.activity import playing_activity
 from app.bot.reconcile import reconcile_user
 from app.bot.session_lock import user_session_lock
 from app.models.session import GameSession, SessionSource, SessionStatus
@@ -52,11 +52,14 @@ async def run_self_healing(db: AsyncSession, guilds: Sequence[discord.Guild]) ->
     for user_id in user_ids:
         async with user_session_lock(db, user_id):
             member = _find_member(guilds, user_id)
+            found = playing_activity(member) if member is not None else None
             await reconcile_user(
                 db,
                 user_id,
                 before_name=None,
-                after_name=activity_name(member) if member is not None else None,
+                before_application_id=None,
+                after_name=found[0] if found is not None else None,
+                after_application_id=found[1] if found is not None else None,
                 gap=True,
                 member_found=member is not None,
                 now=now,

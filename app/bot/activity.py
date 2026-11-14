@@ -35,9 +35,3 @@ def playing_activity(member: discord.Member) -> tuple[str, str | None] | None:
     return None
 
 
-def activity_name(member: discord.Member) -> str | None:
-    """Name half of ``playing_activity``. Removed once callers pass the pair."""
-    found = playing_activity(member)
-    if found is None:
-        return None
-    return found[0]

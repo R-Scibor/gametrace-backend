@@ -24,6 +24,7 @@ from app.models.game import EnrichmentStatus, Game
 from app.models.session import GameSession
 from app.models.user import User
 from app.services.enrichment_dispatch import queue_enrichment
+from app.services.game_aliases import note_application_id
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +65,10 @@ async def _start_and_commit(
     process_name: str,
     *,
     startup: bool,
+    application_id: str | None,
 ) -> None:
     game, _created = await get_or_create_game(db, process_name)
+    await note_application_id(db, process_name, application_id)
     game_id = game.id
     pending = game.enrichment_status == EnrichmentStatus.PENDING
     try:
@@ -125,6 +128,7 @@ async def _live(
     before_name: str | None,
     after_name: str | None,
     ongoing: GameSession | None,
+    after_application_id: str | None,
 ) -> None:
     before_id = await resolve_alias(db, before_name) if before_name else None
     after_id = await resolve_alias(db, after_name) if after_name else None
@@ -136,12 +140,16 @@ async def _live(
         return
 
     if _open_row_continues(ongoing, before_name, before_id, after_id):
+        await note_application_id(db, after_name, after_application_id)
+        await db.commit()
         return
 
     if ongoing is not None:
         closed_name = after_name if before_name is None else before_name
         await _close_open(db, ongoing, before_id, _presence_note(closed_name))
-    await _start_and_commit(db, user_id, after_name, startup=False)
+    await _start_and_commit(
+        db, user_id, after_name, startup=False, application_id=after_application_id
+    )
 
 
 async def _startup(
@@ -151,6 +159,7 @@ async def _startup(
     after_name: str | None,
     member_found: bool,
     now: datetime,
+    after_application_id: str | None,
 ) -> None:
     if not member_found:
         await _error_and_commit(db, ongoing, _MISSING_MEMBER_NOTE)
@@ -158,6 +167,8 @@ async def _startup(
 
     after_id = await resolve_alias(db, after_name) if after_name else None
     if after_name and after_id == ongoing.game_id:
+        await note_application_id(db, after_name, after_application_id)
+        await db.commit()
         logger.info(
             "Self-Healing: session_id=%d continues (same game_id=%d)",
             ongoing.id,
@@ -178,7 +189,9 @@ async def _startup(
             session_id,
             after_name,
         )
-        await _start_and_commit(db, user_id, after_name, startup=True)
+        await _start_and_commit(
+            db, user_id, after_name, startup=True, application_id=after_application_id
+        )
         return
 
     age = now - ongoing.start_time.astimezone(UTC)
@@ -207,6 +220,8 @@ async def reconcile_user(
     gap: bool,
     member_found: bool = True,
     now: datetime | None = None,
+    before_application_id: str | None = None,
+    after_application_id: str | None = None,
 ) -> None:
     """Apply one observed activity to the user's live ONGOING row.
 
@@ -225,6 +240,21 @@ async def reconcile_user(
     if gap:
         if ongoing is None:
             return
-        await _startup(db, user_id, ongoing, after_name, member_found, now)
+        await _startup(
+            db,
+            user_id,
+            ongoing,
+            after_name,
+            member_found,
+            now,
+            after_application_id=after_application_id,
+        )
         return
-    await _live(db, user_id, before_name, after_name, ongoing)
+    await _live(
+        db,
+        user_id,
+        before_name,
+        after_name,
+        ongoing,
+        after_application_id=after_application_id,
+    )

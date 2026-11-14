@@ -14,7 +14,7 @@ from discord import app_commands
 from discord.ext import tasks
 
 from app.bot import layout, membership, replies
-from app.bot.activity import activity_name
+from app.bot.activity import playing_activity
 from app.bot.interaction_guard import (
     Action,
     claim_cooldown,
@@ -33,6 +33,7 @@ from app.core.database import AsyncSessionLocal
 from app.core.logging import configure_logging, new_trace_id
 from app.core.observability import init_sentry
 from app.core.redis import get_redis
+from app.services.game_aliases import note_application_id
 
 logger = logging.getLogger(__name__)
 
@@ -392,12 +393,20 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
     if after.bot:
         return
 
-    before_game = activity_name(before)
-    after_game = activity_name(after)
-    if before_game == after_game:
+    discord_id = str(after.id)
+    before_pair = playing_activity(before)
+    after_pair = playing_activity(after)
+    before_name = before_pair[0] if before_pair is not None else None
+    before_application_id = before_pair[1] if before_pair is not None else None
+    after_name = after_pair[0] if after_pair is not None else None
+    after_application_id = after_pair[1] if after_pair is not None else None
+    if before_name == after_name:
+        if after_name is not None:
+            async with AsyncSessionLocal() as db:
+                await note_application_id(db, after_name, after_application_id)
+                await db.commit()
         return
 
-    discord_id = str(after.id)
     with structlog.contextvars.bound_contextvars(trace_id=new_trace_id()):
         from app.bot.reconcile import reconcile_user
         from app.bot.session_lock import user_session_lock
@@ -411,8 +420,10 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
                 await reconcile_user(
                     db,
                     discord_id,
-                    before_name=before_game,
-                    after_name=after_game,
+                    before_name=before_name,
+                    before_application_id=before_application_id,
+                    after_name=after_name,
+                    after_application_id=after_application_id,
                     gap=False,
                 )
 

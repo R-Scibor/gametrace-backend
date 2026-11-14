@@ -8,10 +8,10 @@ from unittest.mock import MagicMock
 
 import discord
 
-from app.bot.activity import activity_name
+from app.bot.activity import playing_activity
 from app.bot.self_healing import _find_member
 
-# ── activity_name ─────────────────────────────────────────────────────────────
+# ── playing_activity ─────────────────────────────────────────────────────────────
 
 def _member_with(*activities) -> MagicMock:
     m = MagicMock(spec=discord.Member)
@@ -21,13 +21,13 @@ def _member_with(*activities) -> MagicMock:
 
 def test_discord_game_activity():
     member = _member_with(discord.Game(name="Minecraft"))
-    assert activity_name(member) == "Minecraft"
+    assert playing_activity(member) == ("Minecraft", None)
 
 
 def test_playing_type_activity():
     activity = discord.Activity(type=discord.ActivityType.playing, name="Hades")
     member = _member_with(activity)
-    assert activity_name(member) == "Hades"
+    assert playing_activity(member) == ("Hades", None)
 
 
 def test_non_game_activities():
@@ -35,12 +35,12 @@ def test_non_game_activities():
         discord.Streaming(name="Just Chatting", url="https://twitch.tv/x"),
         discord.Activity(type=discord.ActivityType.listening, name="Spotify"),
     )
-    assert activity_name(member) is None
+    assert playing_activity(member) is None
 
 
 def test_empty_activities():
     member = _member_with()
-    assert activity_name(member) is None
+    assert playing_activity(member) is None
 
 
 def test_first_game_activity_wins():
@@ -48,7 +48,7 @@ def test_first_game_activity_wins():
         discord.Activity(type=discord.ActivityType.listening, name="Spotify"),
         discord.Game(name="Hades"),
     )
-    assert activity_name(member) == "Hades"
+    assert playing_activity(member) == ("Hades", None)
 
 
 def test_there_is_one_activity_name_helper():
