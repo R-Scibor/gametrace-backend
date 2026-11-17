@@ -66,6 +66,7 @@ async def _start_and_commit(
     *,
     startup: bool,
     application_id: str | None,
+    started_at: datetime | None = None,
 ) -> None:
     game, _created = await get_or_create_game(db, process_name)
     await note_application_id(db, process_name, application_id)
@@ -73,9 +74,11 @@ async def _start_and_commit(
     pending = game.enrichment_status == EnrichmentStatus.PENDING
     try:
         if startup:
-            started = await start_session(db, user_id, game_id)
+            started = await start_session(db, user_id, game_id, started_at=started_at)
         else:
-            started = await start_or_resume_session(db, user_id, game_id)
+            started = await start_or_resume_session(
+                db, user_id, game_id, started_at=started_at
+            )
     except IntegrityError:
         await db.rollback()
         raise
@@ -129,6 +132,7 @@ async def _live(
     after_name: str | None,
     ongoing: GameSession | None,
     after_application_id: str | None,
+    after_started_at: datetime | None = None,
 ) -> None:
     before_id = await resolve_alias(db, before_name) if before_name else None
     after_id = await resolve_alias(db, after_name) if after_name else None
@@ -147,8 +151,17 @@ async def _live(
     if ongoing is not None:
         closed_name = after_name if before_name is None else before_name
         await _close_open(db, ongoing, before_id, _presence_note(closed_name))
+    # With no previous activity the game just came into view: a launch, where
+    # the activity start is a moment ago, or the first sighting after joining a
+    # server mid-game, where it is the real start. A switch keeps "now", since
+    # Rich Presence games can reset their start per match.
     await _start_and_commit(
-        db, user_id, after_name, startup=False, application_id=after_application_id
+        db,
+        user_id,
+        after_name,
+        startup=False,
+        application_id=after_application_id,
+        started_at=after_started_at if before_name is None else None,
     )
 
 
@@ -160,6 +173,7 @@ async def _startup(
     member_found: bool,
     now: datetime,
     after_application_id: str | None,
+    after_started_at: datetime | None = None,
 ) -> None:
     if not member_found:
         await _error_and_commit(db, ongoing, _MISSING_MEMBER_NOTE)
@@ -190,7 +204,12 @@ async def _startup(
             after_name,
         )
         await _start_and_commit(
-            db, user_id, after_name, startup=True, application_id=after_application_id
+            db,
+            user_id,
+            after_name,
+            startup=True,
+            application_id=after_application_id,
+            started_at=after_started_at,
         )
         return
 
@@ -222,12 +241,18 @@ async def reconcile_user(
     now: datetime | None = None,
     before_application_id: str | None = None,
     after_application_id: str | None = None,
+    after_started_at: datetime | None = None,
+    start_missing: bool = False,
 ) -> None:
     """Apply one observed activity to the user's live ONGOING row.
 
     ``gap=False`` is a live presence event. ``gap=True`` is a real process
-    start. ``now`` is the clock for the startup age check; the scanner passes
-    one value for the whole pass. Live presence does not use it.
+    start. ``after_started_at`` is Discord's start for the current activity; a
+    new session uses it when it is usable, see ``usable_start``.
+    ``start_missing`` lets a startup pass open a session for a player with no
+    ONGOING row; without it a row that vanished meanwhile stays closed.
+    ``now`` is the clock for the startup age check; the scanner passes one
+    value for the whole pass. Live presence does not use it.
     """
     if now is None:
         now = datetime.now(UTC)
@@ -239,6 +264,16 @@ async def reconcile_user(
         return
     if gap:
         if ongoing is None:
+            if start_missing and after_name is not None and member_found:
+                # Started playing while the bot was down: nothing was recorded.
+                await _start_and_commit(
+                    db,
+                    user_id,
+                    after_name,
+                    startup=True,
+                    application_id=after_application_id,
+                    started_at=after_started_at,
+                )
             return
         await _startup(
             db,
@@ -248,6 +283,7 @@ async def reconcile_user(
             member_found,
             now,
             after_application_id=after_application_id,
+            after_started_at=after_started_at,
         )
         return
     await _live(
@@ -257,4 +293,5 @@ async def reconcile_user(
         after_name,
         ongoing,
         after_application_id=after_application_id,
+        after_started_at=after_started_at,
     )

@@ -14,7 +14,7 @@ from discord import app_commands
 from discord.ext import tasks
 
 from app.bot import layout, membership, replies
-from app.bot.activity import playing_activity
+from app.bot.activity import playing_activity, playing_started_at
 from app.bot.interaction_guard import (
     Action,
     claim_cooldown,
@@ -424,6 +424,7 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
                     before_application_id=before_application_id,
                     after_name=after_name,
                     after_application_id=after_application_id,
+                    after_started_at=playing_started_at(after),
                     gap=False,
                 )
 
