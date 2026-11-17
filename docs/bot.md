@@ -8,7 +8,7 @@ Source: `app/bot/main.py`, `app/bot/commands.py`, `app/bot/session_manager.py`, 
 
 - Listens for Discord rich-presence updates (`on_presence_update`) on every guild it's in.
 - Translates "user started / stopped / switched games" into `game_sessions` rows.
-- On restart, reconciles every `ONGOING` session against current presence (Self-Healing).
+- On restart, reconciles every `ONGOING` session against current presence, and opens a session for registered players who are already in game with no `ONGOING` row (Self-Healing).
 - Exposes `/register`, `/login`, and `/logout` slash commands for user onboarding and session management, plus `/stats`, `/recent`, and `/help` for read-only lookups, and an admin-only `/panel` that posts a button-driven onboarding panel (see [Onboarding panel](#onboarding-panel)) for channels where slash commands are unreachable. Until a user exists in the `users` table (via `/register`, `/login`, or the panel), the bot ignores their presence entirely.
 - The read commands (`/stats`, `/recent`) never query Postgres directly for session/game data — they call the FastAPI service over HTTP (`app/bot/api_client.py`), so visibility rules (`library_only`, `is_ignored`, unaccepted `NEEDS_REVIEW`) stay defined in exactly one place, the API layer, instead of being reimplemented against the bot's own DB session.
 
@@ -167,6 +167,16 @@ Required permissions in that channel:
 
 Only one `ONGOING` session per user is allowed at a time — this is invariant the handler relies on.
 
+### Session start time
+
+`start_session` takes an optional `started_at`, Discord's `timestamps.start` for the playing activity (`playing_started_at` in `app/bot/activity.py`). `usable_start` keeps it when it is not in the future and falls back to the current time otherwise. A naive value is read as UTC. There is no age limit: if Discord says the game has been running for 36 hours, the session starts 36 hours ago. If the earlier start would overlap another session (`excl_game_sessions_no_overlap`), the insert is retried once at the current time.
+
+Which paths pass it:
+
+- Live event with no `before` activity (first sighting, e.g. a user who joins the server mid-game): the activity start.
+- Live switch from game A to game B: the current time. Rich Presence games can reset their start per match, so the start of B would not mean when B was launched.
+- Self-Healing, both the switch path and the missed-session path below: the activity start.
+
 ### Flicker suppression and stitch-resume
 
 Discord rich-presence is occasionally flaky: a single continuous play session can fragment into multiple short `ONGOING → COMPLETED` transitions if presence drops for a few seconds. The bot handles this in real time — no extra process, no background scan.
@@ -228,14 +238,22 @@ For each source=BOT, status=ONGOING, deleted_at IS NULL session:
      The comparison is case-sensitive.
   4. The activity is set and does not resolve to the open game_id → ERROR with
      "switched from {primary_name} to {activity}", end_time stays null, then
-     start_session for the new name. This path does not stitch. Age does not
+     start_session for the new name at the activity's start. This path does not stitch. Age does not
      matter. primary_name is only the repair-screen label; a missing game row
      uses "unknown".
   5. Not playing, and NOW() - start_time > 12h → ERROR ("exceeded 12h threshold").
      No new row. Age is start_time.astimezone(UTC) against one clock taken at
      the start of the pass.
   6. Not playing, within 12h → ERROR ("no longer in-game").
+
+Then, for every registered, non-bot guild member who is playing and had no
+ONGOING row in the first pass (the demo account excluded):
+  7. start_session at the activity's start (see Session start time). Live
+     presence will not report the game again until it changes, so without this
+     a game launched while the bot was down would never be recorded.
 ```
+
+A row from the first pass that disappears before its lock is taken (for example the user closed it in the app) is not reopened. Only players who had no ONGOING row when the pass began get a new session.
 
 Sessions transitioned to `ERROR` are surfaced to the user via the Dashboard banner (`pending_errors` in `/stats/dashboard` and `/stats/summary`). The user resolves them by either supplying an `end_time` (`PATCH /sessions/{id}` → `COMPLETED`) or discarding them (`DELETE /api/v1/sessions/{id}` → soft-deleted). PATCH is also bound by the 48h duration cap and the 5-minute future grace. A client that always sends `end_time=now` will 422 when `now - start_time > 48h`; trash the row instead.
 
