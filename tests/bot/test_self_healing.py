@@ -21,9 +21,12 @@ from tests.factories import dt, make_alias, make_game, make_session, make_user
 def _guild(discord_id: str, game_name: str | None) -> MagicMock:
     """Mock guild where discord_id is playing game_name (or nothing)."""
     member = MagicMock(spec=discord.Member)
+    member.id = int(discord_id)
+    member.bot = False
     member.activities = [discord.Game(name=game_name)] if game_name else []
 
     guild = MagicMock(spec=discord.Guild)
+    guild.members = [member]
     guild.get_member.side_effect = lambda uid: member if uid == int(discord_id) else None
     return guild
 
@@ -31,6 +34,7 @@ def _guild(discord_id: str, game_name: str | None) -> MagicMock:
 def _absent_guild() -> MagicMock:
     """Mock guild where no member is found."""
     guild = MagicMock(spec=discord.Guild)
+    guild.members = []
     guild.get_member.return_value = None
     return guild
 
@@ -279,10 +283,10 @@ async def test_next_user_is_reconciled_after_a_rolled_back_start(db, monkeypatch
 
     from app.bot.session_manager import start_session as real_start_session
 
-    async def start_session(db_session, user_id, game_id):
+    async def start_session(db_session, user_id, game_id, **kwargs):
         if user_id == a_id:
             return None
-        return await real_start_session(db_session, user_id, game_id)
+        return await real_start_session(db_session, user_id, game_id, **kwargs)
 
     monkeypatch.setattr("app.bot.reconcile.start_session", start_session)
 

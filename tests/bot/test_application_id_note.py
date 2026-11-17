@@ -139,7 +139,10 @@ async def test_self_heal_continue_stores_a_null_id(db, monkeypatch):
     )
     queued = _patch_queue(monkeypatch)
     member = _member(user.discord_id, _playing(NAME, 10**16))
-    guild = SimpleNamespace(get_member=lambda uid: member if uid == int(user.discord_id) else None)
+    guild = SimpleNamespace(
+        members=[member],
+        get_member=lambda uid: member if uid == int(user.discord_id) else None,
+    )
 
     await run_self_healing(db, guilds=[guild])
 
