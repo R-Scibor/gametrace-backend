@@ -128,8 +128,31 @@ async def get_ongoing_session(
     return sessions[0] if sessions else None
 
 
-async def start_session(db: AsyncSession, user_id: str, game_id: int) -> GameSession | None:
+def usable_start(started_at: datetime | None, now: datetime) -> datetime:
+    """The activity's own start when Discord gave one that is not in the future, else ``now``.
+
+    There is no age limit: if Discord says the game has been running for 36
+    hours, that is the session. A naive value is read as UTC.
+    """
+    if started_at is None:
+        return now
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=UTC)
+    return started_at if started_at <= now else now
+
+
+async def start_session(
+    db: AsyncSession,
+    user_id: str,
+    game_id: int,
+    *,
+    started_at: datetime | None = None,
+) -> GameSession | None:
     """Create a new ONGOING BOT session.
+
+    ``started_at`` is the Discord activity start. It is used when it is not in
+    the future and does not overlap an earlier session. Otherwise the session
+    starts now, as it always did.
 
     Returns None when the user row is missing or ``purge_at`` is set, and when
     the exclusion constraint says this instant is already covered. A live
@@ -144,17 +167,22 @@ async def start_session(db: AsyncSession, user_id: str, game_id: int) -> GameSes
         )
         return None
     game = await db.get(Game, game_id)
+    now = datetime.now(UTC)
+    start_time = usable_start(started_at, now)
     try:
-        async with db.begin_nested():
-            session = GameSession(
-                user_id=user_id,
-                game_id=game_id,
-                start_time=datetime.now(UTC),
-                status=SessionStatus.ONGOING,
-                source=SessionSource.BOT,
+        try:
+            session = await _insert_ongoing(db, user_id, game_id, start_time)
+        except IntegrityError as exc:
+            if start_time == now or not is_session_overlap(exc):
+                raise
+            # The activity start reaches back into an earlier session. Fall back
+            # to now, which is what the bot used before it read the activity start.
+            logger.info(
+                "Activity start overlaps an earlier session user=%s game_id=%d; starting now",
+                user_id,
+                game_id,
             )
-            db.add(session)
-            await db.flush()
+            session = await _insert_ongoing(db, user_id, game_id, now)
     except IntegrityError as exc:
         existing = await get_ongoing_session(db, user_id)
         if existing is not None and existing.game_id == game_id:
@@ -184,6 +212,22 @@ async def start_session(db: AsyncSession, user_id: str, game_id: int) -> GameSes
             session.id,
         )
         return session
+
+
+async def _insert_ongoing(
+    db: AsyncSession, user_id: str, game_id: int, start_time: datetime
+) -> GameSession:
+    async with db.begin_nested():
+        session = GameSession(
+            user_id=user_id,
+            game_id=game_id,
+            start_time=start_time,
+            status=SessionStatus.ONGOING,
+            source=SessionSource.BOT,
+        )
+        db.add(session)
+        await db.flush()
+    return session
 
 
 async def complete_session(db: AsyncSession, session: GameSession) -> GameSession:
@@ -218,7 +262,13 @@ async def complete_session(db: AsyncSession, session: GameSession) -> GameSessio
     return session
 
 
-async def start_or_resume_session(db: AsyncSession, user_id: str, game_id: int) -> GameSession | None:
+async def start_or_resume_session(
+    db: AsyncSession,
+    user_id: str,
+    game_id: int,
+    *,
+    started_at: datetime | None = None,
+) -> GameSession | None:
     """Reopen a recent same-game BOT session if within the stitch window, else start fresh.
 
     A candidate the user has since edited, trashed, or otherwise moved off
@@ -263,7 +313,7 @@ async def start_or_resume_session(db: AsyncSession, user_id: str, game_id: int) 
                 )
                 return candidate
             logger.info("Session resume skipped session_id=%d; row changed", candidate_id)
-    return await start_session(db, user_id, game_id)
+    return await start_session(db, user_id, game_id, started_at=started_at)
 
 
 async def error_session(db: AsyncSession, session: GameSession, notes: str) -> GameSession:
