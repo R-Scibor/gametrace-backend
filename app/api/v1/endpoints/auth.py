@@ -1,6 +1,7 @@
 import hmac
 import logging
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 import redis.exceptions
@@ -262,6 +263,16 @@ async def link_login(
     return _login_response(user, token_value)
 
 
+def _resolve_timezone(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    try:
+        ZoneInfo(raw)
+        return raw
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+
+
 @router.post("/discord", response_model=LoginResponse, status_code=status.HTTP_200_OK)
 async def discord_login(payload: DiscordCallbackRequest, db: AsyncSession = Depends(get_db)):
     if payload.redirect_uri not in settings.discord_redirect_uri_allowlist:
@@ -291,11 +302,23 @@ async def discord_login(payload: DiscordCallbackRequest, db: AsyncSession = Depe
     username = identity["username"]
 
     user = await db.get(User, discord_id)
+    resolved_tz = _resolve_timezone(payload.timezone)
     if user is None:
-        user = User(discord_id=discord_id, username=username)
+        user = User(
+            discord_id=discord_id,
+            username=username,
+            timezone=resolved_tz or settings.default_timezone,
+        )
         db.add(user)
     else:
         user.username = username  # sync in case the Discord username changed
+        if (
+            discord_id != DEMO_DISCORD_ID
+            and user.timezone == "UTC"
+            and resolved_tz is not None
+            and resolved_tz != "UTC"
+        ):
+            user.timezone = resolved_tz
 
     guild_ids = settings.discord_guild_id_set
     needs_server_join = bool(guild_ids) and not (guild_ids & guilds)
